@@ -2,6 +2,7 @@
 pragma solidity 0.8.24;
 
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 
 import {ITicketSource} from "./interfaces/ITicketSource.sol";
 
@@ -13,21 +14,21 @@ import {ITicketSource} from "./interfaces/ITicketSource.sol";
 /// @dev The crediter path applies a rate-proportional balance ceiling (`CREDIT_CEILING_MULT`
 ///      × this credit's size). Owner `grant` and rescue `refundTicket` bypass that ceiling —
 ///      promo is the deliberate above-ceiling path; refunds restore already-spent tickets.
-contract StandardTicketSource is ITicketSource, Ownable {
+contract StandardTicketSource is ITicketSource, Ownable2Step {
     /// @notice Ticket TTL after each grant / credit / refund.
     uint256 public constant TTL = 7 days;
 
     /// @notice Crediter-path balance ceiling multiplier: `ceiling = CREDIT_CEILING_MULT * amount`.
     uint256 public constant CREDIT_CEILING_MULT = 7;
 
-    /// @notice Starting owner `grant` daily cap (ticket-wei). Lowerable only.
+    /// @notice Recommended production starting `grant` daily cap (ticket-wei); deploy may pass any value.
     uint256 public constant INITIAL_GRANT_DAILY_CAP = 1000e18;
 
     /// @notice Sole address allowed to `spendTickets` / `refundTicket` (set once).
     address public game;
 
-    /// @notice Owner `grant` daily allowance (ticket-wei). Adjustable only downward.
-    uint256 public grantDailyCap = INITIAL_GRANT_DAILY_CAP;
+    /// @notice Owner `grant` daily allowance (ticket-wei). Adjustable only downward after deploy.
+    uint256 public grantDailyCap;
 
     /// @notice Ticket-wei granted by owner in the current UTC day bucket.
     uint256 public grantUsedToday;
@@ -79,7 +80,10 @@ contract StandardTicketSource is ITicketSource, Ownable {
         _;
     }
 
-    constructor() Ownable(msg.sender) {
+    /// @param grantDailyCap_ Initial owner `grant` daily cap (ticket-wei), typically `PROMO_DAILY_CAP` from env.
+    constructor(uint256 grantDailyCap_) Ownable(msg.sender) {
+        if (grantDailyCap_ == 0) revert ZeroAmount();
+        grantDailyCap = grantDailyCap_;
         grantDayBucket = block.timestamp / 1 days;
     }
 

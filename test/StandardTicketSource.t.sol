@@ -22,7 +22,7 @@ contract StandardTicketSourceTest is Test {
         // Fixed start so day-bucket math is deterministic across warps.
         vm.warp(1_700_000_000);
         vm.prank(owner);
-        source = new StandardTicketSource();
+        source = new StandardTicketSource(1000e18);
         vm.prank(owner);
         source.setGame(game);
     }
