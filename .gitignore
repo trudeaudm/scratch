@@ -1,0 +1,12 @@
+# Foundry build artifacts
+out/
+cache/
+broadcast/
+
+# Dependencies (installed via forge install)
+lib/
+
+# Local secrets — keep .env.example trackable
+.env
+.env.*
+!.env.example

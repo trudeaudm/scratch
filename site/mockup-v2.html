@@ -1,0 +1,657 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>$SCRATCH — Your daily reward is ready.</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --green:#00C805;
+    --green-dark:#00A404;
+    --green-tint:#E9FAEA;
+    --ink:#0B0E0C;
+    --paper:#FFFFFF;
+    --dim:#F6F8F6;
+    --line:#E7ECE8;
+    --muted:#6F7A72;
+    --gold:#C9A227;
+    --gold-tint:#FBF6E4;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;
+    background:var(--paper);color:var(--ink);
+    -webkit-font-smoothing:antialiased;overflow-x:hidden;
+  }
+  .mono{font-family:'IBM Plex Mono',monospace}
+
+  nav{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:18px clamp(20px,5vw,64px);border-bottom:1px solid var(--line);
+    position:sticky;top:0;z-index:50;
+    background:rgba(255,255,255,.92);backdrop-filter:blur(8px);
+  }
+  .logo{font-weight:800;font-size:17px;letter-spacing:-.02em;display:flex;align-items:center;gap:9px}
+  .logo .leaf{width:16px;height:16px;background:var(--green);border-radius:50% 50% 50% 2px;transform:rotate(-45deg)}
+  .nav-links{display:flex;gap:26px;font-size:14px;font-weight:600;color:var(--muted)}
+  .nav-links a{color:inherit;text-decoration:none}
+  .nav-links a:hover{color:var(--ink)}
+  .btn{
+    display:inline-block;background:var(--green);color:#fff;border:none;cursor:pointer;
+    font-family:'Inter';font-weight:700;font-size:14px;
+    padding:12px 24px;border-radius:100px;text-decoration:none;
+    transition:background .12s ease, transform .12s ease;
+  }
+  .btn:hover{background:var(--green-dark);transform:translateY(-1px)}
+  .btn:focus-visible{outline:3px solid var(--ink);outline-offset:2px}
+  .btn.ghost{background:transparent;color:var(--ink);border:1.5px solid var(--line)}
+  .btn.ghost:hover{border-color:var(--ink);background:transparent}
+  .btn:disabled{background:var(--line);color:var(--muted);cursor:default;transform:none}
+
+  header{text-align:center;padding:clamp(48px,7vw,84px) 20px 24px}
+  .eyebrow{
+    display:inline-block;font-size:12px;font-weight:700;letter-spacing:.12em;
+    text-transform:uppercase;color:var(--green-dark);
+    background:var(--green-tint);border-radius:100px;padding:7px 15px;margin-bottom:24px;
+  }
+  h1{font-weight:800;font-size:clamp(32px,5vw,56px);line-height:1.05;letter-spacing:-.035em;max-width:760px;margin:0 auto 14px}
+  h1 span{color:var(--green)}
+  .sub{font-size:clamp(15px,1.6vw,17px);color:var(--muted);max-width:540px;margin:0 auto;line-height:1.6}
+  .sub b{color:var(--ink);font-weight:600}
+
+  /* tier tabs */
+  .tiers{display:flex;justify-content:center;gap:8px;margin:36px auto 0;background:var(--dim);border-radius:100px;padding:5px;width:max-content;max-width:94vw}
+  .tier-tab{
+    border:none;background:transparent;cursor:pointer;font-family:'Inter';
+    font-size:13.5px;font-weight:700;color:var(--muted);
+    padding:10px 20px;border-radius:100px;display:flex;align-items:center;gap:8px;
+    transition:background .15s ease,color .15s ease;
+  }
+  .tier-tab .count{
+    background:var(--line);color:var(--ink);border-radius:100px;
+    font-size:11.5px;font-weight:700;padding:2px 8px;font-variant-numeric:tabular-nums;
+  }
+  .tier-tab.active{background:#fff;color:var(--ink);box-shadow:0 2px 10px rgba(11,14,12,.08)}
+  .tier-tab.active .count{background:var(--green);color:#fff}
+  .tier-tab.premium.active .count{background:var(--gold)}
+  .tier-tab .star{color:var(--gold);font-size:12px}
+  .tier-note{font-size:12.5px;color:var(--muted);margin-top:12px}
+  .tier-note b{color:var(--ink);font-weight:600}
+
+  /* game stage */
+  .stage{max-width:640px;margin:34px auto 0;min-height:420px;position:relative}
+  .stage-prompt{font-size:14px;font-weight:600;color:var(--muted);margin-bottom:24px}
+
+  .fan{display:flex;justify-content:center;gap:clamp(10px,3vw,22px);perspective:900px;transition:opacity .3s ease}
+  .card{
+    width:clamp(96px,24vw,150px);aspect-ratio:0.68;border-radius:14px;cursor:pointer;border:none;padding:0;
+    background:repeating-linear-gradient(-45deg, var(--green) 0 7px, var(--green-dark) 7px 14px);
+    box-shadow:0 14px 32px -14px rgba(0,160,4,.5);
+    position:relative;overflow:hidden;
+    transition:transform .22s ease, box-shadow .22s ease, opacity .35s ease;
+  }
+  .stage.premium .card{
+    background:repeating-linear-gradient(-45deg, #141815 0 7px, #232924 7px 14px);
+    box-shadow:0 14px 32px -14px rgba(11,14,12,.55);
+  }
+  .card::after{content:"";position:absolute;inset:7px;border-radius:9px;border:1.5px solid rgba(255,255,255,.5)}
+  .stage.premium .card::after{border-color:rgba(201,162,39,.6)}
+  .card .mark{position:absolute;inset:0;display:flex;align-items:center;justify-content:center}
+  .card .mark i{width:28px;height:28px;background:#fff;display:block;border-radius:50% 50% 50% 3px;transform:rotate(-45deg);box-shadow:0 2px 8px rgba(0,0,0,.18)}
+  .stage.premium .card .mark i{background:var(--gold)}
+  .card:nth-child(1){transform:rotate(-7deg) translateY(8px)}
+  .card:nth-child(3){transform:rotate(7deg) translateY(8px)}
+  .card:hover{transform:translateY(-10px) rotate(0deg)}
+  .card:focus-visible{outline:3px solid var(--ink);outline-offset:3px}
+  .fan.picked .card{opacity:0;pointer-events:none;transform:translateY(16px) scale(.92)}
+  .fan.locked{opacity:.35;pointer-events:none;filter:grayscale(1)}
+
+  .locked-note{
+    display:none;margin-top:22px;font-size:14px;color:var(--muted);
+    background:var(--dim);border-radius:14px;padding:16px 20px;max-width:420px;margin-inline:auto;
+  }
+  .locked-note.show{display:block}
+  .locked-note b{font-family:'IBM Plex Mono';color:var(--ink);font-variant-numeric:tabular-nums}
+
+  .scratch-panel{
+    position:absolute;left:50%;top:0;transform:translateX(-50%) scale(.94);
+    opacity:0;pointer-events:none;
+    transition:opacity .35s ease .2s, transform .35s ease .2s;
+    width:min(380px,92vw);
+  }
+  .scratch-panel.show{opacity:1;pointer-events:auto;transform:translateX(-50%) scale(1)}
+  .scratch-card{
+    background:#fff;border:1px solid var(--line);border-radius:20px;
+    box-shadow:0 28px 60px -28px rgba(11,14,12,.28);padding:26px 24px 22px;
+  }
+  .scratch-card.premium{border-color:#E7DCB8;box-shadow:0 28px 60px -28px rgba(160,128,20,.3)}
+  .sc-head{font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);display:flex;justify-content:space-between;gap:8px}
+  .sc-head .prem{color:var(--gold)}
+  .scratch-frame{position:relative;margin-top:16px;border-radius:14px;overflow:hidden;background:var(--dim);height:180px;user-select:none}
+  .prize{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;text-align:center;padding:14px}
+  .prize .amt{font-weight:800;font-size:32px;letter-spacing:-.03em;color:var(--ink)}
+  .prize .amt.win{color:var(--green)}
+  .prize .amt.gold{color:var(--gold)}
+  .prize .lbl{font-size:13px;font-weight:500;color:var(--muted)}
+  #scratchCanvas{position:absolute;inset:0;width:100%;height:100%;cursor:grab;touch-action:none}
+  #scratchCanvas:active{cursor:grabbing}
+  .sc-foot{display:flex;justify-content:space-between;align-items:center;margin-top:18px;gap:10px}
+  .sc-timer{font-size:12.5px;color:var(--muted)}
+  .sc-timer b{font-family:'IBM Plex Mono';font-weight:500;color:var(--ink);font-variant-numeric:tabular-nums}
+  .claim-row{margin-top:16px;display:none}
+  .claim-row.show{display:block;animation:rise .35s ease}
+  @keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+  .claim-row .btn{width:100%}
+  .again{background:none;border:none;cursor:pointer;font-family:'Inter';font-size:13px;font-weight:600;color:var(--muted);text-decoration:underline;padding:6px}
+  .again:hover{color:var(--ink)}
+  .again:focus-visible{outline:3px solid var(--ink);outline-offset:2px}
+  #confetti{position:fixed;inset:0;pointer-events:none;z-index:100}
+
+  .expiry{font-size:12px;color:var(--muted);margin-top:20px}
+  .expiry b{color:var(--ink);font-weight:600}
+
+  /* pool health */
+  .pool{background:var(--dim);border-top:1px solid var(--line);border-bottom:1px solid var(--line);margin-top:56px}
+  .pool-inner{max-width:1060px;margin:0 auto;padding:34px clamp(20px,5vw,64px)}
+  .pool-head{display:flex;justify-content:space-between;align-items:baseline;gap:14px;flex-wrap:wrap}
+  .pool-head h3{font-size:15px;font-weight:700;letter-spacing:-.01em}
+  .pool-head .verify{font-size:12.5px;font-weight:600;color:var(--green-dark);text-decoration:none}
+  .pool-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;margin-top:20px}
+  .pool-stat{background:#fff;border:1px solid var(--line);border-radius:14px;padding:16px 16px 14px}
+  .pool-stat .v{font-weight:800;font-size:19px;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+  .pool-stat .v em{font-style:normal;color:var(--green)}
+  .pool-stat .v .g{color:var(--gold)}
+  .pool-stat .k{font-size:11px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);margin-top:5px}
+
+  /* sections */
+  section{max-width:1060px;margin:0 auto;padding:clamp(56px,7vw,88px) clamp(20px,5vw,64px)}
+  .sec-eyebrow{font-size:12px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--green-dark);margin-bottom:14px}
+  h2{font-weight:800;font-size:clamp(25px,3.4vw,38px);letter-spacing:-.03em;line-height:1.1;max-width:620px}
+  .sec-sub{font-size:15px;color:var(--muted);line-height:1.65;max-width:560px;margin-top:14px}
+  .sec-sub b{color:var(--ink);font-weight:600}
+
+  /* two-path cards */
+  .paths{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:40px}
+  .path{border:1px solid var(--line);border-radius:20px;padding:28px 26px;position:relative}
+  .path.premium{border-color:#E7DCB8;background:linear-gradient(180deg,var(--gold-tint),#fff 40%)}
+  .path .p-tag{
+    display:inline-block;font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;
+    border-radius:100px;padding:5px 12px;margin-bottom:16px;
+    background:var(--green-tint);color:var(--green-dark);
+  }
+  .path.premium .p-tag{background:#F3E9C6;color:#8A6E12}
+  .path h3{font-size:19px;font-weight:800;letter-spacing:-.02em}
+  .path .rate{font-size:13px;color:var(--muted);margin-top:6px}
+  .path .rate b{color:var(--ink);font-weight:600}
+  .prize-list{margin-top:20px;border-top:1px solid var(--line)}
+  .prize-row{display:flex;justify-content:space-between;gap:12px;align-items:baseline;padding:11px 0;border-bottom:1px solid var(--line);font-size:14px}
+  .prize-row .p{font-weight:600}
+  .prize-row .p .tk{
+    display:inline-block;font-size:10.5px;font-weight:700;letter-spacing:.05em;
+    background:var(--dim);border:1px solid var(--line);border-radius:6px;padding:2px 7px;margin-right:8px;vertical-align:1px;
+  }
+  .prize-row .o{font-family:'IBM Plex Mono';font-size:12.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+  .path .cta{margin-top:22px}
+  .path .cta .btn{width:100%;text-align:center}
+  .stake-mini{display:flex;gap:10px;margin-top:22px}
+  .stake-mini input{
+    flex:1;border:1.5px solid var(--line);border-radius:100px;padding:11px 18px;
+    font-family:'Inter';font-size:14px;min-width:0;
+  }
+  .stake-mini input:focus{outline:none;border-color:var(--green)}
+
+  /* referral */
+  .ref-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:40px}
+  .ref-card{border:1px solid var(--line);border-radius:20px;padding:28px 26px}
+  .ref-card h3{font-size:17px;font-weight:800;letter-spacing:-.02em;margin-bottom:6px}
+  .ref-card .d{font-size:13.5px;color:var(--muted);line-height:1.6}
+  .code-row{display:flex;gap:10px;margin-top:18px}
+  .code-box{
+    flex:1;font-family:'IBM Plex Mono';font-size:15px;letter-spacing:.06em;
+    background:var(--dim);border:1.5px dashed var(--line);border-radius:12px;
+    padding:13px 16px;color:var(--ink);text-align:center;min-width:0;
+  }
+  .copy-btn{white-space:nowrap}
+  .ref-stat{font-size:12.5px;color:var(--muted);margin-top:14px}
+  .ref-stat b{color:var(--green-dark);font-weight:700}
+  .checks{margin-top:18px}
+  .check{display:flex;gap:12px;align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--line);font-size:13.5px;line-height:1.5}
+  .check:last-child{border-bottom:none}
+  .check .ic{
+    width:20px;height:20px;border-radius:50%;flex-shrink:0;margin-top:1px;
+    display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;
+  }
+  .check.ok .ic{background:var(--green-tint);color:var(--green-dark)}
+  .check.pend .ic{background:var(--dim);color:var(--muted);border:1.5px dashed var(--line)}
+  .check .t b{font-weight:600}
+  .check .t small{display:block;color:var(--muted);margin-top:2px}
+  .enter-row{display:flex;gap:10px;margin-top:18px}
+  .enter-row input{
+    flex:1;border:1.5px solid var(--line);border-radius:100px;padding:12px 18px;
+    font-family:'IBM Plex Mono';font-size:14px;letter-spacing:.05em;min-width:0;text-transform:uppercase;
+  }
+  .enter-row input:focus{outline:none;border-color:var(--green)}
+  .enter-msg{font-size:12.5px;margin-top:10px;min-height:16px;color:var(--green-dark);font-weight:600}
+
+  /* lore + footer */
+  .lore{border-top:1px solid var(--line)}
+  .lore p{font-size:15.5px;line-height:1.7;color:var(--muted);max-width:560px;margin-top:18px}
+  .lore b{color:var(--ink);font-weight:600}
+  footer{
+    border-top:1px solid var(--line);padding:34px clamp(20px,5vw,64px);
+    display:flex;justify-content:space-between;gap:18px;flex-wrap:wrap;align-items:center;
+  }
+  footer .ca{font-family:'IBM Plex Mono';font-size:12px;color:var(--muted);background:var(--dim);border:1px solid var(--line);padding:9px 14px;border-radius:8px}
+  footer .fine{font-size:11.5px;color:#A6B0A8;max-width:440px;line-height:1.55}
+
+  @media(max-width:840px){
+    .nav-links{display:none}
+    .paths,.ref-grid{grid-template-columns:1fr}
+  }
+  @media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="logo"><span class="leaf"></span>$SCRATCH</div>
+  <div class="nav-links">
+    <a href="#paths">Earn tickets</a>
+    <a href="#referral">Referrals</a>
+    <a href="#lore">The lore</a>
+  </div>
+  <a class="btn" href="#">Buy $SCRATCH</a>
+</nav>
+
+<header>
+  <div class="eyebrow">Daily reward · Live on Robinhood Chain</div>
+  <h1>Your free stock era is back.<br><span>Every single day.</span></h1>
+  <p class="sub">Hold $SCRATCH and earn tickets by the second. <b>Stake it</b> and your cards can hide USDG, blue-chip memes — <b>or actual onchain stock.</b></p>
+
+  <div class="tiers" role="tablist">
+    <button class="tier-tab active" id="tabStd" role="tab" aria-selected="true">Holder cards <span class="count" id="cntStd">3</span></button>
+    <button class="tier-tab premium" id="tabPrem" role="tab" aria-selected="false"><span class="star">★</span> Staked cards <span class="count" id="cntPrem">2</span></button>
+  </div>
+  <div class="tier-note" id="tierNote">Earned by holding <b>10,000+ $SCRATCH</b> in your wallet · pays $SCRATCH &amp; USDG</div>
+
+  <div class="stage" id="stage">
+    <div class="stage-prompt" id="prompt">Pick a card — 1 ticket per scratch</div>
+
+    <div class="fan" id="fan">
+      <button class="card" aria-label="Pick card one"><span class="mark"><i></i></span></button>
+      <button class="card" aria-label="Pick card two"><span class="mark"><i></i></span></button>
+      <button class="card" aria-label="Pick card three"><span class="mark"><i></i></span></button>
+    </div>
+
+    <div class="locked-note" id="lockedNote">Out of tickets on this tier. Next ticket accrues in <b id="accrueTimer">02:12:44</b> — or stake more to earn faster.</div>
+
+    <div class="scratch-panel" id="panel">
+      <div class="scratch-card" id="scratchCardEl">
+        <div class="sc-head"><span id="ticketNo">Daily reward · Ticket Nº 0004-6631</span><span class="prem" id="premBadge" style="display:none">★ PREMIUM</span></div>
+        <div class="scratch-frame">
+          <div class="prize">
+            <div class="amt win" id="prizeAmt">+500 $SCRATCH</div>
+            <div class="lbl" id="prizeLbl">Sent to your wallet automatically</div>
+          </div>
+          <canvas id="scratchCanvas" aria-label="Scratch area — click and drag to reveal your reward"></canvas>
+        </div>
+        <div class="sc-foot">
+          <div class="sc-timer">Next ticket in <b id="nextTicket">02:12:44</b></div>
+          <button class="again" id="againBtn">Demo: reset</button>
+        </div>
+        <div class="claim-row" id="claimRow">
+          <button class="btn" id="claimBtn">Claim reward</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="expiry">Tickets expire <b>7 days</b> after they're earned · bank up to <b>7 days'</b> accrual · unstaking burns pending tickets</div>
+</header>
+
+<div class="pool">
+  <div class="pool-inner">
+    <div class="pool-head">
+      <h3>Prize vault &amp; pool health — live onchain</h3>
+      <a class="verify" href="#">Verify on explorer →</a>
+    </div>
+    <div class="pool-grid">
+      <div class="pool-stat"><div class="v"><em>18.4M</em></div><div class="k">$SCRATCH in vault</div></div>
+      <div class="pool-stat"><div class="v">12,400</div><div class="k">USDG in vault</div></div>
+      <div class="pool-stat"><div class="v"><span class="g">6× AAPL</span></div><div class="k">onchain stock prizes</div></div>
+      <div class="pool-stat"><div class="v"><span class="g">2× TSLA</span></div><div class="k">onchain stock prizes</div></div>
+      <div class="pool-stat"><div class="v">$4,218</div><div class="k">LP fees → vault (7d)</div></div>
+      <div class="pool-stat"><div class="v">61,208</div><div class="k">cards scratched today</div></div>
+    </div>
+  </div>
+</div>
+
+<section id="paths">
+  <div class="sec-eyebrow">Two ways to earn</div>
+  <h2>Hold for the ritual. Stake for the stocks.</h2>
+  <p class="sec-sub">A fixed pool of tickets is emitted every second and split pro-rata among everyone above the minimum — <b>more held, faster earn;</b> more players, slower for everyone. The math can't break the bank. Holder tickets and staked tickets are <b>separate currencies</b> — they never convert.</p>
+
+  <div class="paths">
+    <div class="path">
+      <div class="p-tag">Hold in wallet</div>
+      <h3>Holder cards</h3>
+      <div class="rate">Just hold <b>10,000+ $SCRATCH</b> · your share of <b>35%</b> of emissions</div>
+      <div class="prize-list">
+        <div class="prize-row"><span class="p">+250 $SCRATCH</span><span class="o">1 in 6</span></div>
+        <div class="prize-row"><span class="p">+500 $SCRATCH</span><span class="o">1 in 14</span></div>
+        <div class="prize-row"><span class="p">+5,000 $SCRATCH</span><span class="o">1 in 220</span></div>
+        <div class="prize-row"><span class="p">+25 USDG</span><span class="o">1 in 500</span></div>
+      </div>
+      <div class="cta"><a class="btn ghost" href="#" style="display:block">Buy &amp; hold to start earning</a></div>
+    </div>
+
+    <div class="path premium">
+      <div class="p-tag">★ Stake in vault</div>
+      <h3>Staked cards</h3>
+      <div class="rate">Stake in the vault · your share of <b>65%</b> of emissions · <b>no lockup</b>, withdraw anytime</div>
+      <div class="prize-list">
+        <div class="prize-row"><span class="p">+1,000 $SCRATCH</span><span class="o">1 in 8</span></div>
+        <div class="prize-row"><span class="p">+50 USDG</span><span class="o">1 in 120</span></div>
+        <div class="prize-row"><span class="p"><span class="tk">MEME</span>Top RH Chain memecoin</span><span class="o">1 in 400</span></div>
+        <div class="prize-row"><span class="p"><span class="tk">STOCK</span>Onchain AAPL / TSLA share</span><span class="o">1 in 2,500</span></div>
+      </div>
+      <div class="stake-mini">
+        <input type="text" inputmode="decimal" placeholder="Amount to stake" aria-label="Amount to stake">
+        <button class="btn">Stake</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="referral">
+  <div class="sec-eyebrow">Referrals</div>
+  <h2>Bring a friend, both of you scratch.</h2>
+  <p class="sec-sub">When a wallet you refer <b>buys $100+ of $SCRATCH</b> and holds it for 6 hours, you both get a bonus card. Bought means bought — <b>tokens transferred in from another wallet don't count,</b> and both sides must stay above $100. Max 5 referral cards per day.</p>
+
+  <div class="ref-grid">
+    <div class="ref-card">
+      <h3>Your code</h3>
+      <div class="d">Share it anywhere. Staked balances count toward your $100.</div>
+      <div class="code-row">
+        <div class="code-box" id="refCode">SCRTCH-D4V3</div>
+        <button class="btn copy-btn" id="copyBtn">Copy</button>
+      </div>
+      <div class="ref-stat"><b>3 qualified referrals</b> · 2 pending the 6-hour hold · 3 bonus cards earned</div>
+    </div>
+
+    <div class="ref-card">
+      <h3>Got a code?</h3>
+      <div class="d">Enter it, buy $100+ through the site, hold 6 hours — your bonus card unlocks when all three checks pass.</div>
+      <div class="enter-row">
+        <input type="text" placeholder="SCRTCH-XXXX" aria-label="Referral code" id="refInput" maxlength="12">
+        <button class="btn" id="applyBtn">Apply</button>
+      </div>
+      <div class="enter-msg" id="enterMsg"></div>
+      <div class="checks">
+        <div class="check ok"><div class="ic">✓</div><div class="t"><b>Holds $100+ of $SCRATCH</b><small>wallet + staked, measured at purchase</small></div></div>
+        <div class="check ok"><div class="ic">✓</div><div class="t"><b>Bought via the pool</b><small>transfers from other wallets don't qualify</small></div></div>
+        <div class="check pend"><div class="ic">…</div><div class="t"><b>6-hour hold</b><small>04:12:09 remaining — both sides must stay above $100</small></div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="lore" id="lore">
+  <div class="sec-eyebrow">The lore</div>
+  <h2>Pick a card. Any card. It's probably a $5 card.</h2>
+  <p>Robinhood's referral reward was a masterpiece of suspense: three cards, one pick, a scratch, and a mystery stock. <b>Almost always five bucks</b> — but it might be Apple, and that "might" onboarded millions of first-time investors.</p>
+  <p>Then the design got labeled gamification and the ritual was sanded down into a plain claim button. <b>$SCRATCH restores it</b> — cards, scratch, suspense, and yes, on Robinhood Chain the mystery prize can literally be Apple again. The odds are printed on the page and the vault is onchain. <b>Check our math.</b></p>
+</section>
+
+<footer>
+  <div class="logo" style="font-size:15px"><span class="leaf"></span>$SCRATCH</div>
+  <div class="ca">CA: 0x4663…5CR47 (mockup)</div>
+  <div class="fine">Fan fiction with a claim button. Not affiliated with, endorsed by, or gamified by Robinhood Markets, Inc. This is a mockup — no contract exists. Memecoins are gambling; scratch responsibly.</div>
+</footer>
+
+<canvas id="confetti"></canvas>
+
+<script>
+  const motionOK = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // ---------- tier state ----------
+  const tiers = {
+    std: {
+      tickets: 3,
+      note: 'Earned by holding <b>10,000+ $SCRATCH</b> in your wallet · pays $SCRATCH &amp; USDG',
+      prizes: [
+        ['+250 $SCRATCH','Sent to your wallet automatically','win'],
+        ['+500 $SCRATCH','Sent to your wallet automatically','win'],
+        ['+5,000 $SCRATCH','Big one. Sent automatically','win'],
+        ['+25 USDG','Stable win. Sent automatically','win'],
+        ['Not this time','Same time tomorrow',''],
+        ['Not this time','Same time tomorrow',''],
+      ],
+    },
+    prem: {
+      tickets: 2,
+      note: 'Earned by <b>staking in the vault</b> · pays $SCRATCH, USDG, top memes &amp; onchain stocks',
+      prizes: [
+        ['+1,000 $SCRATCH','Sent to your wallet automatically','win'],
+        ['+50 USDG','Stable win. Sent automatically','win'],
+        ['+MEME','Top RH Chain memecoin. Sent automatically','gold'],
+        ['1× AAPL','An actual onchain Apple share.','gold'],
+        ['Not this time','Keep staking — same time tomorrow',''],
+      ],
+    },
+  };
+  let tier = 'std';
+  let currentWin = true;
+
+  const stage = document.getElementById('stage');
+  const fan = document.getElementById('fan');
+  const panel = document.getElementById('panel');
+  const promptEl = document.getElementById('prompt');
+  const lockedNote = document.getElementById('lockedNote');
+  const tabStd = document.getElementById('tabStd');
+  const tabPrem = document.getElementById('tabPrem');
+
+  function renderTier(){
+    const t = tiers[tier];
+    tabStd.classList.toggle('active', tier==='std');
+    tabStd.setAttribute('aria-selected', tier==='std');
+    tabPrem.classList.toggle('active', tier==='prem');
+    tabPrem.setAttribute('aria-selected', tier==='prem');
+    stage.classList.toggle('premium', tier==='prem');
+    document.getElementById('scratchCardEl').classList.toggle('premium', tier==='prem');
+    document.getElementById('premBadge').style.display = tier==='prem' ? 'inline' : 'none';
+    document.getElementById('tierNote').innerHTML = t.note;
+    document.getElementById('cntStd').textContent = tiers.std.tickets;
+    document.getElementById('cntPrem').textContent = tiers.prem.tickets;
+    // reset game view
+    panel.classList.remove('show');
+    fan.classList.remove('picked');
+    document.getElementById('claimRow').classList.remove('show');
+    const locked = t.tickets <= 0;
+    fan.classList.toggle('locked', locked);
+    lockedNote.classList.toggle('show', locked);
+    promptEl.textContent = locked ? 'No tickets left on this tier' : 'Pick a card — 1 ticket per scratch';
+  }
+  tabStd.addEventListener('click', ()=>{ tier='std'; renderTier(); });
+  tabPrem.addEventListener('click', ()=>{ tier='prem'; renderTier(); });
+
+  // ---------- pick-a-card flow ----------
+  let disableTimer = null;
+  function resetScratch(){
+    clearTimeout(disableTimer);
+    canvas.style.transition = 'none';
+    canvas.style.opacity = '1';
+    canvas.style.pointerEvents = 'auto';
+    paintFoil();
+  }
+  function rollPrize(){
+    const list = tiers[tier].prizes;
+    const [amt,lbl,cls] = list[Math.floor(Math.random()*list.length)];
+    const amtEl = document.getElementById('prizeAmt');
+    amtEl.textContent = amt;
+    amtEl.className = 'amt' + (cls ? ' '+cls : '');
+    document.getElementById('prizeLbl').textContent = lbl;
+    currentWin = !!cls;
+  }
+  fan.querySelectorAll('.card').forEach(card=>{
+    card.addEventListener('click', ()=>{
+      if (tiers[tier].tickets <= 0) return;
+      tiers[tier].tickets--;
+      rollPrize();
+      fan.classList.add('picked');
+      promptEl.textContent = 'Scratch to reveal your reward';
+      panel.classList.add('show');
+      document.getElementById('cntStd').textContent = tiers.std.tickets;
+      document.getElementById('cntPrem').textContent = tiers.prem.tickets;
+      requestAnimationFrame(()=>requestAnimationFrame(resetScratch));
+      setTimeout(resetScratch, 350);
+    });
+  });
+  document.getElementById('againBtn').addEventListener('click', ()=>{
+    tiers[tier].tickets++; // demo affordance only — production is one shot per ticket
+    renderTier();
+    resetScratch();
+  });
+  document.getElementById('claimBtn').addEventListener('click', function(){
+    this.textContent = 'Claimed ✓';
+    this.disabled = true;
+    setTimeout(()=>{ this.textContent='Claim reward'; this.disabled=false; }, 2600);
+  });
+
+  // ---------- scratch layer ----------
+  const canvas = document.getElementById('scratchCanvas');
+  const ctx = canvas.getContext('2d');
+  let revealed = false;
+
+  function paintFoil(){
+    const dpr = window.devicePixelRatio || 1;
+    const r = canvas.getBoundingClientRect();
+    if (r.width === 0){
+      if (!paintFoil._retried){ paintFoil._retried = true; setTimeout(paintFoil, 250); }
+      return;
+    }
+    paintFoil._retried = false;
+    canvas.width = r.width*dpr; canvas.height = r.height*dpr;
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = tier==='prem' ? '#141815' : '#00C805';
+    ctx.fillRect(0,0,r.width,r.height);
+    ctx.strokeStyle = tier==='prem' ? 'rgba(201,162,39,.28)' : 'rgba(255,255,255,.22)';
+    ctx.lineWidth = 6;
+    for(let x=-r.height; x<r.width; x+=18){
+      ctx.beginPath();ctx.moveTo(x,r.height);ctx.lineTo(x+r.height,0);ctx.stroke();
+    }
+    ctx.fillStyle = tier==='prem' ? '#C9A227' : '#fff';
+    ctx.font = "700 13px 'Inter'";
+    ctx.textAlign = 'center';
+    ctx.fillText('SCRATCH TO REVEAL', r.width/2, r.height/2 + 4);
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.lineWidth = 34; ctx.lineCap='round'; ctx.lineJoin='round';
+    revealed = false;
+  }
+
+  let drawing=false, last=null;
+  const pos = e => { const r=canvas.getBoundingClientRect(); return {x:e.clientX-r.left,y:e.clientY-r.top}; };
+  function scratch(e){
+    if(!drawing) return;
+    const p = pos(e);
+    ctx.beginPath();
+    ctx.moveTo((last||p).x,(last||p).y);
+    ctx.lineTo(p.x,p.y);
+    ctx.stroke();
+    last=p;
+    checkReveal();
+  }
+  function checkReveal(){
+    if(revealed) return;
+    const d = ctx.getImageData(0,0,canvas.width,canvas.height).data;
+    let clear=0, total=0;
+    for(let i=3;i<d.length;i+=64){ total++; if(d[i]===0) clear++; }
+    if(clear/total > 0.5){
+      revealed = true;
+      canvas.style.transition='opacity .35s ease';
+      canvas.style.opacity='0';
+      disableTimer = setTimeout(()=>{ canvas.style.pointerEvents='none'; },300);
+      document.getElementById('claimRow').classList.toggle('show', currentWin);
+      promptEl.textContent = currentWin ? 'Nice.' : 'Better luck tomorrow.';
+      if(currentWin && motionOK) burstConfetti();
+    }
+  }
+  canvas.addEventListener('pointerdown',e=>{drawing=true;last=null;canvas.setPointerCapture(e.pointerId);scratch(e);});
+  canvas.addEventListener('pointermove',scratch);
+  canvas.addEventListener('pointerup',()=>{drawing=false;last=null;});
+  canvas.addEventListener('pointercancel',()=>{drawing=false;last=null;});
+  window.addEventListener('resize',()=>{ if(panel.classList.contains('show') && !revealed) paintFoil(); });
+
+  // ---------- referral demo ----------
+  document.getElementById('copyBtn').addEventListener('click', function(){
+    const code = document.getElementById('refCode').textContent.trim();
+    if (navigator.clipboard) navigator.clipboard.writeText(code);
+    this.textContent = 'Copied ✓';
+    setTimeout(()=>{ this.textContent='Copy'; }, 1800);
+  });
+  document.getElementById('applyBtn').addEventListener('click', ()=>{
+    const v = document.getElementById('refInput').value.trim();
+    const msg = document.getElementById('enterMsg');
+    if(/^SCRTCH-[A-Z0-9]{4}$/i.test(v)){
+      msg.textContent = 'Code applied — buy $100+ through the site to start the clock.';
+      msg.style.color = 'var(--green-dark)';
+    } else {
+      msg.textContent = 'Codes look like SCRTCH-XXXX.';
+      msg.style.color = '#B04A3A';
+    }
+  });
+
+  // ---------- confetti ----------
+  const cCan = document.getElementById('confetti');
+  const cCtx = cCan.getContext('2d');
+  function burstConfetti(){
+    cCan.width = innerWidth; cCan.height = innerHeight;
+    const colors = tier==='prem'
+      ? ['#C9A227','#EAD37E','#0B0E0C','#F3E9C6']
+      : ['#00C805','#7CE882','#0B0E0C','#BFF5C1'];
+    const parts = Array.from({length:90},()=>({
+      x:innerWidth/2 + (Math.random()-.5)*200,
+      y:innerHeight*0.38,
+      vx:(Math.random()-.5)*7,
+      vy:-(Math.random()*7+3),
+      w:5+Math.random()*5, h:8+Math.random()*6,
+      c:colors[Math.floor(Math.random()*colors.length)],
+      rot:Math.random()*Math.PI, vr:(Math.random()-.5)*.3,
+    }));
+    let frames = 0;
+    (function tick(){
+      cCtx.clearRect(0,0,cCan.width,cCan.height);
+      for(const p of parts){
+        p.x+=p.vx; p.y+=p.vy; p.vy+=0.22; p.rot+=p.vr;
+        cCtx.save();
+        cCtx.translate(p.x,p.y); cCtx.rotate(p.rot);
+        cCtx.fillStyle=p.c;
+        cCtx.fillRect(-p.w/2,-p.h/2,p.w,p.h);
+        cCtx.restore();
+      }
+      if(++frames<140) requestAnimationFrame(tick);
+      else cCtx.clearRect(0,0,cCan.width,cCan.height);
+    })();
+  }
+
+  // ---------- countdowns ----------
+  let secs = 2*3600 + 12*60 + 44;
+  setInterval(()=>{
+    secs = secs>0 ? secs-1 : 86400;
+    const h=String(Math.floor(secs/3600)).padStart(2,'0'),
+          m=String(Math.floor(secs%3600/60)).padStart(2,'0'),
+          s=String(secs%60).padStart(2,'0');
+    const str = `${h}:${m}:${s}`;
+    document.getElementById('nextTicket').textContent = str;
+    document.getElementById('accrueTimer').textContent = str;
+  },1000);
+
+  renderTier();
+</script>
+</body>
+</html>
