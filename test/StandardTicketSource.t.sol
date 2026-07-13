@@ -266,7 +266,7 @@ contract StandardTicketSourceTest is Test {
         source.addCrediter(crediter, 2 * TICKET);
 
         vm.expectEmit(true, true, false, true);
-        emit StandardTicketSource.TicketsCredited(alice, crediter, TICKET);
+        emit StandardTicketSource.TicketsCredited(alice, crediter, TICKET, TICKET);
         vm.prank(crediter);
         source.credit(alice, TICKET);
         assertEq(source.ticketsOf(alice), TICKET);
@@ -370,5 +370,142 @@ contract StandardTicketSourceTest is Test {
         vm.prank(owner);
         vm.expectRevert(StandardTicketSource.GameAlreadySet.selector);
         source.setGame(makeAddr("otherGame"));
+    }
+
+    // -------------------------------------------------------------------------
+    // Crediter rate-proportional balance ceiling
+    // -------------------------------------------------------------------------
+
+    function test_credit_clips_at_7x_and_refreshes_ttl() public {
+        uint256 daily = 10 * TICKET;
+        uint256 ceiling = 7 * daily; // 70
+        vm.prank(owner);
+        source.addCrediter(crediter, type(uint256).max);
+
+        // Accrue to ceiling over 7 day-sized credits.
+        for (uint256 i = 0; i < 7; ++i) {
+            vm.prank(crediter);
+            source.credit(alice, daily);
+            vm.warp(block.timestamp + 1 days);
+        }
+        assertEq(source.ticketsOf(alice), ceiling);
+
+        uint64 expiryBefore = source.expiryOf(alice);
+        vm.warp(block.timestamp + 1 days);
+        uint64 before = uint64(block.timestamp);
+
+        // Fully clipped credit still refreshes TTL; daily cap counts requested.
+        vm.expectEmit(true, true, false, true);
+        emit StandardTicketSource.TicketsCredited(alice, crediter, daily, 0);
+        vm.prank(crediter);
+        source.credit(alice, daily);
+
+        assertEq(source.ticketsOf(alice), ceiling);
+        assertEq(source.expiryOf(alice), before + uint64(source.TTL()));
+        assertGt(source.expiryOf(alice), expiryBefore);
+        // Fresh day bucket: only this request should be counted.
+        (, uint256 usedAfter,) = _crediterUsage();
+        assertEq(usedAfter, daily);
+    }
+
+    function test_credit_never_reduces_balance_above_ceiling_from_grant() public {
+        uint256 granted = 100 * TICKET;
+        uint256 creditAmt = 10 * TICKET; // ceiling = 70 < granted
+
+        vm.prank(owner);
+        source.grant(_users(alice), granted);
+        assertEq(source.ticketsOf(alice), granted);
+
+        vm.prank(owner);
+        source.addCrediter(crediter, creditAmt);
+
+        uint64 before = uint64(block.timestamp);
+        vm.expectEmit(true, true, false, true);
+        emit StandardTicketSource.TicketsCredited(alice, crediter, creditAmt, 0);
+        vm.prank(crediter);
+        source.credit(alice, creditAmt);
+
+        assertEq(source.ticketsOf(alice), granted);
+        assertEq(source.expiryOf(alice), before + uint64(source.TTL()));
+    }
+
+    function test_grant_above_ceiling_then_credit_does_not_clip_down() public {
+        vm.prank(owner);
+        source.grant(_users(alice), 50 * TICKET);
+
+        vm.prank(owner);
+        source.addCrediter(crediter, 5 * TICKET);
+        vm.prank(crediter);
+        source.credit(alice, 5 * TICKET); // ceiling = 35 < 50
+
+        assertEq(source.ticketsOf(alice), 50 * TICKET);
+    }
+
+    function test_whale_vs_split_wallets_ceiling_neutrality() public {
+        // Whale: 70/day → bank ceiling 490. Ten wallets: 7/day each → 49 each = 490 total.
+        uint256 whaleDaily = 70 * TICKET;
+        uint256 splitDaily = 7 * TICKET;
+        address whale = makeAddr("whale");
+
+        vm.prank(owner);
+        source.addCrediter(crediter, type(uint256).max);
+
+        address[] memory pods = new address[](10);
+        for (uint256 i = 0; i < 10; ++i) {
+            pods[i] = makeAddr(string(abi.encodePacked("pod", vm.toString(i))));
+        }
+
+        // 7 days of credits (enough to reach each path's ceiling).
+        for (uint256 day = 0; day < 7; ++day) {
+            vm.prank(crediter);
+            source.credit(whale, whaleDaily);
+            for (uint256 i = 0; i < 10; ++i) {
+                vm.prank(crediter);
+                source.credit(pods[i], splitDaily);
+            }
+            vm.warp(block.timestamp + 1 days);
+        }
+
+        assertEq(source.ticketsOf(whale), 490 * TICKET);
+        uint256 splitTotal;
+        for (uint256 i = 0; i < 10; ++i) {
+            assertEq(source.ticketsOf(pods[i]), 49 * TICKET);
+            splitTotal += source.ticketsOf(pods[i]);
+        }
+        assertEq(splitTotal, source.ticketsOf(whale));
+    }
+
+    function test_refund_above_ceiling_survives() public {
+        vm.prank(owner);
+        source.addCrediter(crediter, type(uint256).max);
+
+        // Build a crediter-path balance to its ceiling for a 10-ticket credit size.
+        uint256 daily = 10 * TICKET;
+        for (uint256 i = 0; i < 7; ++i) {
+            vm.prank(crediter);
+            source.credit(alice, daily);
+            vm.warp(block.timestamp + 1 days);
+        }
+        assertEq(source.ticketsOf(alice), 70 * TICKET);
+
+        // Refund pushes above the crediter ceiling and must stick.
+        vm.prank(game);
+        source.refundTicket(alice, 30 * TICKET);
+        assertEq(source.ticketsOf(alice), 100 * TICKET);
+
+        // Subsequent credit must not clip the above-ceiling balance down.
+        vm.prank(crediter);
+        source.credit(alice, daily);
+        assertEq(source.ticketsOf(alice), 100 * TICKET);
+    }
+
+    function _crediterUsage()
+        internal
+        view
+        returns (uint256 dailyCap, uint256 usedToday, uint256 dayBucket)
+    {
+        (bool authorized, uint256 cap, uint256 used, uint256 bucket) = source.crediters(crediter);
+        assertTrue(authorized);
+        return (cap, used, bucket);
     }
 }
