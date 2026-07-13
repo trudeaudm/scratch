@@ -15,9 +15,9 @@ import {ITicketSource} from "./interfaces/ITicketSource.sol";
 ///         only path that moves principal is the staker's own `withdraw`. Any
 ///         withdrawal (including partial) burns that user's pending and banked tickets.
 /// @dev Per-ticket rolling expiry is intentionally NOT implemented onchain in v1.
-///      The bank cap (`BANK_CAP_SECONDS` of earnings at the user's current rate) alone
-///      bounds redemption spikes to ~7 days of emissions (approved deviation from
-///      scratch-spec.md §3).
+///      The bank cap (`BANK_CAP_SECONDS` of earnings at the user's current rate) limits
+///      only newly banked accrual via headroom — existing `banked` is never reduced
+///      (approved deviation from scratch-spec.md §3).
 contract StakingVault is ITicketSource, Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -178,8 +178,8 @@ contract StakingVault is ITicketSource, Ownable, ReentrancyGuard {
     ///      already spent into a stuck ScratchGame request; those tickets were earned
     ///      under the normal capped accrual path. Clipping a rescue would permanently
     ///      destroy value the user already paid for with stake-time, turning a VRF
-    ///      outage into a silent ticket burn. Cap enforcement stays on deposit/spend
-    ///      settle only — never on refund.
+    ///      outage into a silent ticket burn. Cap enforcement on deposit/spend settle
+    ///      uses headroom only — it never reduces existing `banked`, so refunds survive.
     function refundTicket(address user, uint256 amount) external onlyGame {
         if (user == address(0)) revert ZeroAddress();
         if (amount == 0) revert ZeroAmount();
@@ -188,6 +188,9 @@ contract StakingVault is ITicketSource, Ownable, ReentrancyGuard {
     }
 
     /// @inheritdoc ITicketSource
+    /// @dev Mirrors `_settle` headroom math: existing `banked` is never clipped in the
+    ///      view (refunds / prior banks stay visible); only freshly accrued pending is
+    ///      limited to headroom so the result equals what `spendTickets` can take.
     function ticketsOf(address user) external view returns (uint256) {
         User storage u = users[user];
         uint256 pending = 0;
@@ -198,6 +201,10 @@ contract StakingVault is ITicketSource, Ownable, ReentrancyGuard {
                 acc += (emissionRate * elapsed * 1e18) / totalStaked;
             }
             pending = (u.staked * acc) / 1e18 - u.debt;
+
+            uint256 cap = (u.staked * emissionRate * BANK_CAP_SECONDS) / totalStaked;
+            uint256 headroom = u.banked >= cap ? 0 : cap - u.banked;
+            if (pending > headroom) pending = headroom;
         }
         return u.banked + pending;
     }
@@ -220,15 +227,16 @@ contract StakingVault is ITicketSource, Ownable, ReentrancyGuard {
         lastUpdate = uint64(block.timestamp);
     }
 
-    /// @dev Bank pending into `banked` under the 7-day cap, then sync debt.
+    /// @dev Bank pending into `banked` using headroom under the 7-day cap, then sync debt.
+    ///      The cap limits only newly banked accrual — it never reduces existing `banked`
+    ///      (rescue refunds above cap and prior banks survive settle / cap shrinkage).
     ///      Caller must have already `_update()`'d and confirmed eligibility.
     function _settle(address account) internal {
         User storage u = users[account];
         uint256 pending = _pending(u);
-        uint256 capped = u.banked + pending;
         uint256 cap = (u.staked * emissionRate * BANK_CAP_SECONDS) / totalStaked;
-        if (capped > cap) capped = cap;
-        u.banked = capped;
+        uint256 headroom = u.banked >= cap ? 0 : cap - u.banked;
+        u.banked += pending > headroom ? headroom : pending;
         u.debt = (u.staked * accTicketsPerShare) / 1e18;
     }
 

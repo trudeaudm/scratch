@@ -154,6 +154,7 @@ contract StakingVaultTest is Test {
 
     /// @notice Accruing longer than BANK_CAP_SECONDS still banks at most 7 days of
     ///         earnings at the user's current rate (sole staker → emissionRate * 7 days).
+    ///         `ticketsOf` clips pending to headroom so it matches what spendTickets allows.
     function test_bankCap_enforced_onSettle() public {
         vm.prank(alice);
         vault.deposit(MIN_STAKE);
@@ -161,22 +162,120 @@ contract StakingVaultTest is Test {
         uint256 cap = EMISSION_RATE * vault.BANK_CAP_SECONDS();
         assertEq(vault.capFor(alice), cap);
 
-        // Accrue well past the cap window.
+        // Accrue well past the cap window — view reports headroom-clipped spendable only.
         vm.warp(block.timestamp + 30 days);
-        assertEq(vault.ticketsOf(alice), EMISSION_RATE * 30 days, "pending uncapped live");
+        assertEq(vault.ticketsOf(alice), cap, "ticketsOf clips pending to headroom");
 
-        // Touch via spendTickets(0) is blocked; deposit 0 blocked; settle via spend of tiny
-        // after warping: bank by calling spendTickets with game after a no-op path.
-        // Settling happens on spendTickets — spend 0 reverts, so spend leaves banked=cap-1
-        // if we spend 1 after settle... Settle first by depositing 1 wei more.
         scratch.mint(alice, 1);
         vm.prank(alice);
         vault.deposit(1);
 
         (,, uint256 banked) = vault.users(alice);
-        assertEq(banked, cap, "banked clipped to cap");
-        // Live ticketsOf after settle: banked (at cap) + fresh pending since settle (~0).
+        assertEq(banked, cap, "newly banked accrual clipped to cap via headroom");
         assertEq(vault.ticketsOf(alice), cap);
+    }
+
+    /// @notice Refund above cap must survive a later deposit settle and still be spendable.
+    function test_refundAboveCap_survivesDepositAndSpend() public {
+        vm.prank(alice);
+        vault.deposit(MIN_STAKE);
+
+        uint256 cap = vault.capFor(alice);
+        vm.warp(block.timestamp + 30 days);
+        scratch.mint(alice, 1);
+        vm.prank(alice);
+        vault.deposit(1);
+        (,, uint256 banked) = vault.users(alice);
+        assertEq(banked, cap);
+
+        uint256 refund = 5e18;
+        vm.prank(game);
+        vault.refundTicket(alice, refund);
+
+        uint256 bankedAfterRefund = cap + refund;
+        (,, banked) = vault.users(alice);
+        assertEq(banked, bankedAfterRefund);
+
+        // ticketsOf must report the full refund (banked uncapped) before settle.
+        assertEq(vault.ticketsOf(alice), bankedAfterRefund);
+
+        // Another deposit settles — must NOT confiscate the refund.
+        scratch.mint(alice, 1);
+        vm.prank(alice);
+        vault.deposit(1);
+        (,, banked) = vault.users(alice);
+        assertEq(banked, bankedAfterRefund, "settle must not clip existing/refunded banked");
+        assertEq(vault.ticketsOf(alice), bankedAfterRefund, "ticketsOf matches spendable after settle");
+
+        // spendTickets of the full ticketsOf amount must succeed.
+        uint256 spendable = vault.ticketsOf(alice);
+        vm.prank(game);
+        vault.spendTickets(alice, spendable);
+        assertEq(vault.ticketsOf(alice), 0);
+        (,, banked) = vault.users(alice);
+        assertEq(banked, 0);
+    }
+
+    /// @notice Existing banked is not reduced when a second staker joins and shrinks capFor.
+    function test_bankCap_shrinkDoesNotReduceExistingBanked() public {
+        vm.prank(alice);
+        vault.deposit(MIN_STAKE);
+
+        uint256 soleCap = vault.capFor(alice);
+        vm.warp(block.timestamp + 30 days);
+        scratch.mint(alice, 1);
+        vm.prank(alice);
+        vault.deposit(1);
+        (,, uint256 banked) = vault.users(alice);
+        assertEq(banked, soleCap);
+
+        // Bob joins with equal stake → alice's per-user cap shrinks (~half; dust stake skews exact half).
+        vm.prank(bob);
+        vault.deposit(MIN_STAKE);
+        uint256 shrunkCap = vault.capFor(alice);
+        assertLt(shrunkCap, soleCap);
+        assertApproxEqAbs(shrunkCap, soleCap / 2, 1e4);
+
+        // Settle via deposit — banked must stay at pre-shrink level (above new cap).
+        scratch.mint(alice, 1);
+        vm.prank(alice);
+        vault.deposit(1);
+        (,, banked) = vault.users(alice);
+        assertEq(banked, soleCap, "existing banked must not shrink with cap");
+        assertGt(banked, shrunkCap);
+        assertEq(vault.ticketsOf(alice), soleCap, "ticketsOf keeps uncapped banked");
+    }
+
+    /// @notice ticketsOf equals the amount spendTickets will actually allow (refund + shrink).
+    function test_ticketsOf_matchesSpendable_refundAndCapShrink() public {
+        vm.prank(alice);
+        vault.deposit(MIN_STAKE);
+
+        uint256 soleCap = vault.capFor(alice);
+        vm.warp(block.timestamp + 30 days);
+        scratch.mint(alice, 1);
+        vm.prank(alice);
+        vault.deposit(1);
+
+        uint256 refund = 3e18;
+        vm.prank(game);
+        vault.refundTicket(alice, refund);
+
+        vm.prank(bob);
+        vault.deposit(MIN_STAKE);
+
+        // Accrue more while over cap — headroom is 0, pending must not inflate ticketsOf.
+        vm.warp(block.timestamp + 1 days);
+        uint256 spendable = vault.ticketsOf(alice);
+        assertEq(spendable, soleCap + refund, "view == banked; pending clipped to 0 headroom");
+
+        vm.prank(game);
+        vault.spendTickets(alice, spendable);
+        assertEq(vault.ticketsOf(alice), 0);
+
+        vm.prank(game);
+        vm.expectRevert(StakingVault.InsufficientTickets.selector);
+        vault.spendTickets(alice, 1);
     }
 
     // -------------------------------------------------------------------------
