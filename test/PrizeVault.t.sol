@@ -247,6 +247,74 @@ contract PrizeVaultTest is Test {
         assertEq(usdg.balanceOf(address(vault)), 100e18);
     }
 
+    function test_sweep_executeInsideGrace_succeeds() public {
+        vm.prank(keeper);
+        vault.fund(address(usdg), 100e18);
+
+        vm.prank(owner);
+        uint256 id = vault.sweep(address(usdg), treasury);
+        (,, uint64 eta,) = vault.sweeps(id);
+
+        // Mid-window: after eta, before eta + SWEEP_GRACE.
+        vm.warp(uint256(eta) + (uint256(vault.SWEEP_GRACE()) / 2));
+
+        vm.prank(owner);
+        vault.executeSweep(id);
+
+        assertEq(usdg.balanceOf(treasury), 100e18);
+        assertEq(usdg.balanceOf(address(vault)), 0);
+    }
+
+    function test_sweep_executeAfterGrace_revertsSweepExpired() public {
+        vm.prank(keeper);
+        vault.fund(address(usdg), 100e18);
+
+        vm.prank(owner);
+        uint256 id = vault.sweep(address(usdg), treasury);
+        (,, uint64 eta,) = vault.sweeps(id);
+
+        vm.warp(uint256(eta) + vault.SWEEP_GRACE() + 1);
+
+        vm.prank(owner);
+        vm.expectRevert(PrizeVault.SweepExpired.selector);
+        vault.executeSweep(id);
+
+        assertEq(usdg.balanceOf(address(vault)), 100e18);
+        (,,, bool pending) = vault.sweeps(id);
+        assertTrue(pending);
+    }
+
+    function test_sweep_requeueAfterExpiry_freshEta() public {
+        vm.prank(keeper);
+        vault.fund(address(usdg), 100e18);
+
+        vm.prank(owner);
+        uint256 id1 = vault.sweep(address(usdg), treasury);
+        (,, uint64 eta1,) = vault.sweeps(id1);
+
+        vm.warp(uint256(eta1) + vault.SWEEP_GRACE() + 1);
+
+        vm.prank(owner);
+        vm.expectRevert(PrizeVault.SweepExpired.selector);
+        vault.executeSweep(id1);
+
+        uint256 queueTime = block.timestamp;
+        vm.prank(owner);
+        uint256 id2 = vault.sweep(address(usdg), treasury);
+        (,, uint64 eta2,) = vault.sweeps(id2);
+
+        assertEq(eta2, uint64(queueTime) + vault.SWEEP_DELAY());
+        assertGt(eta2, eta1);
+
+        vm.warp(eta2);
+
+        vm.prank(owner);
+        vault.executeSweep(id2);
+
+        assertEq(usdg.balanceOf(treasury), 100e18);
+        assertEq(usdg.balanceOf(address(vault)), 0);
+    }
+
     // -------------------------------------------------------------------------
     // payout auth
     // -------------------------------------------------------------------------

@@ -22,6 +22,10 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
     /// @notice Delay between `sweep` queue and `executeSweep`.
     uint64 public constant SWEEP_DELAY = 48 hours;
 
+    /// @notice Window after `eta` during which `executeSweep` may succeed; after
+    ///         `eta + SWEEP_GRACE` the queued sweep expires and must be re-queued.
+    uint64 public constant SWEEP_GRACE = 24 hours;
+
     /// @notice SCRATCH used for fallback payouts.
     IERC20 public immutable scratch;
 
@@ -60,6 +64,7 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
     error NotSelf();
     error SweepNotPending();
     error SweepNotReady();
+    error SweepExpired();
     error SweepUnknown();
 
     modifier onlyGame() {
@@ -127,6 +132,9 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
     }
 
     /// @dev External for try/catch. Only callable by this contract.
+    /// @notice Prize assets are owner-curated. A malicious ERC-20 could gas-grief
+    ///         the VRF callback path via unbounded work in `transfer`; curation of
+    ///         allowlisted prize assets is the mitigation.
     function transferAsset(address asset, address to, uint256 amount) external {
         if (msg.sender != address(this)) revert NotSelf();
         IERC20(asset).safeTransfer(to, amount);
@@ -141,12 +149,15 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
         emit SweepQueued(id, asset, to, eta);
     }
 
-    /// @notice Execute a queued sweep after its ETA. Transfers the vault's full balance of the asset.
+    /// @notice Execute a queued sweep in `[eta, eta + SWEEP_GRACE]`. Transfers the
+    ///         vault's full balance of the asset. After the grace window the request
+    ///         expires and must be re-queued (restarting `SWEEP_DELAY`).
     function executeSweep(uint256 id) external onlyOwner nonReentrant {
         SweepRequest storage req = sweeps[id];
         if (req.asset == address(0) && !req.pending) revert SweepUnknown();
         if (!req.pending) revert SweepNotPending();
         if (block.timestamp < req.eta) revert SweepNotReady();
+        if (block.timestamp > uint256(req.eta) + SWEEP_GRACE) revert SweepExpired();
 
         req.pending = false;
         uint256 bal = IERC20(req.asset).balanceOf(address(this));
