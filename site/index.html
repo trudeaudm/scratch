@@ -122,18 +122,19 @@
   .param b{color:var(--green-dark)}
 
   /* game stage — period-accurate dark panel (the old app, embedded as an artifact) */
-  .stage{max-width:680px;margin:34px auto 0;min-height:460px;position:relative;
+  .stage{max-width:720px;margin:34px auto 0;min-height:500px;position:relative;
     background:#0B1015;border-radius:26px;padding:34px 18px 30px;
     box-shadow:inset 0 0 0 1px #1B242C, 0 24px 60px -30px rgba(11,14,12,.5)}
   .stage-prompt{font-size:13px;font-weight:600;color:#9FB4A8;margin-bottom:24px;letter-spacing:.04em}
 
-  .fan{display:flex;justify-content:center;align-items:flex-end;gap:clamp(12px,3vw,24px);perspective:900px;transition:opacity .3s ease}
+  .fan{display:flex;justify-content:center;align-items:flex-end;gap:clamp(16px,3.5vw,34px);padding:10px 0 6px;perspective:900px;transition:opacity .3s ease}
   .card{
-    width:clamp(90px,22vw,130px);aspect-ratio:0.92;border-radius:8px;cursor:pointer;border:none;padding:0;
+    width:clamp(118px,26vw,182px);aspect-ratio:0.92;border-radius:10px;cursor:pointer;border:none;padding:0;
     background:linear-gradient(160deg,#B07F35,#8F6222 70%);
     box-shadow:0 12px 26px -12px rgba(0,0,0,.8);
     position:relative;overflow:hidden;
-    transition:transform .22s ease, box-shadow .22s ease, opacity .35s ease;
+    transition:transform .38s cubic-bezier(.34,1.56,.64,1), box-shadow .3s ease, opacity .4s ease;
+    will-change:transform;
   }
   .stage.premium .card{
     background:linear-gradient(160deg,#1A222B,#10161C 70%);
@@ -151,10 +152,14 @@
     color:#5C3F12;text-shadow:0 1px 0 rgba(255,236,190,.5);
   }
   .stage.premium .card .mark::after{color:var(--gold);text-shadow:0 1px 0 rgba(0,0,0,.6)}
-  .card:nth-child(2){transform:translateY(-14px);box-shadow:0 18px 32px -12px rgba(0,0,0,.85)}
-  .card:hover{transform:translateY(-18px)}
+  .card:nth-child(2){transform:translateY(-16px);box-shadow:0 18px 32px -12px rgba(0,0,0,.85)}
+  .card:hover{transform:translateY(-24px) scale(1.03)}
+  .card:nth-child(2):hover{transform:translateY(-30px) scale(1.03)}
   .card:focus-visible{outline:3px solid #F4EFE2;outline-offset:3px}
-  .fan.picked .card{opacity:0;pointer-events:none;transform:translateY(16px) scale(.92)}
+  .fan.picked .card{opacity:0;pointer-events:none;transform:translateY(28px) scale(.88) rotate(0deg)!important}
+  .fan.picked .card:nth-child(1){transition-delay:0s}
+  .fan.picked .card:nth-child(2){transition-delay:.06s}
+  .fan.picked .card:nth-child(3){transition-delay:.12s}
   .fan.locked{opacity:.35;pointer-events:none;filter:grayscale(1)}
 
   .locked-note{
@@ -165,12 +170,12 @@
   .locked-note b{font-family:'IBM Plex Mono';color:#E8EDF0;font-variant-numeric:tabular-nums}
 
   .scratch-panel{
-    position:absolute;left:50%;top:74px;transform:translateX(-50%) scale(.94);
+    position:absolute;left:50%;top:64px;transform:translateX(-50%) scale(.92) translateY(14px);
     opacity:0;pointer-events:none;
-    transition:opacity .35s ease .2s, transform .35s ease .2s;
-    width:min(380px,88vw);
+    transition:opacity .5s cubic-bezier(.22,1,.36,1) .22s, transform .5s cubic-bezier(.22,1,.36,1) .22s;
+    width:min(400px,90vw);
   }
-  .scratch-panel.show{opacity:1;pointer-events:auto;transform:translateX(-50%) scale(1)}
+  .scratch-panel.show{opacity:1;pointer-events:auto;transform:translateX(-50%) scale(1) translateY(0)}
   .scratch-card{
     background:#10161C;border:1px solid #22303A;border-radius:20px;
     box-shadow:0 28px 60px -20px rgba(0,0,0,.7);padding:24px 22px 20px;
@@ -648,19 +653,31 @@
     ctx.globalCompositeOperation = 'destination-out';
     ctx.lineWidth = 34; ctx.lineCap='round'; ctx.lineJoin='round';
     revealed = false;
+    strokeDist = 0; moveCount = 0;
   }
 
-  let drawing=false, last=null;
+  let drawing=false, last=null, strokeDist=0, moveCount=0;
   const pos = e => { const r=canvas.getBoundingClientRect(); return {x:e.clientX-r.left,y:e.clientY-r.top}; };
   function scratch(e){
     if(!drawing) return;
     const p = pos(e);
+    if(last) strokeDist += Math.hypot(p.x-last.x, p.y-last.y);
     ctx.beginPath();
     ctx.moveTo((last||p).x,(last||p).y);
     ctx.lineTo(p.x,p.y);
     ctx.stroke();
     last=p;
-    checkReveal();
+    if(++moveCount % 6 === 0) checkReveal();
+  }
+  function doReveal(){
+    if(revealed) return;
+    revealed = true;
+    canvas.style.transition='opacity .55s ease';
+    canvas.style.opacity='0';
+    disableTimer = setTimeout(()=>{ canvas.style.pointerEvents='none'; },500);
+    document.getElementById('claimRow').classList.toggle('show', currentWin);
+    promptEl.textContent = currentWin ? 'Nice.' : 'Better luck tomorrow.';
+    if(currentWin) burstConfetti();
   }
   function checkReveal(){
     if(revealed) return;
@@ -673,19 +690,17 @@
     let clear=0, total=0;
     for(let i=3;i<d.length;i+=64){ total++; if(d[i]===0) clear++; }
     if(clear/total > 0.6){
-      revealed = true;
-      canvas.style.transition='opacity .35s ease';
-      canvas.style.opacity='0';
-      disableTimer = setTimeout(()=>{ canvas.style.pointerEvents='none'; },300);
-      document.getElementById('claimRow').classList.toggle('show', currentWin);
-      promptEl.textContent = currentWin ? 'Nice.' : 'Better luck tomorrow.';
-      if(currentWin) burstConfetti();
+      doReveal();
     }
+  }
+  function release(){
+    drawing=false; last=null;
+    if(!revealed && strokeDist > 30) doReveal();
   }
   canvas.addEventListener('pointerdown',e=>{drawing=true;last=null;canvas.setPointerCapture(e.pointerId);scratch(e);});
   canvas.addEventListener('pointermove',scratch);
-  canvas.addEventListener('pointerup',()=>{drawing=false;last=null;});
-  canvas.addEventListener('pointercancel',()=>{drawing=false;last=null;});
+  canvas.addEventListener('pointerup',release);
+  canvas.addEventListener('pointercancel',release);
   window.addEventListener('resize',()=>{ if(panel.classList.contains('show') && !revealed) paintFoil(); });
 
   // ---------- referral demo ----------
