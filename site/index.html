@@ -3,15 +3,25 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>$SCRATCH — Your daily reward is ready.</title>
+<title>SCRATCH — daily onchain scratch-offs. Launching by auction on Uniswap.</title>
+<meta name="description" content="Robinhood retired its scratch-off — regulators called it gamification. $SCRATCH brings it back onchain: hold for a daily ticket, stake to scratch for USDG and actual tokenized stocks. Could be SPCX. Probably $5.">
+<link rel="icon" type="image/png" href="/icon.png">
+<meta property="og:title" content="SCRATCH — daily onchain scratch-offs">
+<meta property="og:description" content="The feature regulators killed, back onchain. Hold to scratch. Stake to scratch for actual stocks. Could be SPCX. Probably $5.">
+<meta property="og:image" content="https://scratch4663.xyz/og.png">
+<meta property="og:url" content="https://scratch4663.xyz">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:site" content="@scratch4663">
+<meta name="twitter:image" content="https://scratch4663.xyz/og.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
 <style>
   :root{
-    --green:#00C805;
-    --green-dark:#00A404;
-    --green-tint:#E9FAEA;
+    --green:#21CE99;
+    --green-dark:#17A87D;
+    --green-tint:#E5FAF2;
     --ink:#0B0E0C;
     --paper:#FFFFFF;
     --dim:#F6F8F6;
@@ -82,73 +92,116 @@
   .tier-note{font-size:12.5px;color:var(--muted);margin-top:12px}
   .tier-note b{color:var(--ink);font-weight:600}
 
-  /* game stage */
-  .stage{max-width:640px;margin:34px auto 0;min-height:420px;position:relative}
-  .stage-prompt{font-size:14px;font-weight:600;color:var(--muted);margin-bottom:24px}
+  .announce{
+    background:var(--ink);color:#D7E2DA;text-align:center;
+    font-size:13px;font-weight:600;padding:11px 18px;line-height:1.5;
+  }
+  .announce b{color:#7FE8C8}
+  .announce a{color:#7FE8C8;text-decoration:underline}
+  .status{
+    display:inline-block;font-size:10.5px;font-weight:800;letter-spacing:.1em;
+    text-transform:uppercase;border-radius:100px;padding:4px 11px;margin-left:10px;vertical-align:2px;
+    background:#FFF4D6;color:#8A6E12;border:1px solid #EAD37E;
+  }
+  .demo-note{
+    font-size:12px;font-weight:600;color:var(--muted);margin-top:10px;
+  }
+  .demo-note b{color:var(--green-dark)}
+  .alloc-bar{display:flex;height:14px;border-radius:100px;overflow:hidden;margin:18px 0 10px}
+  .alloc-bar i{display:block;height:100%}
+  .alloc-legend{display:flex;flex-wrap:wrap;gap:14px;font-size:12.5px;color:var(--muted)}
+  .alloc-legend span::before{content:"";display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px;vertical-align:-1px;background:var(--dot)}
+  .steps-mini{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:16px;margin-top:36px}
+  .step-mini{border:1px solid var(--line);border-radius:16px;padding:22px 20px}
+  .step-mini .n{font-weight:800;color:var(--green-dark);font-size:13px;letter-spacing:.08em;margin-bottom:8px}
+  .step-mini h4{font-size:15.5px;font-weight:700;letter-spacing:-.01em;margin-bottom:6px}
+  .step-mini p{font-size:13.5px;line-height:1.6;color:var(--muted)}
+  .step-mini b{color:var(--ink);font-weight:600}
+  .params{display:flex;flex-wrap:wrap;gap:10px;margin-top:26px}
+  .param{font-size:13px;font-weight:700;border:1.5px solid var(--line);border-radius:100px;padding:9px 16px;color:var(--ink)}
+  .param b{color:var(--green-dark)}
 
-  .fan{display:flex;justify-content:center;gap:clamp(10px,3vw,22px);perspective:900px;transition:opacity .3s ease}
+  /* game stage — period-accurate dark panel (the old app, embedded as an artifact) */
+  .stage{max-width:680px;margin:34px auto 0;min-height:460px;position:relative;
+    background:#0B1015;border-radius:26px;padding:34px 18px 30px;
+    box-shadow:inset 0 0 0 1px #1B242C, 0 24px 60px -30px rgba(11,14,12,.5)}
+  .stage-prompt{font-size:13px;font-weight:600;color:#9FB4A8;margin-bottom:24px;letter-spacing:.04em}
+
+  .fan{display:flex;justify-content:center;align-items:flex-end;gap:clamp(12px,3vw,24px);perspective:900px;transition:opacity .3s ease}
   .card{
-    width:clamp(96px,24vw,150px);aspect-ratio:0.68;border-radius:14px;cursor:pointer;border:none;padding:0;
-    background:repeating-linear-gradient(-45deg, var(--green) 0 7px, var(--green-dark) 7px 14px);
-    box-shadow:0 14px 32px -14px rgba(0,160,4,.5);
+    width:clamp(90px,22vw,130px);aspect-ratio:0.92;border-radius:8px;cursor:pointer;border:none;padding:0;
+    background:linear-gradient(160deg,#B07F35,#8F6222 70%);
+    box-shadow:0 12px 26px -12px rgba(0,0,0,.8);
     position:relative;overflow:hidden;
     transition:transform .22s ease, box-shadow .22s ease, opacity .35s ease;
   }
   .stage.premium .card{
-    background:repeating-linear-gradient(-45deg, #141815 0 7px, #232924 7px 14px);
-    box-shadow:0 14px 32px -14px rgba(11,14,12,.55);
+    background:linear-gradient(160deg,#1A222B,#10161C 70%);
+    box-shadow:0 12px 26px -12px rgba(0,0,0,.9);
   }
-  .card::after{content:"";position:absolute;inset:7px;border-radius:9px;border:1.5px solid rgba(255,255,255,.5)}
-  .stage.premium .card::after{border-color:rgba(201,162,39,.6)}
+  .card::after{
+    content:"";position:absolute;inset:6px;border-radius:5px;
+    border:2px dashed rgba(255,244,214,.55);
+  }
+  .stage.premium .card::after{border-color:rgba(201,162,39,.55)}
   .card .mark{position:absolute;inset:0;display:flex;align-items:center;justify-content:center}
-  .card .mark i{width:28px;height:28px;background:#fff;display:block;border-radius:50% 50% 50% 3px;transform:rotate(-45deg);box-shadow:0 2px 8px rgba(0,0,0,.18)}
-  .stage.premium .card .mark i{background:var(--gold)}
-  .card:nth-child(1){transform:rotate(-7deg) translateY(8px)}
-  .card:nth-child(3){transform:rotate(7deg) translateY(8px)}
-  .card:hover{transform:translateY(-10px) rotate(0deg)}
-  .card:focus-visible{outline:3px solid var(--ink);outline-offset:3px}
+  .card .mark i{display:none}
+  .card .mark::after{
+    content:"?";font-weight:800;font-size:clamp(34px,7vw,48px);
+    color:#5C3F12;text-shadow:0 1px 0 rgba(255,236,190,.5);
+  }
+  .stage.premium .card .mark::after{color:var(--gold);text-shadow:0 1px 0 rgba(0,0,0,.6)}
+  .card:nth-child(2){transform:translateY(-14px);box-shadow:0 18px 32px -12px rgba(0,0,0,.85)}
+  .card:hover{transform:translateY(-18px)}
+  .card:focus-visible{outline:3px solid #F4EFE2;outline-offset:3px}
   .fan.picked .card{opacity:0;pointer-events:none;transform:translateY(16px) scale(.92)}
   .fan.locked{opacity:.35;pointer-events:none;filter:grayscale(1)}
 
   .locked-note{
-    display:none;margin-top:22px;font-size:14px;color:var(--muted);
-    background:var(--dim);border-radius:14px;padding:16px 20px;max-width:420px;margin-inline:auto;
+    display:none;margin-top:22px;font-size:14px;color:#8FA3B0;
+    background:#131A21;border-radius:14px;padding:16px 20px;max-width:420px;margin-inline:auto;
   }
   .locked-note.show{display:block}
-  .locked-note b{font-family:'IBM Plex Mono';color:var(--ink);font-variant-numeric:tabular-nums}
+  .locked-note b{font-family:'IBM Plex Mono';color:#E8EDF0;font-variant-numeric:tabular-nums}
 
   .scratch-panel{
-    position:absolute;left:50%;top:0;transform:translateX(-50%) scale(.94);
+    position:absolute;left:50%;top:74px;transform:translateX(-50%) scale(.94);
     opacity:0;pointer-events:none;
     transition:opacity .35s ease .2s, transform .35s ease .2s;
-    width:min(380px,92vw);
+    width:min(380px,88vw);
   }
   .scratch-panel.show{opacity:1;pointer-events:auto;transform:translateX(-50%) scale(1)}
   .scratch-card{
-    background:#fff;border:1px solid var(--line);border-radius:20px;
-    box-shadow:0 28px 60px -28px rgba(11,14,12,.28);padding:26px 24px 22px;
+    background:#10161C;border:1px solid #22303A;border-radius:20px;
+    box-shadow:0 28px 60px -20px rgba(0,0,0,.7);padding:24px 22px 20px;
   }
-  .scratch-card.premium{border-color:#E7DCB8;box-shadow:0 28px 60px -28px rgba(160,128,20,.3)}
-  .sc-head{font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);display:flex;justify-content:space-between;gap:8px}
+  .scratch-card.premium{border-color:#3A3320;box-shadow:0 28px 60px -20px rgba(160,128,20,.25)}
+  .sc-head{font-size:11.5px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#7E93A0;display:flex;justify-content:space-between;gap:8px}
   .sc-head .prem{color:var(--gold)}
-  .scratch-frame{position:relative;margin-top:16px;border-radius:14px;overflow:hidden;background:var(--dim);height:180px;user-select:none}
-  .prize{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;text-align:center;padding:14px}
-  .prize .amt{font-weight:800;font-size:32px;letter-spacing:-.03em;color:var(--ink)}
-  .prize .amt.win{color:var(--green)}
+  .scratch-frame{position:relative;margin-top:16px;border-radius:12px;overflow:hidden;background:#0B1015;height:190px;user-select:none}
+  .prize{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;text-align:center;padding:22px}
+  /* certificate frame, per the original reveal screen */
+  .prize::before{content:"";position:absolute;inset:10px;border:2px solid #21CE99;border-radius:4px;pointer-events:none}
+  .prize::after{content:"";position:absolute;inset:16px;border:1px solid rgba(33,206,153,.45);border-radius:2px;pointer-events:none}
+  .stage.premium .prize::before{border-color:var(--gold)}
+  .stage.premium .prize::after{border-color:rgba(201,162,39,.45)}
+  .prize .amt{font-weight:800;font-size:30px;letter-spacing:-.02em;color:#E8EDF0}
+  .prize .amt.win{color:#21CE99}
   .prize .amt.gold{color:var(--gold)}
-  .prize .lbl{font-size:13px;font-weight:500;color:var(--muted)}
+  .prize .lbl{font-size:12.5px;font-weight:500;color:#8FA3B0;max-width:240px}
   #scratchCanvas{position:absolute;inset:0;width:100%;height:100%;cursor:grab;touch-action:none}
   #scratchCanvas:active{cursor:grabbing}
-  .sc-foot{display:flex;justify-content:space-between;align-items:center;margin-top:18px;gap:10px}
-  .sc-timer{font-size:12.5px;color:var(--muted)}
-  .sc-timer b{font-family:'IBM Plex Mono';font-weight:500;color:var(--ink);font-variant-numeric:tabular-nums}
-  .claim-row{margin-top:16px;display:none}
+  .sc-foot{display:flex;justify-content:space-between;align-items:center;margin-top:16px;gap:10px}
+  .sc-timer{font-size:12px;color:#7E93A0}
+  .sc-timer b{font-family:'IBM Plex Mono';font-weight:500;color:#E8EDF0;font-variant-numeric:tabular-nums}
+  .claim-row{margin-top:14px;display:none}
   .claim-row.show{display:block;animation:rise .35s ease}
   @keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
-  .claim-row .btn{width:100%}
-  .again{background:none;border:none;cursor:pointer;font-family:'Inter';font-size:13px;font-weight:600;color:var(--muted);text-decoration:underline;padding:6px}
-  .again:hover{color:var(--ink)}
-  .again:focus-visible{outline:3px solid var(--ink);outline-offset:2px}
+  .claim-row .btn{width:100%;background:#21CE99;color:#0B1015}
+  .claim-row .btn:hover{background:#1BB786}
+  .again{background:none;border:none;cursor:pointer;font-family:'Inter';font-size:12.5px;font-weight:600;color:#7E93A0;text-decoration:underline;padding:6px}
+  .again:hover{color:#E8EDF0}
+  .again:focus-visible{outline:3px solid #21CE99;outline-offset:2px}
   #confetti{position:fixed;inset:0;pointer-events:none;z-index:100}
 
   .expiry{font-size:12px;color:var(--muted);margin-top:20px}
@@ -260,15 +313,18 @@
 <nav>
   <div class="logo"><span class="leaf"></span>$SCRATCH</div>
   <div class="nav-links">
+    <a href="#auction">Auction</a>
     <a href="#paths">Earn tickets</a>
     <a href="#referral">Referrals</a>
     <a href="#lore">The lore</a>
   </div>
-  <a class="btn" href="#">Buy $SCRATCH</a>
+  <a class="btn" href="#auction">Auction soon</a>
 </nav>
 
+<div class="announce">$SCRATCH launches by <b>12-hour clearing auction</b> on Uniswap · date announced on <a href="https://x.com/scratch4663" target="_blank" rel="noopener">@scratch4663</a> · game &amp; staking go live within ~24h of clearing</div>
+
 <header>
-  <div class="eyebrow">Daily reward · Live on Robinhood Chain</div>
+  <div class="eyebrow">Launching by auction on Uniswap · Robinhood Chain</div>
   <h1>Your free stock era is back.<br><span>Every single day.</span></h1>
   <p class="sub">Hold $SCRATCH and earn tickets by the second. <b>Stake it</b> and your cards can hide USDG, blue-chip memes — <b>or actual onchain stock.</b></p>
 
@@ -276,10 +332,11 @@
     <button class="tier-tab active" id="tabStd" role="tab" aria-selected="true">Holder cards <span class="count" id="cntStd">3</span></button>
     <button class="tier-tab premium" id="tabPrem" role="tab" aria-selected="false"><span class="star">★</span> Staked cards <span class="count" id="cntPrem">2</span></button>
   </div>
+  <div class="demo-note"><b>Playable demo below</b> — tickets are simulated. Real tickets start printing when the game goes live, ~24h after the auction clears.</div>
   <div class="tier-note" id="tierNote">Earned by holding <b>10,000+ $SCRATCH</b> in your wallet · pays $SCRATCH &amp; USDG</div>
 
   <div class="stage" id="stage">
-    <div class="stage-prompt" id="prompt">Pick a card — 1 ticket per scratch</div>
+    <div class="stage-prompt" id="prompt">Choose your free scratch</div>
 
     <div class="fan" id="fan">
       <button class="card" aria-label="Pick card one"><span class="mark"><i></i></span></button>
@@ -316,19 +373,49 @@
 <div class="pool">
   <div class="pool-inner">
     <div class="pool-head">
-      <h3>Prize vault &amp; pool health — live onchain</h3>
-      <a class="verify" href="#">Verify on explorer →</a>
+      <h3>Where every token goes — locked before the auction</h3>
+      <a class="verify" href="https://x.com/scratch4663" target="_blank" rel="noopener">Full breakdown on X →</a>
     </div>
-    <div class="pool-grid">
-      <div class="pool-stat"><div class="v"><em>18.4M</em></div><div class="k">$SCRATCH in vault</div></div>
-      <div class="pool-stat"><div class="v">12,400</div><div class="k">USDG in vault</div></div>
-      <div class="pool-stat"><div class="v"><span class="g">6× AAPL</span></div><div class="k">onchain stock prizes</div></div>
-      <div class="pool-stat"><div class="v"><span class="g">2× TSLA</span></div><div class="k">onchain stock prizes</div></div>
-      <div class="pool-stat"><div class="v">$4,218</div><div class="k">LP fees → vault (7d)</div></div>
-      <div class="pool-stat"><div class="v">61,208</div><div class="k">cards scratched today</div></div>
+    <div class="alloc-bar">
+      <i style="width:38.9%;background:#21CE99" title="Publicly sold"></i>
+      <i style="width:31.1%;background:#0B0E0C" title="Locked LP"></i>
+      <i style="width:20%;background:#C9A227" title="Prize vault"></i>
+      <i style="width:10%;background:#B7C0B9" title="Ops"></i>
+    </div>
+    <div class="alloc-legend">
+      <span style="--dot:#21CE99"><b>38.9%</b>&nbsp;publicly sold in the auction</span>
+      <span style="--dot:#0B0E0C"><b>31.1%</b>&nbsp;liquidity, locked until July 2027</span>
+      <span style="--dot:#C9A227"><b>20%</b>&nbsp;prize vault (public address at launch)</span>
+      <span style="--dot:#B7C0B9"><b>10%</b>&nbsp;ops &amp; campaigns — the smallest number on this page</span>
+    </div>
+    <div class="pool-grid" style="margin-top:22px">
+      <div class="pool-stat"><div class="v"><em>1%</em></div><div class="k">pool fee → prize treasury</div></div>
+      <div class="pool-stat"><div class="v">1 year</div><div class="k">LP timelock, visible to bidders</div></div>
+      <div class="pool-stat"><div class="v">20%</div><div class="k">of raise → prize inventory &amp; ops</div></div>
+      <div class="pool-stat"><div class="v">VRF</div><div class="k">chainlink randomness at settlement</div></div>
     </div>
   </div>
 </div>
+
+<section id="auction">
+  <div class="sec-eyebrow">The auction</div>
+  <h2>Everyone pays the same price. Even us.</h2>
+  <p class="sec-sub">$SCRATCH launches by <b>continuous clearing auction</b> — Uniswap's onchain fair-launch mechanism. No snipers, no insider allocations, no dev candle. Bids settle at one uniform clearing price, then liquidity deploys automatically and trading begins.</p>
+  <div class="steps-mini">
+    <div class="step-mini"><div class="n">01</div><h4>Bid in USDG</h4><p>Place a bid at any price at or above the floor during the 12-hour window. Bids are onchain and refundable if the auction doesn't clear.</p></div>
+    <div class="step-mini"><div class="n">02</div><h4>One clearing price</h4><p>At close, the auction finds the single price where demand meets supply. <b>Everyone above it wins at exactly that price.</b> Everyone below is refunded.</p></div>
+    <div class="step-mini"><div class="n">03</div><h4>Liquidity deploys itself</h4><p>The pool launches at the clearing price with a <b>dense USDG shelf under it</b> and the LP position locked for a year — you can verify the lock before you bid.</p></div>
+    <div class="step-mini"><div class="n">04</div><h4>Then you scratch</h4><p>Game contracts go live within ~24h of clearing. The prize vault opens stocked by <b>the auction itself</b> — purchases published with receipts.</p></div>
+  </div>
+  <div class="params">
+    <div class="param">Duration <b>12 hours</b></div>
+    <div class="param">Bids in <b>USDG</b></div>
+    <div class="param">Floor <b>$8k FDV</b></div>
+    <div class="param">Supply sold <b>38.9%</b></div>
+    <div class="param">LP locked <b>1 year</b></div>
+    <div class="param">Date <b>announced on X</b></div>
+  </div>
+</section>
 
 <section id="paths">
   <div class="sec-eyebrow">Two ways to earn</div>
@@ -338,7 +425,7 @@
   <div class="paths">
     <div class="path">
       <div class="p-tag">Hold in wallet</div>
-      <h3>Holder cards</h3>
+      <h3>Holder cards <span class="status">daily drops from game launch</span></h3>
       <div class="rate">Just hold <b>10,000+ $SCRATCH</b> · your share of <b>35%</b> of emissions</div>
       <div class="prize-list">
         <div class="prize-row"><span class="p">+250 $SCRATCH</span><span class="o">1 in 6</span></div>
@@ -346,12 +433,12 @@
         <div class="prize-row"><span class="p">+5,000 $SCRATCH</span><span class="o">1 in 220</span></div>
         <div class="prize-row"><span class="p">+25 USDG</span><span class="o">1 in 500</span></div>
       </div>
-      <div class="cta"><a class="btn ghost" href="#" style="display:block">Buy &amp; hold to start earning</a></div>
+      <div class="cta"><a class="btn ghost" href="#auction" style="display:block">Buy in the auction, hold to earn</a></div>
     </div>
 
     <div class="path premium">
       <div class="p-tag">★ Stake in vault</div>
-      <h3>Staked cards</h3>
+      <h3>Staked cards <span class="status">live at game launch</span></h3>
       <div class="rate">Stake in the vault · your share of <b>65%</b> of emissions · <b>no lockup</b>, withdraw anytime</div>
       <div class="prize-list">
         <div class="prize-row"><span class="p">+1,000 $SCRATCH</span><span class="o">1 in 8</span></div>
@@ -360,8 +447,8 @@
         <div class="prize-row"><span class="p"><span class="tk">STOCK</span>Onchain AAPL / TSLA share</span><span class="o">1 in 2,500</span></div>
       </div>
       <div class="stake-mini">
-        <input type="text" inputmode="decimal" placeholder="Amount to stake" aria-label="Amount to stake">
-        <button class="btn">Stake</button>
+        <input type="text" inputmode="decimal" placeholder="Amount to stake" aria-label="Amount to stake" disabled>
+        <button class="btn" disabled>Opens at game launch</button>
       </div>
     </div>
   </div>
@@ -369,7 +456,7 @@
 
 <section id="referral">
   <div class="sec-eyebrow">Referrals</div>
-  <h2>Bring a friend, both of you scratch.</h2>
+  <h2>Bring a friend, both of you scratch. <span class="status">after launch</span></h2>
   <p class="sec-sub">When a wallet you refer <b>buys $100+ of $SCRATCH</b> and holds it for 6 hours, you both get a bonus card. Bought means bought — <b>tokens transferred in from another wallet don't count,</b> and both sides must stay above $100. Max 5 referral cards per day.</p>
 
   <div class="ref-grid">
@@ -409,8 +496,8 @@
 
 <footer>
   <div class="logo" style="font-size:15px"><span class="leaf"></span>$SCRATCH</div>
-  <div class="ca">CA: 0x4663…5CR47 (mockup)</div>
-  <div class="fine">Fan fiction with a claim button. Not affiliated with, endorsed by, or gamified by Robinhood Markets, Inc. This is a mockup — no contract exists. Memecoins are gambling; scratch responsibly.</div>
+  <div class="ca">CA: not deployed yet — it will only ever appear here and in the pinned post of <a href="https://x.com/scratch4663" style="color:var(--green-dark)">@scratch4663</a>. Anything else is fake.</div>
+  <div class="fine">Fan fiction with a claim button. Not affiliated with, endorsed by, or gamified by Robinhood Markets, Inc. Contracts go live at launch — until the pinned post says otherwise, nothing is real. Memecoins are gambling; scratch responsibly.</div>
 </footer>
 
 <canvas id="confetti"></canvas>
@@ -474,7 +561,7 @@
     const locked = t.tickets <= 0;
     fan.classList.toggle('locked', locked);
     lockedNote.classList.toggle('show', locked);
-    promptEl.textContent = locked ? 'No tickets left on this tier' : 'Pick a card — 1 ticket per scratch';
+    promptEl.textContent = locked ? 'No tickets left on this tier' : 'Choose your free scratch';
   }
   tabStd.addEventListener('click', ()=>{ tier='std'; renderTier(); });
   tabPrem.addEventListener('click', ()=>{ tier='prem'; renderTier(); });
@@ -538,17 +625,26 @@
     canvas.width = r.width*dpr; canvas.height = r.height*dpr;
     ctx.setTransform(dpr,0,0,dpr,0,0);
     ctx.globalCompositeOperation = 'source-over';
-    ctx.fillStyle = tier==='prem' ? '#141815' : '#00C805';
+    // period-accurate foil: brown paper stamp with "?" (premium: dark w/ gold)
+    const prem = tier==='prem';
+    const g = ctx.createLinearGradient(0, 0, r.width, r.height);
+    if (prem){ g.addColorStop(0,'#1A222B'); g.addColorStop(1,'#10161C'); }
+    else { g.addColorStop(0,'#B07F35'); g.addColorStop(1,'#8F6222'); }
+    ctx.fillStyle = g;
     ctx.fillRect(0,0,r.width,r.height);
-    ctx.strokeStyle = tier==='prem' ? 'rgba(201,162,39,.28)' : 'rgba(255,255,255,.22)';
-    ctx.lineWidth = 6;
-    for(let x=-r.height; x<r.width; x+=18){
-      ctx.beginPath();ctx.moveTo(x,r.height);ctx.lineTo(x+r.height,0);ctx.stroke();
-    }
-    ctx.fillStyle = tier==='prem' ? '#C9A227' : '#fff';
-    ctx.font = "700 13px 'Inter'";
+    // dashed inner border like the stamp
+    ctx.strokeStyle = prem ? 'rgba(201,162,39,.55)' : 'rgba(255,244,214,.55)';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([7,6]);
+    ctx.strokeRect(8, 8, r.width-16, r.height-16);
+    ctx.setLineDash([]);
+    ctx.fillStyle = prem ? '#C9A227' : '#5C3F12';
+    ctx.font = "800 56px 'Inter'";
     ctx.textAlign = 'center';
-    ctx.fillText('SCRATCH TO REVEAL', r.width/2, r.height/2 + 4);
+    ctx.fillText('?', r.width/2, r.height/2 + 8);
+    ctx.fillStyle = prem ? 'rgba(201,162,39,.8)' : 'rgba(92,63,18,.9)';
+    ctx.font = "700 11px 'Inter'";
+    ctx.fillText('SCRATCH TO REVEAL', r.width/2, r.height - 20);
     ctx.globalCompositeOperation = 'destination-out';
     ctx.lineWidth = 34; ctx.lineCap='round'; ctx.lineJoin='round';
     revealed = false;
@@ -568,17 +664,22 @@
   }
   function checkReveal(){
     if(revealed) return;
-    const d = ctx.getImageData(0,0,canvas.width,canvas.height).data;
+    // sample only the center band where the reward text sits — clearing the
+    // edges/corners shouldn't be required once the reveal is readable
+    const rx = Math.floor(canvas.width * 0.18), rw = Math.floor(canvas.width * 0.64);
+    const ry = Math.floor(canvas.height * 0.28), rh = Math.floor(canvas.height * 0.44);
+    if (rw <= 0 || rh <= 0) return;
+    const d = ctx.getImageData(rx, ry, rw, rh).data;
     let clear=0, total=0;
     for(let i=3;i<d.length;i+=64){ total++; if(d[i]===0) clear++; }
-    if(clear/total > 0.5){
+    if(clear/total > 0.6){
       revealed = true;
       canvas.style.transition='opacity .35s ease';
       canvas.style.opacity='0';
       disableTimer = setTimeout(()=>{ canvas.style.pointerEvents='none'; },300);
       document.getElementById('claimRow').classList.toggle('show', currentWin);
       promptEl.textContent = currentWin ? 'Nice.' : 'Better luck tomorrow.';
-      if(currentWin && motionOK) burstConfetti();
+      if(currentWin) burstConfetti();
     }
   }
   canvas.addEventListener('pointerdown',e=>{drawing=true;last=null;canvas.setPointerCapture(e.pointerId);scratch(e);});
@@ -612,29 +713,34 @@
   function burstConfetti(){
     cCan.width = innerWidth; cCan.height = innerHeight;
     const colors = tier==='prem'
-      ? ['#C9A227','#EAD37E','#0B0E0C','#F3E9C6']
-      : ['#00C805','#7CE882','#0B0E0C','#BFF5C1'];
+      ? ['#C9A227','#EAD37E','#F4E7B0','#8F6E14']
+      : ['#F2C94C','#E0A93F','#B67F1E','#F7E3A8'];
     const parts = Array.from({length:90},()=>({
-      x:innerWidth/2 + (Math.random()-.5)*200,
-      y:innerHeight*0.38,
-      vx:(Math.random()-.5)*7,
-      vy:-(Math.random()*7+3),
+      x:innerWidth/2 + (Math.random()-.5)*260,
+      y:innerHeight*0.30,
+      vx:(Math.random()-.5)*2.2,
+      vy:-(Math.random()*2.5+0.8),
       w:5+Math.random()*5, h:8+Math.random()*6,
       c:colors[Math.floor(Math.random()*colors.length)],
-      rot:Math.random()*Math.PI, vr:(Math.random()-.5)*.3,
+      rot:Math.random()*Math.PI, vr:(Math.random()-.5)*.12,
+      sway:Math.random()*Math.PI*2,
     }));
     let frames = 0;
     (function tick(){
       cCtx.clearRect(0,0,cCan.width,cCan.height);
       for(const p of parts){
-        p.x+=p.vx; p.y+=p.vy; p.vy+=0.22; p.rot+=p.vr;
+        p.sway += 0.05;
+        p.x += p.vx + Math.sin(p.sway)*0.7;
+        p.y += p.vy;
+        p.vy = Math.min(p.vy + 0.055, 2.4); // gentle gravity, terminal velocity
+        p.rot += p.vr;
         cCtx.save();
         cCtx.translate(p.x,p.y); cCtx.rotate(p.rot);
         cCtx.fillStyle=p.c;
         cCtx.fillRect(-p.w/2,-p.h/2,p.w,p.h);
         cCtx.restore();
       }
-      if(++frames<140) requestAnimationFrame(tick);
+      if(++frames<380) requestAnimationFrame(tick);
       else cCtx.clearRect(0,0,cCan.width,cCan.height);
     })();
   }
