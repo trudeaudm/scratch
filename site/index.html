@@ -145,13 +145,18 @@
     border:2px dashed rgba(255,244,214,.55);
   }
   .stage.premium .card::after{border-color:rgba(201,162,39,.55)}
-  .card .mark{position:absolute;inset:0;display:flex;align-items:center;justify-content:center}
+  .card .mark{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:clamp(44px,9vw,64px);color:#5C3F12}
+  .stage.premium .card .mark{color:var(--gold)}
   .card .mark i{display:none}
-  .card .mark::after{
-    content:"?";font-weight:800;font-size:clamp(34px,7vw,48px);
-    color:#5C3F12;text-shadow:0 1px 0 rgba(255,236,190,.5);
+  .card .mark::before{
+    content:"";position:absolute;left:50%;top:50%;width:.22em;height:.28em;background:currentColor;
+    clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%);transform:translate(-50%,.20em);
   }
-  .stage.premium .card .mark::after{color:var(--gold);text-shadow:0 1px 0 rgba(0,0,0,.6)}
+  .card .mark::after{
+    content:"?";font-weight:800;font-size:1em;line-height:1;
+    text-shadow:0 1px 0 rgba(255,236,190,.5);clip-path:inset(0 0 24% 0);
+  }
+  .stage.premium .card .mark::after{text-shadow:0 1px 0 rgba(0,0,0,.6)}
   .card:nth-child(2){transform:translateY(-16px);box-shadow:0 18px 32px -12px rgba(0,0,0,.85)}
   .card:hover{transform:translateY(-24px) scale(1.03)}
   .card:nth-child(2):hover{transform:translateY(-30px) scale(1.03)}
@@ -647,6 +652,17 @@
     ctx.font = "800 56px 'Inter'";
     ctx.textAlign = 'center';
     ctx.fillText('?', r.width/2, r.height/2 + 8);
+    ctx.fillStyle = g;
+    ctx.fillRect(r.width/2 - 22, r.height/2 - 6, 44, 18);
+    ctx.fillStyle = prem ? '#C9A227' : '#5C3F12';
+    ctx.beginPath();
+    const dcx=r.width/2, dcy=r.height/2+4, ds=8;
+    ctx.moveTo(dcx,dcy-ds);
+    ctx.lineTo(dcx+ds*0.78,dcy);
+    ctx.lineTo(dcx,dcy+ds);
+    ctx.lineTo(dcx-ds*0.78,dcy);
+    ctx.closePath();
+    ctx.fill();
     ctx.fillStyle = prem ? 'rgba(201,162,39,.8)' : 'rgba(92,63,18,.9)';
     ctx.font = "700 11px 'Inter'";
     ctx.fillText('SCRATCH TO REVEAL', r.width/2, r.height - 20);
