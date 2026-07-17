@@ -18,6 +18,10 @@ import {IRandomness, IRandomnessCallback} from "../interfaces/IRandomness.sol";
 ///      prior epochs — they become unfulfillable by design and the game's rescue path
 ///      refunds them. Do not register a fresh chain while in-flight requests still need
 ///      reveals unless that orphaning (and subsequent rescue) is intentional.
+///
+///      Word derivation binds `(preimage, requestId, requester)` so an operator who
+///      knows upcoming preimages cannot snipe favorable sequence slots by scratching
+///      under its own address — the word depends on who scratched.
 contract SelfEntropyProvider is IRandomness, Ownable, ReentrancyGuard {
     /// @notice Sole consumer of fulfilled randomness (ScratchGame), set once.
     IRandomnessCallback public callback;
@@ -38,6 +42,7 @@ contract SelfEntropyProvider is IRandomness, Ownable, ReentrancyGuard {
     mapping(uint64 => uint256) public nextFulfillSeq;
 
     struct Request {
+        address requester;
         uint64 epoch;
         bool pending;
     }
@@ -62,6 +67,7 @@ contract SelfEntropyProvider is IRandomness, Ownable, ReentrancyGuard {
     error WrongEpoch();
     error OutOfOrder();
     error BadPreimage();
+    error Unimplemented();
 
     /// @param operator_ Initial reveal operator (may be rotated via `setOperator`).
     constructor(address operator_) Ownable(msg.sender) {
@@ -104,23 +110,32 @@ contract SelfEntropyProvider is IRandomness, Ownable, ReentrancyGuard {
     }
 
     /// @inheritdoc IRandomness
+    /// @dev Always reverts — unbound requests would let an operator snipe sequence slots.
+    ///      ScratchGame must use `requestRandomFor`.
+    function requestRandom() external pure returns (uint256) {
+        revert Unimplemented();
+    }
+
+    /// @inheritdoc IRandomness
     /// @dev Only the configured callback (game) may request — request and fulfill stay paired.
-    ///      Requires an epoch registered via `registerChain`.
-    function requestRandom() external returns (uint256 id) {
+    ///      Requires an epoch registered via `registerChain`. Stores `user` and mixes it into
+    ///      the reveal word so outcomes are requester-bound.
+    function requestRandomFor(address user) external returns (uint256 id) {
         if (address(callback) == address(0)) revert CallbackNotSet();
         if (msg.sender != address(callback)) revert NotCallback();
+        if (user == address(0)) revert ZeroAddress();
         if (currentEpoch == 0) revert NoChainRegistered();
 
         id = nextSeq++;
-        requests[id] = Request({epoch: currentEpoch, pending: true});
+        requests[id] = Request({requester: user, epoch: currentEpoch, pending: true});
 
-        emit RandomnessRequested(id, msg.sender);
+        emit RandomnessRequested(id, user);
     }
 
     /// @notice Reveal the next preimage in the committed chain and fulfill `requestId`.
     /// @dev Only the operator. Request must be pending, belong to `currentEpoch`, and be
     ///      the next in-sequence id for that epoch. Advances `epochCursor` to `preimage`.
-    ///      Word = `uint256(keccak256(abi.encode(preimage, requestId)))`.
+    ///      Word = `uint256(keccak256(abi.encode(preimage, requestId, requester)))`.
     /// @param requestId Pending request to fulfill.
     /// @param preimage Value such that `keccak256(abi.encodePacked(preimage)) == epochCursor`.
     function reveal(uint256 requestId, bytes32 preimage) external nonReentrant {
@@ -133,12 +148,14 @@ contract SelfEntropyProvider is IRandomness, Ownable, ReentrancyGuard {
         if (requestId != nextFulfillSeq[currentEpoch]) revert OutOfOrder();
         if (keccak256(abi.encodePacked(preimage)) != epochCursor[currentEpoch]) revert BadPreimage();
 
+        address requester = req.requester;
+
         // Effects before interaction (callback may move prizes via ScratchGame).
         req.pending = false;
         epochCursor[currentEpoch] = preimage;
         nextFulfillSeq[currentEpoch] = requestId + 1;
 
-        uint256 word = uint256(keccak256(abi.encode(preimage, requestId)));
+        uint256 word = uint256(keccak256(abi.encode(preimage, requestId, requester)));
         emit RandomnessFulfilled(requestId, word);
 
         callback.fulfill(requestId, word);

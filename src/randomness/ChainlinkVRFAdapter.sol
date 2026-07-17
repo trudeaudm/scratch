@@ -13,6 +13,8 @@ import {VRFV2PlusClient} from "./VRFV2PlusClient.sol";
 ///         gate — see GATES.md). Forwards entropy to a single IRandomnessCallback
 ///         (ScratchGame), set once. Never uses blockhash, prevrandao, or a trusted
 ///         signer fallback.
+/// @dev Fulfillment mixes VRF entropy with `(requestId, requester)` for consistency with
+///      SelfEntropyProvider's requester-bound word derivation.
 contract ChainlinkVRFAdapter is IRandomness, Ownable {
     /// @notice Confirmations requested from the coordinator (L2-safe default).
     uint16 public constant REQUEST_CONFIRMATIONS = 3;
@@ -37,6 +39,9 @@ contract ChainlinkVRFAdapter is IRandomness, Ownable {
 
     /// @notice Sole consumer of fulfilled randomness (ScratchGame), set once.
     IRandomnessCallback public callback;
+
+    /// @notice Scratcher bound at request time (zero if legacy `requestRandom`).
+    mapping(uint256 => address) public requesters;
 
     event CallbackSet(address indexed callback);
     event RandomnessRequested(uint256 indexed requestId, address indexed requester);
@@ -73,8 +78,32 @@ contract ChainlinkVRFAdapter is IRandomness, Ownable {
     }
 
     /// @inheritdoc IRandomness
-    /// @dev Only the configured callback (game) may request — request and fulfill stay paired.
+    /// @dev Legacy unbound path — stores requester as address(0). Prefer `requestRandomFor`.
     function requestRandom() external returns (uint256 id) {
+        return _request(address(0));
+    }
+
+    /// @inheritdoc IRandomness
+    /// @dev Only the configured callback (game) may request — request and fulfill stay paired.
+    function requestRandomFor(address user) external returns (uint256 id) {
+        if (user == address(0)) revert ZeroAddress();
+        return _request(user);
+    }
+
+    /// @notice VRF v2.5 coordinator entrypoint. Only the configured coordinator may call.
+    function rawFulfillRandomWords(uint256 requestId, uint256[] calldata randomWords) external {
+        if (msg.sender != address(coordinator)) {
+            revert OnlyCoordinatorCanFulfill(msg.sender, address(coordinator));
+        }
+        if (randomWords.length == 0) revert NoRandomWords();
+
+        address requester = requesters[requestId];
+        uint256 word = uint256(keccak256(abi.encode(randomWords[0], requestId, requester)));
+        emit RandomnessFulfilled(requestId, word);
+        callback.fulfill(requestId, word);
+    }
+
+    function _request(address user) internal returns (uint256 id) {
         if (address(callback) == address(0)) revert CallbackNotSet();
         if (msg.sender != address(callback)) revert NotCallback();
 
@@ -89,18 +118,7 @@ contract ChainlinkVRFAdapter is IRandomness, Ownable {
             })
         );
 
-        emit RandomnessRequested(id, msg.sender);
-    }
-
-    /// @notice VRF v2.5 coordinator entrypoint. Only the configured coordinator may call.
-    function rawFulfillRandomWords(uint256 requestId, uint256[] calldata randomWords) external {
-        if (msg.sender != address(coordinator)) {
-            revert OnlyCoordinatorCanFulfill(msg.sender, address(coordinator));
-        }
-        if (randomWords.length == 0) revert NoRandomWords();
-
-        uint256 word = randomWords[0];
-        emit RandomnessFulfilled(requestId, word);
-        callback.fulfill(requestId, word);
+        requesters[id] = user;
+        emit RandomnessRequested(id, user);
     }
 }

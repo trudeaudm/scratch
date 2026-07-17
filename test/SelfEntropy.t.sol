@@ -147,8 +147,54 @@ contract SelfEntropyProviderTest is Test {
         (,,, ScratchGame.Status statusAfter) = game.requests(id);
         assertEq(uint8(statusAfter), uint8(ScratchGame.Status.Settled));
         assertEq(entropy.epochCursor(1), preimage);
-        (, bool pending) = entropy.requests(id);
+        (address requester,, bool pending) = entropy.requests(id);
         assertFalse(pending);
+        assertEq(requester, alice);
+    }
+
+    function test_samePreimageAndSeq_differentRequesters_differentWords() public {
+        MockEntropyCallback cb = new MockEntropyCallback();
+        SelfEntropyProvider e2 = new SelfEntropyProvider(operator);
+        e2.setCallback(address(cb));
+        e2.registerChain(chain[CHAIN_LEN]);
+
+        bytes32 preimage = chain[CHAIN_LEN - 1];
+        address userA = makeAddr("userA");
+        address userB = makeAddr("userB");
+
+        vm.prank(address(cb));
+        uint256 idA = e2.requestRandomFor(userA);
+        // Fulfill A so we can reuse the same preimage against a fresh provider for B.
+        vm.prank(operator);
+        e2.reveal(idA, preimage);
+        uint256 wordA = cb.lastRandomWord();
+
+        SelfEntropyProvider e3 = new SelfEntropyProvider(operator);
+        e3.setCallback(address(cb));
+        e3.registerChain(chain[CHAIN_LEN]);
+        vm.prank(address(cb));
+        uint256 idB = e3.requestRandomFor(userB);
+        assertEq(idB, idA); // same seq on a fresh provider
+        vm.prank(operator);
+        e3.reveal(idB, preimage);
+        uint256 wordB = cb.lastRandomWord();
+
+        assertEq(wordA, uint256(keccak256(abi.encode(preimage, idA, userA))));
+        assertEq(wordB, uint256(keccak256(abi.encode(preimage, idB, userB))));
+        assertTrue(wordA != wordB);
+    }
+
+    function test_gamePassesActualScratcher() public {
+        vm.prank(alice);
+        uint256 id = game.scratch(PREMIUM);
+        (address requester,,) = entropy.requests(id);
+        assertEq(requester, alice);
+        assertTrue(requester != address(game));
+    }
+
+    function test_requestRandom_revertsUnimplemented() public {
+        vm.expectRevert(SelfEntropyProvider.Unimplemented.selector);
+        entropy.requestRandom();
     }
 
     function test_twoSequentialReveals_walkTheChain() public {
@@ -259,7 +305,7 @@ contract SelfEntropyProviderTest is Test {
     function test_onlyCallback_canRequest() public {
         vm.prank(stranger);
         vm.expectRevert(SelfEntropyProvider.NotCallback.selector);
-        entropy.requestRandom();
+        entropy.requestRandomFor(alice);
     }
 
     function test_setOperator_emitsAndUpdates() public {
@@ -278,6 +324,6 @@ contract SelfEntropyProviderTest is Test {
 
         vm.prank(address(cb));
         vm.expectRevert(SelfEntropyProvider.NoChainRegistered.selector);
-        bare.requestRandom();
+        bare.requestRandomFor(alice);
     }
 }

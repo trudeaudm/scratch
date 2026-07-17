@@ -83,7 +83,11 @@ contract Deploy2Test is Test {
         vm.setEnv("STANDARD_PRIZE_TABLE", vm.toString(abi.encode(standard)));
     }
 
-    function test_deploy2_run_and_assertWiring() public {
+    function test_deploy2_chainlink_and_selfEntropy_modes() public {
+        // Both modes in one test — vm.setEnv is process-global and races across
+        // parallel sibling tests in the same contract.
+
+        vm.setEnv("RANDOMNESS_PROVIDER", "chainlink");
         Deploy2 script = new Deploy2();
         Deploy2.Deployed memory d = script.run();
 
@@ -114,25 +118,23 @@ contract Deploy2Test is Test {
         assertEq(d.game.owner(), treasury);
         assertEq(d.prizeVault.owner(), treasury);
         assertEq(d.standardSource.owner(), treasury);
-    }
 
-    function test_deploy2_selfEntropy_mode() public {
+        // Fresh deploy under self mode (new script instance; env flipped).
         address operator = makeAddr("operator");
         bytes32 commitment = keccak256("deploy2-self-commitment");
-
         vm.setEnv("RANDOMNESS_PROVIDER", "self");
         vm.setEnv("OPERATOR", vm.toString(operator));
         vm.setEnv("ENTROPY_COMMITMENT", vm.toString(commitment));
 
-        Deploy2 script = new Deploy2();
-        Deploy2.Deployed memory d = script.run();
+        Deploy2 scriptSelf = new Deploy2();
+        Deploy2.Deployed memory s = scriptSelf.run();
 
-        assertEq(address(d.randomness), address(d.selfEntropy));
-        assertEq(address(d.adapter), address(0));
-        assertEq(address(d.selfEntropy.callback()), address(d.game));
-        assertEq(d.selfEntropy.operator(), operator);
-        assertEq(d.selfEntropy.currentEpoch(), 1);
-        assertEq(d.selfEntropy.epochCursor(1), commitment);
-        assertEq(d.stakingVault.owner(), address(0));
+        assertEq(address(s.randomness), address(s.selfEntropy));
+        assertEq(address(s.adapter), address(0));
+        assertEq(address(s.selfEntropy.callback()), address(s.game));
+        assertEq(s.selfEntropy.operator(), operator);
+        assertEq(s.selfEntropy.currentEpoch(), 1);
+        assertEq(s.selfEntropy.epochCursor(1), commitment);
+        assertEq(s.stakingVault.owner(), address(0));
     }
 }

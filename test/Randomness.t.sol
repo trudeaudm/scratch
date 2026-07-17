@@ -122,24 +122,39 @@ contract RandomnessTest is Test {
         vm.prank(address(callback));
         uint256 id1 = adapter.requestRandom();
         vm.prank(address(callback));
-        uint256 id2 = adapter.requestRandom();
+        uint256 id2 = adapter.requestRandomFor(makeAddr("u2"));
         vm.prank(address(callback));
-        uint256 id3 = adapter.requestRandom();
+        uint256 id3 = adapter.requestRandomFor(makeAddr("u3"));
         assertEq(id1, 1);
         assertEq(id2, 2);
         assertEq(id3, 3);
     }
 
     function test_adapter_fulfill_routesToCallback() public {
+        address user = makeAddr("scratcher");
         vm.prank(address(callback));
-        uint256 id = adapter.requestRandom();
-        uint256 word = 999_888_777;
+        uint256 id = adapter.requestRandomFor(user);
+        uint256 vrfWord = 999_888_777;
+        uint256 expected = uint256(keccak256(abi.encode(vrfWord, id, user)));
 
-        coordinator.pushFulfill(address(adapter), id, word);
+        coordinator.pushFulfill(address(adapter), id, vrfWord);
 
         assertEq(callback.lastRequestId(), id);
-        assertEq(callback.lastRandomWord(), word);
+        assertEq(callback.lastRandomWord(), expected);
         assertEq(callback.fulfillCount(), 1);
+        assertEq(adapter.requesters(id), user);
+    }
+
+    function test_adapter_fulfill_requestRandom_bindsZeroRequester() public {
+        vm.prank(address(callback));
+        uint256 id = adapter.requestRandom();
+        uint256 vrfWord = 42;
+        uint256 expected = uint256(keccak256(abi.encode(vrfWord, id, address(0))));
+
+        coordinator.pushFulfill(address(adapter), id, vrfWord);
+
+        assertEq(callback.lastRandomWord(), expected);
+        assertEq(adapter.requesters(id), address(0));
     }
 
     function test_adapter_fulfill_reverts_notCoordinator() public {
@@ -159,6 +174,12 @@ contract RandomnessTest is Test {
         vm.prank(stranger);
         vm.expectRevert(ChainlinkVRFAdapter.NotCallback.selector);
         adapter.requestRandom();
+    }
+
+    function test_adapter_requestFor_reverts_notCallback() public {
+        vm.prank(stranger);
+        vm.expectRevert(ChainlinkVRFAdapter.NotCallback.selector);
+        adapter.requestRandomFor(stranger);
     }
 
     function test_adapter_callback_setOnce() public {

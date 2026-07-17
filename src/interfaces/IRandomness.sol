@@ -3,12 +3,23 @@ pragma solidity 0.8.24;
 
 /// @title IRandomness
 /// @notice Provider-agnostic randomness request surface. Implementations (e.g.
-///         ChainlinkVRFAdapter) must never fall back to blockhash, prevrandao, or
-///         a trusted signer.
+///         ChainlinkVRFAdapter, SelfEntropyProvider) must never fall back to
+///         blockhash, prevrandao, or a trusted signer.
 interface IRandomness {
-    /// @notice Request a random word. Caller is the consumer that will receive fulfill.
+    /// @notice Request a random word without binding a user.
+    /// @dev Prefer `requestRandomFor` from ScratchGame. Some providers (e.g.
+    ///      SelfEntropyProvider) revert `Unimplemented` so the unbound path cannot
+    ///      be used by mistake.
     /// @return id Request id used to correlate the later callback.
     function requestRandom() external returns (uint256 id);
+
+    /// @notice Request a random word bound to `user` (the scratcher).
+    /// @dev ScratchGame must pass `msg.sender` here. Binding the derived word to
+    ///      the requester prevents an operator who knows upcoming preimages from
+    ///      sniping favorable sequence slots with its own scratches.
+    /// @param user Address whose scratch initiated this request.
+    /// @return id Request id used to correlate the later callback.
+    function requestRandomFor(address user) external returns (uint256 id);
 }
 
 /// @title IRandomnessCallback

@@ -220,7 +220,7 @@ contract ScratchGame is IRandomnessCallback, Ownable2Step, ReentrancyGuard {
 
         source.spendTickets(msg.sender, TICKET_COST);
 
-        requestId = randomness.requestRandom();
+        requestId = randomness.requestRandomFor(msg.sender);
         requests[requestId] = Request({
             user: msg.sender,
             tier: tier,

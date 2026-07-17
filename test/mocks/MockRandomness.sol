@@ -4,7 +4,7 @@ pragma solidity 0.8.24;
 import {IRandomness, IRandomnessCallback} from "../../src/interfaces/IRandomness.sol";
 
 /// @title MockRandomness
-/// @notice Test/fork stand-in for ChainlinkVRFAdapter. Issues incrementing request ids
+/// @notice Test/fork stand-in for an IRandomness adapter. Issues incrementing request ids
 ///         and allows a designated harness to fulfill with a chosen random word.
 contract MockRandomness is IRandomness {
     /// @notice Sole consumer of fulfilled randomness, set once.
@@ -18,6 +18,9 @@ contract MockRandomness is IRandomness {
 
     /// @notice Whether a request id is still awaiting fulfillment.
     mapping(uint256 => bool) public pending;
+
+    /// @notice Scratcher bound via `requestRandomFor` (zero for legacy `requestRandom`).
+    mapping(uint256 => address) public requesters;
 
     event CallbackSet(address indexed callback);
     event FulfillerSet(address indexed fulfiller);
@@ -50,14 +53,18 @@ contract MockRandomness is IRandomness {
 
     /// @inheritdoc IRandomness
     function requestRandom() external returns (uint256 id) {
-        if (address(callback) == address(0)) revert CallbackNotSet();
-        id = nextRequestId++;
-        pending[id] = true;
-        emit RandomnessRequested(id, msg.sender);
+        return _request(address(0));
+    }
+
+    /// @inheritdoc IRandomness
+    function requestRandomFor(address user) external returns (uint256 id) {
+        if (user == address(0)) revert ZeroAddress();
+        return _request(user);
     }
 
     /// @notice Deliver `randomWord` for `requestId` to the configured callback.
-    /// @dev Only the designated test harness (`fulfiller`) may call.
+    /// @dev Only the designated test harness (`fulfiller`) may call. Passes `randomWord`
+    ///      through unchanged (tests choose the settlement roll directly).
     function fulfill(uint256 requestId, uint256 randomWord) external {
         if (fulfiller == address(0)) revert FulfillerNotSet();
         if (msg.sender != fulfiller) revert NotFulfiller();
@@ -66,5 +73,13 @@ contract MockRandomness is IRandomness {
         pending[requestId] = false;
         emit RandomnessFulfilled(requestId, randomWord);
         callback.fulfill(requestId, randomWord);
+    }
+
+    function _request(address user) internal returns (uint256 id) {
+        if (address(callback) == address(0)) revert CallbackNotSet();
+        id = nextRequestId++;
+        pending[id] = true;
+        requesters[id] = user;
+        emit RandomnessRequested(id, user == address(0) ? msg.sender : user);
     }
 }
