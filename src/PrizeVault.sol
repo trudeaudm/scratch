@@ -96,11 +96,13 @@ contract PrizeVault is IPrizeVault, Ownable2Step, ReentrancyGuard {
     }
 
     /// @notice Pull `amount` of `asset` into the vault. Callable by anyone.
+    /// @dev CEI: track the asset before `transferFrom`; a failing pull reverts the
+    ///      whole transaction, and `nonReentrant` blocks reentry.
     function fund(address asset, uint256 amount) external nonReentrant {
         if (asset == address(0)) revert ZeroAddress();
         if (amount == 0) revert ZeroAmount();
-        IERC20(asset).safeTransferFrom(msg.sender, address(this), amount);
         _track(asset);
+        IERC20(asset).safeTransferFrom(msg.sender, address(this), amount);
         emit Funded(asset, amount, msg.sender);
     }
 

@@ -1,0 +1,4 @@
+{
+  "filter_paths": "lib|test|script|scratch-deploy|ops",
+  "exclude_dependencies": true
+}

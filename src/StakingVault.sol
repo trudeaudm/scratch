@@ -94,6 +94,8 @@ contract StakingVault is ITicketSource, Ownable, ReentrancyGuard {
     }
 
     /// @notice Deposit SCRATCH. Stake above `minStake` begins accruing tickets.
+    /// @dev CEI: accounting is updated before `transferFrom`; a failing pull reverts the
+    ///      whole transaction (including stake), and `nonReentrant` blocks reentry.
     function deposit(uint256 amount) external nonReentrant {
         if (amount == 0) revert ZeroAmount();
         _update();
@@ -104,8 +106,6 @@ contract StakingVault is ITicketSource, Ownable, ReentrancyGuard {
         if (wasEligible) {
             _settle(msg.sender);
         }
-
-        scratch.safeTransferFrom(msg.sender, address(this), amount);
 
         uint256 oldStake = user.staked;
         uint256 newStake = oldStake + amount;
@@ -119,6 +119,8 @@ contract StakingVault is ITicketSource, Ownable, ReentrancyGuard {
         }
 
         user.debt = nowEligible ? (newStake * accTicketsPerShare) / 1e18 : 0;
+
+        scratch.safeTransferFrom(msg.sender, address(this), amount);
 
         emit Deposited(msg.sender, amount);
     }
