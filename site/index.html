@@ -352,7 +352,7 @@
     <button class="tier-tab premium" id="tabPrem" role="tab" aria-selected="false"><span class="star">★</span> Staked cards <span class="count" id="cntPrem">2</span></button>
   </div>
   <div class="demo-note"><b>Playable demo below</b> — tickets are simulated. Real tickets start printing when the game goes live, later today.</div>
-  <div class="tier-note" id="tierNote">Earned by holding <b>1,500,000+ $SCRATCH (≈$35)</b> in your wallet · pays $SCRATCH &amp; USDG</div>
+  <div class="tier-note" id="tierNote">Earned by holding <b>1,000,000 $SCRATCH <span class="usd-live" data-scratch-amount="1000000"></span></b> in your wallet · pays $SCRATCH &amp; USDG</div>
 
   <div class="stage" id="stage">
     <div class="stage-prompt" id="prompt">Choose your free scratch</div>
@@ -446,7 +446,7 @@
     <div class="path">
       <div class="p-tag">Hold in wallet</div>
       <h3>Holder cards <span class="status">daily drops from game launch</span></h3>
-      <div class="rate">Just hold <b>1,500,000+ $SCRATCH (≈$35)</b> · your share of <b>35%</b> of emissions</div>
+      <div class="rate">Just hold <b>1,000,000 $SCRATCH <span class="usd-live" data-scratch-amount="1000000"></span></b> · your share of <b>35%</b> of emissions</div>
       <div class="prize-list">
         <div class="prize-row"><span class="p">+250 $SCRATCH</span><span class="o">1 in 6</span></div>
         <div class="prize-row"><span class="p">+500 $SCRATCH</span><span class="o">1 in 14</span></div>
@@ -524,13 +524,41 @@
 <canvas id="confetti"></canvas>
 
 <script>
+  const DEXSCREENER_PAIR_URL = 'https://api.dexscreener.com/latest/dex/pairs/robinhood/0x3f66e1430c12a7a64839f43050165db6d1bf1ae5bd7df11e47a37a8e73bc00ef';
   const motionOK = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // ---------- live USD for token amounts (absence beats wrongness) ----------
+  let scratchPriceUsd = null;
+  function formatApproxUsd(usd){
+    if (!(usd > 0) || !Number.isFinite(usd)) return '';
+    const n = Number(usd.toPrecision(2));
+    const display = n >= 100
+      ? Math.round(n).toLocaleString('en-US')
+      : String(n);
+    return `(≈$${display})`;
+  }
+  function fillUsdLive(){
+    document.querySelectorAll('.usd-live').forEach(el=>{
+      if (scratchPriceUsd == null){ el.textContent = ''; return; }
+      const amount = Number(el.dataset.scratchAmount);
+      el.textContent = formatApproxUsd(amount * scratchPriceUsd);
+    });
+  }
+  fetch(DEXSCREENER_PAIR_URL)
+    .then(r => { if (!r.ok) throw new Error('bad status'); return r.json(); })
+    .then(data => {
+      const price = Number(data?.pairs?.[0]?.priceUsd);
+      if (!(price > 0)) throw new Error('no price');
+      scratchPriceUsd = price;
+      fillUsdLive();
+    })
+    .catch(()=>{ scratchPriceUsd = null; fillUsdLive(); });
 
   // ---------- tier state ----------
   const tiers = {
     std: {
       tickets: 3,
-      note: 'Earned by holding <b>1,500,000+ $SCRATCH (≈$35)</b> in your wallet · pays $SCRATCH &amp; USDG',
+      note: 'Earned by holding <b>1,000,000 $SCRATCH <span class="usd-live" data-scratch-amount="1000000"></span></b> in your wallet · pays $SCRATCH &amp; USDG',
       prizes: [
         ['+250 $SCRATCH','Sent to your wallet automatically','win'],
         ['+500 $SCRATCH','Sent to your wallet automatically','win'],
@@ -573,6 +601,7 @@
     document.getElementById('scratchCardEl').classList.toggle('premium', tier==='prem');
     document.getElementById('premBadge').style.display = tier==='prem' ? 'inline' : 'none';
     document.getElementById('tierNote').innerHTML = t.note;
+    fillUsdLive();
     document.getElementById('cntStd').textContent = tiers.std.tickets;
     document.getElementById('cntPrem').textContent = tiers.prem.tickets;
     // reset game view
