@@ -2,7 +2,7 @@ import { type Address, zeroAddress } from "viem";
 
 /**
  * Single source of truth for dashboard addresses and priced pairs.
- * Fill after Deploy2 (+ vesting deploy). Zero addresses disable that row until set.
+ * Fill after Deploy2 (+ script/DeployOpsVesting.s.sol). Zero addresses disable that row until set.
  *
  * Config tokens are curated (verified symbols, pricing, write-panel dropdowns).
  * On-chain holdings also auto-discover via Blockscout — discovered-only tokens
@@ -115,6 +115,7 @@ export const contracts = {
     label: "ScratchGame",
     address: Z,
   } satisfies ContractEntry,
+  /** Ops VestingWallet — fill after `forge script script/DeployOpsVesting.s.sol`. */
   vestingWallet: {
     key: "vestingWallet",
     label: "Ops VestingWallet",
