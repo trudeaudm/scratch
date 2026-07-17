@@ -8,24 +8,34 @@ import {PrizeVault} from "../src/PrizeVault.sol";
 import {StakingVault} from "../src/StakingVault.sol";
 import {StandardTicketSource} from "../src/StandardTicketSource.sol";
 import {ChainlinkVRFAdapter} from "../src/randomness/ChainlinkVRFAdapter.sol";
+import {SelfEntropyProvider} from "../src/randomness/SelfEntropyProvider.sol";
 import {ScratchGame} from "../src/ScratchGame.sol";
+import {IRandomness} from "../src/interfaces/IRandomness.sol";
 import {ITicketSource} from "../src/interfaces/ITicketSource.sol";
+
+/// @dev Minimal view surface shared by both adapters for post-deploy checks.
+interface IHasCallback {
+    function callback() external view returns (address);
+}
 
 /// @title Deploy2
 /// @notice Env-driven Phase-2 deploy (buildspec §5 + STANDARD tier). Same bytecode path for
 ///         §9 mainnet rehearsal and production — every param (including `RESCUE_DELAY` and
 ///         `PROMO_DAILY_CAP`) comes from env; no rehearsal-only branches.
 ///
-/// Deploy order: PrizeVault → StakingVault → StandardTicketSource → ChainlinkVRFAdapter →
-/// ScratchGame → wire callback/setGame/ticket sources/prize tables → transfer Ownable2Step
-/// ownership of ScratchGame, PrizeVault, StandardTicketSource to TREASURY (treasury must
-/// `acceptOwnership` for each) → renounce StakingVault ownership after `setGame`.
+/// Deploy order: PrizeVault → StakingVault → StandardTicketSource → randomness provider
+/// (`RANDOMNESS_PROVIDER` = `chainlink` | `self`) → ScratchGame → wire callback/setGame/
+/// ticket sources/prize tables → transfer Ownable2Step ownership of ScratchGame, PrizeVault,
+/// StandardTicketSource to TREASURY (treasury must `acceptOwnership` for each) → renounce
+/// StakingVault ownership after `setGame`.
 contract Deploy2 is Script {
     struct Deployed {
         PrizeVault prizeVault;
         StakingVault stakingVault;
         StandardTicketSource standardSource;
+        IRandomness randomness;
         ChainlinkVRFAdapter adapter;
+        SelfEntropyProvider selfEntropy;
         ScratchGame game;
         address scratch;
         address treasury;
@@ -33,6 +43,7 @@ contract Deploy2 is Script {
 
     error WiringFailed(string what);
     error StandardTableNotScratchOnly(address asset);
+    error UnknownRandomnessProvider(string provider);
 
     /// @notice Full deploy + wiring + ownership handoff + post-deploy assertions.
     function run() external returns (Deployed memory d) {
@@ -43,10 +54,7 @@ contract Deploy2 is Script {
         uint256 minStake = vm.envUint("MIN_STAKE");
         uint64 rescueDelay = uint64(vm.envUint("RESCUE_DELAY"));
         uint256 promoDailyCap = vm.envUint("PROMO_DAILY_CAP");
-        address vrfCoordinator = vm.envAddress("VRF_COORDINATOR");
-        bytes32 vrfKeyHash = vm.envBytes32("VRF_KEYHASH");
-        uint256 vrfSubId = vm.envUint("VRF_SUB_ID");
-        bool vrfNativePayment = vm.envBool("VRF_NATIVE_PAYMENT");
+        string memory providerMode = vm.envString("RANDOMNESS_PROVIDER");
 
         ScratchGame.PrizeRow[] memory premiumTable =
             abi.decode(vm.envBytes("PREMIUM_PRIZE_TABLE"), (ScratchGame.PrizeRow[]));
@@ -58,10 +66,32 @@ contract Deploy2 is Script {
         d.prizeVault = new PrizeVault(IERC20(d.scratch));
         d.stakingVault = new StakingVault(IERC20(d.scratch), emissionRate, minStake);
         d.standardSource = new StandardTicketSource(promoDailyCap);
-        d.adapter = new ChainlinkVRFAdapter(vrfCoordinator, vrfKeyHash, vrfSubId, vrfNativePayment);
-        d.game = new ScratchGame(d.prizeVault, d.adapter, rescueDelay);
 
-        d.adapter.setCallback(address(d.game));
+        if (_eq(providerMode, "chainlink")) {
+            address vrfCoordinator = vm.envAddress("VRF_COORDINATOR");
+            bytes32 vrfKeyHash = vm.envBytes32("VRF_KEYHASH");
+            uint256 vrfSubId = vm.envUint("VRF_SUB_ID");
+            bool vrfNativePayment = vm.envBool("VRF_NATIVE_PAYMENT");
+            d.adapter = new ChainlinkVRFAdapter(vrfCoordinator, vrfKeyHash, vrfSubId, vrfNativePayment);
+            d.randomness = d.adapter;
+        } else if (_eq(providerMode, "self")) {
+            address operator = vm.envAddress("OPERATOR");
+            bytes32 commitment = vm.envBytes32("ENTROPY_COMMITMENT");
+            d.selfEntropy = new SelfEntropyProvider(operator);
+            d.selfEntropy.registerChain(commitment);
+            d.randomness = d.selfEntropy;
+        } else {
+            revert UnknownRandomnessProvider(providerMode);
+        }
+
+        d.game = new ScratchGame(d.prizeVault, d.randomness, rescueDelay);
+
+        if (address(d.adapter) != address(0)) {
+            d.adapter.setCallback(address(d.game));
+        } else {
+            d.selfEntropy.setCallback(address(d.game));
+        }
+
         d.stakingVault.setGame(address(d.game));
         d.standardSource.setGame(address(d.game));
         d.prizeVault.setGame(address(d.game));
@@ -86,7 +116,14 @@ contract Deploy2 is Script {
         console2.log("PrizeVault:           ", address(d.prizeVault));
         console2.log("StakingVault:         ", address(d.stakingVault));
         console2.log("StandardTicketSource: ", address(d.standardSource));
-        console2.log("ChainlinkVRFAdapter:  ", address(d.adapter));
+        console2.log("Randomness provider:  ", address(d.randomness));
+        if (address(d.adapter) != address(0)) {
+            console2.log("  mode: chainlink (ChainlinkVRFAdapter)");
+        } else {
+            console2.log("  mode: self (SelfEntropyProvider)");
+            console2.log("  operator:           ", d.selfEntropy.operator());
+            console2.log("  currentEpoch:       ", d.selfEntropy.currentEpoch());
+        }
         console2.log("ScratchGame:          ", address(d.game));
         console2.log("");
         console2.log("TREASURY acceptOwnership checklist (Ownable2Step pendingOwner):");
@@ -101,7 +138,9 @@ contract Deploy2 is Script {
         if (d.stakingVault.game() != address(d.game)) revert WiringFailed("stakingVault.game");
         if (d.standardSource.game() != address(d.game)) revert WiringFailed("standardSource.game");
         if (d.prizeVault.game() != address(d.game)) revert WiringFailed("prizeVault.game");
-        if (address(d.adapter.callback()) != address(d.game)) revert WiringFailed("adapter.callback");
+        if (IHasCallback(address(d.randomness)).callback() != address(d.game)) {
+            revert WiringFailed("randomness.callback");
+        }
 
         if (address(d.game.ticketSource(d.game.PREMIUM())) != address(d.stakingVault)) {
             revert WiringFailed("ticketSource.PREMIUM");
@@ -114,6 +153,14 @@ contract Deploy2 is Script {
         if (d.game.tableLength(d.game.STANDARD()) == 0) revert WiringFailed("standard table empty");
 
         _assertStandardScratchOnly(d);
+
+        if (address(d.selfEntropy) != address(0)) {
+            if (d.selfEntropy.currentEpoch() == 0) revert WiringFailed("selfEntropy.epoch");
+            if (d.selfEntropy.operator() == address(0)) revert WiringFailed("selfEntropy.operator");
+            if (d.selfEntropy.epochCursor(d.selfEntropy.currentEpoch()) == bytes32(0)) {
+                revert WiringFailed("selfEntropy.commitment");
+            }
+        }
 
         if (d.game.pendingOwner() != d.treasury) revert WiringFailed("game.pendingOwner");
         if (d.prizeVault.pendingOwner() != d.treasury) revert WiringFailed("prizeVault.pendingOwner");
@@ -134,5 +181,9 @@ contract Deploy2 is Script {
                 revert StandardTableNotScratchOnly(row.asset);
             }
         }
+    }
+
+    function _eq(string memory a, string memory b) internal pure returns (bool) {
+        return keccak256(bytes(a)) == keccak256(bytes(b));
     }
 }

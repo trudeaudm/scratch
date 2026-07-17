@@ -1,0 +1,17 @@
+{
+  "name": "entropy-operator",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "SelfEntropyProvider chain generator + reveal operator",
+  "scripts": {
+    "generate": "node src/generate-chain.js",
+    "watch": "node src/watch-and-reveal.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "ethers": "^6.13.4"
+  }
+}

@@ -10,3 +10,7 @@ lib/
 .env
 .env.*
 !.env.example
+
+# SelfEntropy operator state (contains chain secret)
+ops/entropy-operator/entropy-state.json
+ops/entropy-operator/node_modules/

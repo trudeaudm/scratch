@@ -47,6 +47,7 @@ contract Deploy2Test is Test {
         );
         vm.setEnv("VRF_SUB_ID", vm.toString(uint256(1)));
         vm.setEnv("VRF_NATIVE_PAYMENT", "true");
+        vm.setEnv("RANDOMNESS_PROVIDER", "chainlink");
 
         // PREMIUM: 10% 100 SCRATCH fixed, 90% no-win.
         ScratchGame.PrizeRow[] memory premium = new ScratchGame.PrizeRow[](2);
@@ -90,6 +91,7 @@ contract Deploy2Test is Test {
         assertEq(d.stakingVault.game(), address(d.game));
         assertEq(d.standardSource.game(), address(d.game));
         assertEq(d.prizeVault.game(), address(d.game));
+        assertEq(address(d.randomness), address(d.adapter));
         assertEq(address(d.adapter.callback()), address(d.game));
         assertEq(address(d.game.ticketSource(d.game.PREMIUM())), address(d.stakingVault));
         assertEq(address(d.game.ticketSource(d.game.STANDARD())), address(d.standardSource));
@@ -112,5 +114,25 @@ contract Deploy2Test is Test {
         assertEq(d.game.owner(), treasury);
         assertEq(d.prizeVault.owner(), treasury);
         assertEq(d.standardSource.owner(), treasury);
+    }
+
+    function test_deploy2_selfEntropy_mode() public {
+        address operator = makeAddr("operator");
+        bytes32 commitment = keccak256("deploy2-self-commitment");
+
+        vm.setEnv("RANDOMNESS_PROVIDER", "self");
+        vm.setEnv("OPERATOR", vm.toString(operator));
+        vm.setEnv("ENTROPY_COMMITMENT", vm.toString(commitment));
+
+        Deploy2 script = new Deploy2();
+        Deploy2.Deployed memory d = script.run();
+
+        assertEq(address(d.randomness), address(d.selfEntropy));
+        assertEq(address(d.adapter), address(0));
+        assertEq(address(d.selfEntropy.callback()), address(d.game));
+        assertEq(d.selfEntropy.operator(), operator);
+        assertEq(d.selfEntropy.currentEpoch(), 1);
+        assertEq(d.selfEntropy.epochCursor(1), commitment);
+        assertEq(d.stakingVault.owner(), address(0));
     }
 }
