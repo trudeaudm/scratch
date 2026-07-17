@@ -95,7 +95,21 @@ export type GameVitals = {
   secondsToEta: number;
   secondsToExpiry: number;
   rescueDelay: number;
+  /** All Pending (status=1) requests in the lookback window. */
+  pendingCount: number;
+  /** Pending requests older than rescueDelay. */
   stalePendingCount: number;
+};
+
+export type PrizeTableSnapshot = {
+  tier: 0 | 1;
+  rows: import("@/utils/prizeTable").PrizeRow[];
+};
+
+export type VaultAssetMeta = {
+  asset: Address;
+  balance: bigint;
+  fallbackRate: bigint;
 };
 
 export type TreasurySnapshot = {
@@ -107,6 +121,8 @@ export type TreasurySnapshot = {
   tickets: TicketSourceVitals | null;
   vesting: VestingVitals | null;
   game: GameVitals | null;
+  prizeTables: PrizeTableSnapshot[] | null;
+  vaultAssets: VaultAssetMeta[];
   error: string | null;
 };
 
@@ -383,6 +399,7 @@ async function loadGame(pc: ReturnType<typeof client>): Promise<GameVitals | nul
 
   const rescueDelayN = Number(rescueDelay);
   let stalePendingCount = 0;
+  let pendingCount = 0;
 
   try {
     const latest = await pc.getBlockNumber();
@@ -414,12 +431,13 @@ async function loadGame(pc: ReturnType<typeof client>): Promise<GameVitals | nul
       })) as readonly [Address, number, number | bigint, number];
       const [, , requestedAt, status] = req;
       // Status: 0 None, 1 Pending, 2 Settled, 3 Rescued
-      if (status === 1 && Number(requestedAt) < cutoff) {
-        stalePendingCount += 1;
+      if (status === 1) {
+        pendingCount += 1;
+        if (Number(requestedAt) < cutoff) stalePendingCount += 1;
       }
     }
   } catch {
-    // Log scan can fail on RPC limits; leave count at 0 and surface via vitals still.
+    // Log scan can fail on RPC limits; leave counts at 0.
   }
 
   return {
@@ -430,8 +448,97 @@ async function loadGame(pc: ReturnType<typeof client>): Promise<GameVitals | nul
     secondsToEta,
     secondsToExpiry,
     rescueDelay: rescueDelayN,
+    pendingCount,
     stalePendingCount,
   };
+}
+
+async function loadPrizeTables(
+  pc: ReturnType<typeof client>,
+): Promise<PrizeTableSnapshot[] | null> {
+  const addr = contracts.scratchGame.address;
+  if (!isConfigured(addr)) return null;
+
+  const out: PrizeTableSnapshot[] = [];
+  for (const tier of [0, 1] as const) {
+    const len = Number(
+      (await pc.readContract({
+        address: addr,
+        abi: scratchGameAbiTyped,
+        functionName: "tableLength",
+        args: [tier],
+      })) as bigint,
+    );
+    const rows = [];
+    for (let i = 0; i < len; i++) {
+      const r = (await pc.readContract({
+        address: addr,
+        abi: scratchGameAbiTyped,
+        functionName: "getPrizeRow",
+        args: [tier, BigInt(i)],
+      })) as {
+        asset: Address;
+        amountOrBps: bigint | number;
+        isBpsOfPool: boolean;
+        cumOdds: number;
+      };
+      rows.push({
+        asset: r.asset,
+        amountOrBps: BigInt(r.amountOrBps),
+        isBpsOfPool: r.isBpsOfPool,
+        cumOdds: Number(r.cumOdds),
+      });
+    }
+    out.push({ tier, rows });
+  }
+  return out;
+}
+
+async function loadVaultAssets(pc: ReturnType<typeof client>): Promise<VaultAssetMeta[]> {
+  const vault = contracts.prizeVault.address;
+  if (!isConfigured(vault)) return [];
+
+  const metas: VaultAssetMeta[] = [];
+  const seen = new Set<string>();
+
+  const inventory = (await pc.readContract({
+    address: vault,
+    abi: prizeVaultAbiTyped,
+    functionName: "inventory",
+  })) as [Address[], bigint[]];
+
+  for (let i = 0; i < inventory[0].length; i++) {
+    const asset = inventory[0][i];
+    seen.add(asset.toLowerCase());
+    const fallbackRate = (await pc.readContract({
+      address: vault,
+      abi: prizeVaultAbiTyped,
+      functionName: "fallbackRate",
+      args: [asset],
+    })) as bigint;
+    metas.push({ asset, balance: inventory[1][i], fallbackRate });
+  }
+
+  for (const t of tokens) {
+    if (!isConfigured(t.address) || seen.has(t.address.toLowerCase())) continue;
+    const [balance, fallbackRate] = await Promise.all([
+      pc.readContract({
+        address: vault,
+        abi: prizeVaultAbiTyped,
+        functionName: "balanceOf",
+        args: [t.address],
+      }) as Promise<bigint>,
+      pc.readContract({
+        address: vault,
+        abi: prizeVaultAbiTyped,
+        functionName: "fallbackRate",
+        args: [t.address],
+      }) as Promise<bigint>,
+    ]);
+    metas.push({ asset: t.address, balance, fallbackRate });
+  }
+
+  return metas;
 }
 
 export function useTreasuryData() {
@@ -442,14 +549,17 @@ export function useTreasuryData() {
     try {
       const pc = client();
       const prices = await fetchPrices();
-      const [holders, prizeVault, staking, tickets, vesting, game] = await Promise.all([
-        loadHolders(pc, prices),
-        loadPrizeVault(pc),
-        loadStaking(pc),
-        loadTickets(pc),
-        loadVesting(pc),
-        loadGame(pc),
-      ]);
+      const [holders, prizeVault, staking, tickets, vesting, game, prizeTables, vaultAssets] =
+        await Promise.all([
+          loadHolders(pc, prices),
+          loadPrizeVault(pc),
+          loadStaking(pc),
+          loadTickets(pc),
+          loadVesting(pc),
+          loadGame(pc),
+          loadPrizeTables(pc),
+          loadVaultAssets(pc),
+        ]);
       setData({
         updatedAt: Date.now(),
         prices,
@@ -459,6 +569,8 @@ export function useTreasuryData() {
         tickets,
         vesting,
         game,
+        prizeTables,
+        vaultAssets,
         error: null,
       });
     } catch (e) {
@@ -476,6 +588,8 @@ export function useTreasuryData() {
         tickets: prev?.tickets ?? null,
         vesting: prev?.vesting ?? null,
         game: prev?.game ?? null,
+        prizeTables: prev?.prizeTables ?? null,
+        vaultAssets: prev?.vaultAssets ?? [],
         error: e instanceof Error ? e.message : "refresh failed",
       }));
     } finally {

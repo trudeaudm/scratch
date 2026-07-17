@@ -2,6 +2,7 @@
 
 import { ReadPanel } from "@/components/ReadPanel";
 import { WritePanel } from "@/components/WritePanel";
+import { PrizeTablesPanel } from "@/components/PrizeTablesPanel";
 import { useTreasuryData } from "@/hooks/useTreasuryData";
 import { REFRESH_MS } from "@/config/chain";
 
@@ -32,6 +33,21 @@ export default function HomePage() {
         <ReadPanel data={data} loading={loading} onRefresh={() => void refresh()} />
         <WritePanel tickets={data?.tickets ?? null} />
       </div>
+
+      <PrizeTablesPanel
+        prizeTables={data?.prizeTables ?? null}
+        vaultAssets={data?.vaultAssets ?? []}
+        prices={
+          data?.prices ?? {
+            scratchUsd: null,
+            ethUsd: null,
+            fetchedAt: null,
+            error: null,
+          }
+        }
+        pendingCount={data?.game?.pendingCount ?? 0}
+        onRefresh={() => void refresh()}
+      />
     </main>
   );
 }

@@ -351,3 +351,38 @@ button {
   font-style: italic;
   padding: 8px 0;
 }
+
+.banner-danger {
+  background: #3f1212;
+  border: 1px solid var(--danger);
+  color: #fecaca;
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin: 14px 0;
+  font-size: 0.9rem;
+}
+
+.check-danger {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  background: #2a1510;
+  border: 1px solid var(--danger);
+  border-radius: 8px;
+  padding: 12px;
+  margin: 12px 0;
+  color: #fecaca;
+  cursor: pointer;
+}
+
+.check-danger input {
+  margin-top: 3px;
+}
+
+.diff-changed td {
+  background: #1f2a1a;
+}
+
+.editor-row {
+  margin-bottom: 8px;
+}

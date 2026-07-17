@@ -247,6 +247,10 @@ export function ReadPanel({
               </span>
             )}
           </dd>
+          <dt>Pending requests</dt>
+          <dd className={data.game.pendingCount > 0 ? "warn" : undefined}>
+            {data.game.pendingCount}
+          </dd>
           <dt>stale Pending (&gt; rescueDelay)</dt>
           <dd className={data.game.stalePendingCount > 0 ? "danger" : undefined}>
             {data.game.stalePendingCount}

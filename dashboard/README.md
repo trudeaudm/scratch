@@ -16,6 +16,7 @@ Local-only ops UI for Phase-2 contracts on **Robinhood Chain (id 4663)**.
 cd dashboard
 cp .env.example .env.local   # set NEXT_PUBLIC_RPC_URL
 npm install
+npm test                     # prize-table validation unit tests
 ```
 
 ### Fill addresses
@@ -86,7 +87,18 @@ Every action shows a plain-English summary **before** the wallet popup (`Review`
 | Release | `VestingWallet.release(SCRATCH)` |
 | Grant tickets | Address textarea (parse / dedupe / validate) + `amountEach` → `grant`; shows remaining daily allowance; refuses over-cap client-side |
 
+### Prize Tables
+
+Read (per tier Standard / Premium): current `ScratchGame` table with asset symbol, fixed amount or bps (bps also shows live payout = bps × vault balance), probability from `cumOdds` deltas (`%` and `1 in N`), and implied per-ticket EV in USD.
+
+Edit: rows add/remove/edit via config token dropdown + amount + bps toggle + human probability (UI derives `cumOdds`). Client validation mirrors `_validateTable` (empty / monotonic / terminal no-win at `1_000_000`) plus exact `100.000%` sum; unbacked assets (no vault balance and no `fallbackRate`) block submit (zero-balance + fallback warns). Safety rails before `setPrizeTable`:
+
+- Mandatory diff confirm (old vs new per row, EV before/after)
+- Red banner when any `Pending` ScratchGame requests exist
+- Hard checkbox if any row’s computed payout exceeds 10% of that asset’s vault balance
+
 ## Notes
 
-- Stale-pending ScratchGame count scans `ScratchRequested` logs (~14d lookback). Some RPCs may truncate; treat as a best-effort ops flag.
+- Pending / stale-pending ScratchGame counts scan `ScratchRequested` logs (~14d lookback). Some RPCs may truncate; treat as a best-effort ops flag.
 - DexScreener `chainId` slug for Robinhood may need adjusting once the pair is listed — only the config field changes.
+- Validation helpers live in `src/utils/prizeTable.ts` (`npm test`).
