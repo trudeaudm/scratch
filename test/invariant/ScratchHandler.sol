@@ -263,19 +263,23 @@ contract ScratchHandler is Test {
         }
         if (block.timestamp < uint256(requestedAt) + game.rescueDelay()) return;
 
-        uint256 premiumBefore = staking.ticketsOf(user);
+        // Use banked (not ticketsOf) for premium: a refund that fills the bank cap
+        // clips pending headroom in the view, so ticketsOf may not rise by exactly TICKET.
+        (,, uint256 premiumBankedBefore) = staking.users(user);
+        uint256 premiumTicketsBefore = staking.ticketsOf(user);
         uint256 standardBefore = standard.ticketsOf(user);
 
         game.rescue(requestId);
 
         if (tier == PREMIUM) {
             ghostPremiumRefunded += TICKET;
-            if (staking.ticketsOf(user) != premiumBefore + TICKET) ghostCrossLeak++;
+            (,, uint256 premiumBankedAfter) = staking.users(user);
+            if (premiumBankedAfter != premiumBankedBefore + TICKET) ghostCrossLeak++;
             if (standard.ticketsOf(user) != standardBefore) ghostCrossLeak++;
         } else {
             ghostStandardRefunded += TICKET;
             if (standard.ticketsOf(user) != standardBefore + TICKET) ghostCrossLeak++;
-            if (staking.ticketsOf(user) != premiumBefore) ghostCrossLeak++;
+            if (staking.ticketsOf(user) != premiumTicketsBefore) ghostCrossLeak++;
         }
 
         _removePending(idx);

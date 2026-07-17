@@ -8,6 +8,7 @@ import {ScratchGame} from "../src/ScratchGame.sol";
 import {StakingVault} from "../src/StakingVault.sol";
 import {PrizeVault} from "../src/PrizeVault.sol";
 import {MockRandomness} from "./mocks/MockRandomness.sol";
+import {IPrizeVault} from "../src/interfaces/IPrizeVault.sol";
 import {ITicketSource} from "../src/interfaces/ITicketSource.sol";
 
 contract MockERC20 is ERC20 {
@@ -370,5 +371,129 @@ contract ScratchGameTest is Test {
         assertEq(tier, PREMIUM);
         assertEq(requestedAt, uint64(block.timestamp));
         assertEq(uint8(status), uint8(ScratchGame.Status.Pending));
+    }
+
+    // -------------------------------------------------------------------------
+    // Randomness provider swap (timelock + grace)
+    // -------------------------------------------------------------------------
+
+    function test_randomnessSwap_queueExecute_newProviderCanFulfill() public {
+        MockRandomness next = new MockRandomness();
+        next.setCallback(address(game));
+        next.setFulfiller(address(this));
+
+        uint64 eta = uint64(block.timestamp) + game.RANDOMNESS_SWAP_DELAY();
+        vm.prank(owner);
+        vm.expectEmit(true, false, false, true, address(game));
+        emit ScratchGame.RandomnessSwapQueued(address(next), eta);
+        game.queueRandomnessSwap(address(next));
+
+        assertEq(game.pendingRandomness(), address(next));
+        assertEq(game.randomnessSwapEta(), eta);
+
+        vm.warp(uint256(eta));
+        address oldProvider = address(randomness);
+        vm.prank(owner);
+        vm.expectEmit(true, true, false, true, address(game));
+        emit ScratchGame.RandomnessSwapped(oldProvider, address(next));
+        game.executeRandomnessSwap();
+
+        assertEq(address(game.randomness()), address(next));
+        assertEq(game.pendingRandomness(), address(0));
+        assertEq(game.randomnessSwapEta(), 0);
+
+        _accrueOneTicket(alice);
+        vm.prank(alice);
+        uint256 id = game.scratch(PREMIUM);
+
+        uint256 balBefore = usdg.balanceOf(alice);
+        next.fulfill(id, 0); // row 0: 100e18 USDG
+        assertEq(usdg.balanceOf(alice), balBefore + 100e18);
+    }
+
+    function test_randomnessSwap_executeBeforeEta_reverts() public {
+        MockRandomness next = new MockRandomness();
+        vm.prank(owner);
+        game.queueRandomnessSwap(address(next));
+
+        vm.warp(block.timestamp + game.RANDOMNESS_SWAP_DELAY() - 1);
+        vm.prank(owner);
+        vm.expectRevert(ScratchGame.RandomnessSwapNotReady.selector);
+        game.executeRandomnessSwap();
+    }
+
+    function test_randomnessSwap_executeAfterGrace_revertsExpired() public {
+        MockRandomness next = new MockRandomness();
+        vm.prank(owner);
+        game.queueRandomnessSwap(address(next));
+        uint64 eta = game.randomnessSwapEta();
+
+        vm.warp(uint256(eta) + game.RANDOMNESS_SWAP_GRACE() + 1);
+        vm.prank(owner);
+        vm.expectRevert(ScratchGame.RandomnessSwapExpired.selector);
+        game.executeRandomnessSwap();
+
+        // Still queued — must re-queue to get a fresh eta.
+        assertEq(game.pendingRandomness(), address(next));
+    }
+
+    function test_randomnessSwap_cancel_works() public {
+        MockRandomness next = new MockRandomness();
+        vm.prank(owner);
+        game.queueRandomnessSwap(address(next));
+
+        vm.prank(owner);
+        vm.expectEmit(true, false, false, true, address(game));
+        emit ScratchGame.RandomnessSwapCancelled(address(next));
+        game.cancelRandomnessSwap();
+
+        assertEq(game.pendingRandomness(), address(0));
+        assertEq(game.randomnessSwapEta(), 0);
+        assertEq(address(game.randomness()), address(randomness));
+
+        vm.warp(block.timestamp + game.RANDOMNESS_SWAP_DELAY());
+        vm.prank(owner);
+        vm.expectRevert(ScratchGame.NoRandomnessSwapPending.selector);
+        game.executeRandomnessSwap();
+    }
+
+    function test_randomnessSwap_oldProviderFulfill_revertsAfterSwap() public {
+        _accrueOneTicket(alice);
+        vm.prank(alice);
+        uint256 id = game.scratch(PREMIUM);
+
+        MockRandomness next = new MockRandomness();
+        next.setCallback(address(game));
+        next.setFulfiller(address(this));
+
+        vm.prank(owner);
+        game.queueRandomnessSwap(address(next));
+        vm.warp(block.timestamp + game.RANDOMNESS_SWAP_DELAY());
+        vm.prank(owner);
+        game.executeRandomnessSwap();
+
+        // Old provider's in-flight fulfill hits onlyRandomness against the new address.
+        vm.expectRevert(ScratchGame.NotRandomness.selector);
+        randomness.fulfill(id, 0);
+    }
+
+    // -------------------------------------------------------------------------
+    // No-win settlement skips PrizeVault.payout
+    // -------------------------------------------------------------------------
+
+    function test_settlement_noWin_skipsPrizeVaultPayout() public {
+        _accrueOneTicket(alice);
+        vm.prank(alice);
+        uint256 id = game.scratch(PREMIUM);
+
+        // Terminal no-win must not call the vault at all.
+        vm.expectCall(address(prizes), abi.encodeWithSelector(IPrizeVault.payout.selector), 0);
+
+        vm.expectEmit(true, true, false, true, address(game));
+        emit ScratchGame.ScratchSettled(alice, id, PREMIUM, 2, address(0), 0);
+        randomness.fulfill(id, 999_999);
+
+        (,,, ScratchGame.Status status) = game.requests(id);
+        assertEq(uint8(status), uint8(ScratchGame.Status.Settled));
     }
 }
