@@ -24,10 +24,14 @@ npm test                     # prize-table validation unit tests
 Edit `src/config/addresses.ts` after Deploy2 (+ ops VestingWallet deploy):
 
 - Contract addresses: `prizeVault`, `stakingVault`, `standardTicketSource`, `scratchGame`, `vestingWallet`, `treasury`
-- Tokens: `SCRATCH` (required), `USDG` / `WETH` prefilled with canonical 4663 addresses — add more entries to extend the balance + fund dropdowns
+- Tokens: `SCRATCH` (required), `USDG` / `WETH` prefilled with canonical 4663 addresses — add more entries to extend **write-panel** dropdowns and curated pricing
+- Stock / RWA tokens: set `kind: "stock"`, `ticker: "AAPL"` (underlying), and optionally `preferredPair` to pin DexScreener pricing
 - DexScreener pairs: `dexPairs.scratch` and `dexPairs.weth` (`chainId` slug + `pairAddress`) for USD pricing
 
 Zero addresses (`0x000…000`) skip on-chain reads for that row until filled.
+
+**Holdings are discovery-based:** the read panel also queries Blockscout `account/tokenlist` for every tracked address, merges with config, and shows all nonzero ERC-20s. Tokens not in config get an **unverified** badge (scam airdrops must not look curated). Write-panel fund/send dropdowns stay **config-only**. If Blockscout fails, the UI falls back to config balances with a warning bar.
+
 
 ### Copy ABIs from Foundry `out/`
 
@@ -65,8 +69,11 @@ Open [http://localhost:3000](http://localhost:3000). Connect the treasury wallet
 
 Balances for PrizeVault, StakingVault, StandardTicketSource, ops VestingWallet, and treasury EOA:
 
-- Every config ERC-20 (SCRATCH, USDG, WETH, …) + native ETH
-- USD: SCRATCH and ETH from DexScreener pair API; USDG pegged at $1
+- Config ERC-20s + **Blockscout-discovered** tokens (nonzero only) + native ETH
+- Config tokens: curated symbol + pair/peg pricing
+- Discovered tokens: Blockscout symbol/decimals + **unverified** badge; DexScreener token price if a pair has liquidity &gt; $1k (`dex px`), else `no price`
+- **Stocks & RWAs** subsection for config tokens with `kind: "stock"` (shows underlying `ticker`) — screenshot source for “today’s vault” posts
+- USD: SCRATCH and ETH from DexScreener pairs; USDG pegged at $1; stocks via `preferredPair` or best Dex pair
 
 Vitals:
 

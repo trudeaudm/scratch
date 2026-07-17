@@ -11,6 +11,7 @@ import {
 import {
   balanceHolders,
   contracts,
+  findTokenConfig,
   isConfigured,
   tokens,
 } from "@/config/addresses";
@@ -23,7 +24,8 @@ import {
   erc20AbiTyped,
 } from "@/config/abis";
 import { robinhoodChain, REFRESH_MS } from "@/config/chain";
-import { ethUsd, fetchPrices, tokenUsd, type PriceMap } from "@/utils/prices";
+import { ethUsd, fetchPrices, amountUsd, unitPriceFor, type PriceMap, type PriceTag } from "@/utils/prices";
+import { fetchBlockscoutTokenList } from "@/utils/blockscout";
 
 const SWEEP_GRACE = 24 * 60 * 60;
 const RANDOMNESS_SWAP_GRACE = 24 * 60 * 60;
@@ -33,17 +35,25 @@ const scratchRequestedEvent = parseAbiItem(
   "event ScratchRequested(address indexed user, uint256 indexed requestId, uint8 tier)",
 );
 
+export type HoldingToken = {
+  symbol: string;
+  address: Address;
+  amount: bigint;
+  decimals: number;
+  usd: number | null;
+  /** Present in addresses.ts config. */
+  verified: boolean;
+  kind: "crypto" | "stock";
+  /** Underlying ticker for stocks (e.g. AAPL). */
+  ticker?: string;
+  priceTag: import("@/utils/prices").PriceTag;
+};
+
 export type HolderBalances = {
   holder: (typeof balanceHolders)[number];
   eth: bigint;
   ethUsd: number | null;
-  tokens: {
-    symbol: string;
-    address: Address;
-    amount: bigint;
-    decimals: number;
-    usd: number | null;
-  }[];
+  tokens: HoldingToken[];
 };
 
 export type SweepRow = {
@@ -123,6 +133,8 @@ export type TreasurySnapshot = {
   game: GameVitals | null;
   prizeTables: PrizeTableSnapshot[] | null;
   vaultAssets: VaultAssetMeta[];
+  /** Set when Blockscout tokenlist failed — holdings fell back to config-only. */
+  discoveryWarning: string | null;
   error: string | null;
 };
 
@@ -137,44 +149,77 @@ function nowSec() {
   return Math.floor(Date.now() / 1000);
 }
 
-async function loadHolders(pc: ReturnType<typeof client>, prices: PriceMap) {
+type DiscoveredBag = { address: Address; balance: bigint; symbol: string; decimals: number };
+
+async function loadHolders(
+  pc: ReturnType<typeof client>,
+  prices: PriceMap,
+  discovered: Map<string, DiscoveredBag[]>,
+): Promise<HolderBalances[]> {
   const configuredTokens = tokens.filter((t) => isConfigured(t.address));
   const holders: HolderBalances[] = [];
 
   for (const holder of balanceHolders) {
     if (!isConfigured(holder.address)) {
-      holders.push({
-        holder,
-        eth: 0n,
-        ethUsd: null,
-        tokens: configuredTokens.map((t) => ({
-          symbol: t.symbol,
-          address: t.address,
-          amount: 0n,
-          decimals: t.decimals,
-          usd: null,
-        })),
-      });
+      holders.push({ holder, eth: 0n, ethUsd: null, tokens: [] });
       continue;
     }
 
     const eth = await pc.getBalance({ address: holder.address });
-    const tokenRows = [];
+    const byAddr = new Map<string, HoldingToken>();
+
     for (const t of configuredTokens) {
-      const amount = (await pc.readContract({
-        address: t.address,
-        abi: erc20AbiTyped,
-        functionName: "balanceOf",
-        args: [holder.address],
-      })) as bigint;
-      tokenRows.push({
+      let amount = 0n;
+      try {
+        amount = (await pc.readContract({
+          address: t.address,
+          abi: erc20AbiTyped,
+          functionName: "balanceOf",
+          args: [holder.address],
+        })) as bigint;
+      } catch {
+        amount = 0n;
+      }
+      const unit = unitPriceFor(t.address, prices);
+      let priceTag: PriceTag = "none";
+      if (t.price === "usdg") priceTag = "peg";
+      else if (unit?.tag === "dex") priceTag = "dex";
+      else if (unit) priceTag = "config";
+      byAddr.set(t.address.toLowerCase(), {
         symbol: t.symbol,
         address: t.address,
         amount,
         decimals: t.decimals,
-        usd: tokenUsd(t, amount, prices),
+        usd: amountUsd(amount, t.decimals, unit),
+        verified: true,
+        kind: t.kind ?? "crypto",
+        ticker: t.ticker,
+        priceTag,
       });
     }
+
+    for (const d of discovered.get(holder.address.toLowerCase()) ?? []) {
+      if (findTokenConfig(d.address)) continue;
+      const unit = unitPriceFor(d.address, prices);
+      byAddr.set(d.address.toLowerCase(), {
+        symbol: d.symbol,
+        address: d.address,
+        amount: d.balance,
+        decimals: d.decimals,
+        usd: amountUsd(d.balance, d.decimals, unit),
+        verified: false,
+        kind: "crypto",
+        priceTag: unit ? "dex" : "none",
+      });
+    }
+
+    const tokenRows = [...byAddr.values()]
+      .filter((t) => t.amount > 0n)
+      .sort((a, b) => {
+        if (a.verified !== b.verified) return a.verified ? -1 : 1;
+        return a.symbol.localeCompare(b.symbol);
+      });
+
     holders.push({
       holder,
       eth,
@@ -182,7 +227,46 @@ async function loadHolders(pc: ReturnType<typeof client>, prices: PriceMap) {
       tokens: tokenRows,
     });
   }
+
   return holders;
+}
+
+/** One Blockscout pass for all holders — feeds Dex pricing and holding merge. */
+async function discoverAllHoldings(): Promise<{
+  byHolder: Map<string, DiscoveredBag[]>;
+  addresses: Address[];
+  warning: string | null;
+}> {
+  const byHolder = new Map<string, DiscoveredBag[]>();
+  const addrs = new Set<string>();
+  for (const holder of balanceHolders) {
+    if (!isConfigured(holder.address)) continue;
+    try {
+      const list = await fetchBlockscoutTokenList(holder.address);
+      byHolder.set(
+        holder.address.toLowerCase(),
+        list.map((t) => ({
+          address: t.address,
+          balance: t.balance,
+          symbol: t.symbol,
+          decimals: t.decimals,
+        })),
+      );
+      for (const t of list) {
+        if (!findTokenConfig(t.address)) addrs.add(t.address.toLowerCase());
+      }
+    } catch (e) {
+      return {
+        byHolder,
+        addresses: [],
+        warning:
+          e instanceof Error
+            ? `Blockscout token discovery failed (${e.message}) — showing config tokens only`
+            : "Blockscout token discovery failed — showing config tokens only",
+      };
+    }
+  }
+  return { byHolder, addresses: [...addrs] as Address[], warning: null };
 }
 
 async function loadPrizeVault(pc: ReturnType<typeof client>): Promise<PrizeVaultVitals | null> {
@@ -548,10 +632,11 @@ export function useTreasuryData() {
   const refresh = useCallback(async () => {
     try {
       const pc = client();
-      const prices = await fetchPrices();
+      const discovery = await discoverAllHoldings();
+      const prices = await fetchPrices(discovery.addresses);
       const [holders, prizeVault, staking, tickets, vesting, game, prizeTables, vaultAssets] =
         await Promise.all([
-          loadHolders(pc, prices),
+          loadHolders(pc, prices, discovery.byHolder),
           loadPrizeVault(pc),
           loadStaking(pc),
           loadTickets(pc),
@@ -571,6 +656,7 @@ export function useTreasuryData() {
         game,
         prizeTables,
         vaultAssets,
+        discoveryWarning: discovery.warning,
         error: null,
       });
     } catch (e) {
@@ -579,6 +665,7 @@ export function useTreasuryData() {
         prices: prev?.prices ?? {
           scratchUsd: null,
           ethUsd: null,
+          byToken: {},
           fetchedAt: null,
           error: null,
         },
@@ -590,6 +677,7 @@ export function useTreasuryData() {
         game: prev?.game ?? null,
         prizeTables: prev?.prizeTables ?? null,
         vaultAssets: prev?.vaultAssets ?? [],
+        discoveryWarning: prev?.discoveryWarning ?? null,
         error: e instanceof Error ? e.message : "refresh failed",
       }));
     } finally {

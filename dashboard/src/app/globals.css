@@ -362,6 +362,72 @@ button {
   font-size: 0.9rem;
 }
 
+.banner-warn {
+  background: #2a2410;
+  border: 1px solid var(--warn);
+  color: #fde68a;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 10px 0 14px;
+  font-size: 0.85rem;
+}
+
+.badge-unverified {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: #3f1d1d;
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+
+.ticker-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  vertical-align: middle;
+}
+
+.price-tag {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 0.65rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.stocks-block {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+}
+
+.stocks-heading {
+  margin: 0 0 8px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--accent);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.token-sym {
+  font-weight: 600;
+}
+
 .check-danger {
   display: flex;
   gap: 10px;

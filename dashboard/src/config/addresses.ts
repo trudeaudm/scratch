@@ -3,13 +3,37 @@ import { type Address, zeroAddress } from "viem";
 /**
  * Single source of truth for dashboard addresses and priced pairs.
  * Fill after Deploy2 (+ vesting deploy). Zero addresses disable that row until set.
+ *
+ * Config tokens are curated (verified symbols, pricing, write-panel dropdowns).
+ * On-chain holdings also auto-discover via Blockscout — discovered-only tokens
+ * render with an "unverified" badge and never enter write dropdowns.
  */
+export type DexPair = {
+  /** DexScreener chain slug in /latest/dex/pairs/{chainId}/{pairAddress}. */
+  chainId: string;
+  pairAddress: Address;
+};
+
+export type TokenKind = "crypto" | "stock";
+
 export type TokenConfig = {
   symbol: string;
   address: Address;
   decimals: number;
-  /** How USD is derived. */
-  price: "scratch" | "usdg" | "eth";
+  /**
+   * How USD is derived for curated tokens.
+   * - scratch / eth: DexScreener pairs in `dexPairs`
+   * - usdg: pegged $1
+   * - dex: use preferredPair if set, else best DexScreener token pair (liq > $1k)
+   * - none: no USD
+   */
+  price: "scratch" | "usdg" | "eth" | "dex" | "none";
+  /** Default crypto. Stocks/RWAs group under "Stocks & RWAs" in holdings. */
+  kind?: TokenKind;
+  /** Underlying ticker for stocks (e.g. "AAPL") — shown in brokerage-style view. */
+  ticker?: string;
+  /** Pin a preferred DexScreener pair (tokenized stocks / thin markets). */
+  preferredPair?: DexPair;
 };
 
 export type ContractEntry = {
@@ -18,15 +42,13 @@ export type ContractEntry = {
   address: Address;
 };
 
-export type DexPair = {
-  /** DexScreener chain slug in /latest/dex/pairs/{chainId}/{pairAddress}. */
-  chainId: string;
-  pairAddress: Address;
-};
-
 const Z = zeroAddress;
 
 export const EXPLORER_BASE = "https://robinhoodchain.blockscout.com";
+export const BLOCKSCOUT_API = `${EXPLORER_BASE}/api`;
+
+/** Min DexScreener pair liquidity (USD) to accept a discovered-token price. */
+export const DEX_MIN_LIQUIDITY_USD = 1_000;
 
 export const tokens: TokenConfig[] = [
   {
@@ -47,6 +69,16 @@ export const tokens: TokenConfig[] = [
     decimals: 18,
     price: "eth",
   },
+  // Example stock/RWA entries (fill address + preferredPair after listing):
+  // {
+  //   symbol: "tAAPL",
+  //   address: Z,
+  //   decimals: 18,
+  //   price: "dex",
+  //   kind: "stock",
+  //   ticker: "AAPL",
+  //   preferredPair: { chainId: "robinhood", pairAddress: Z },
+  // },
 ];
 
 /** DexScreener pairs used for SCRATCH and ETH/USD. Update chainId slug if DexScreener differs. */
@@ -113,6 +145,15 @@ export const balanceHolders: ContractEntry[] = [
   contracts.vestingWallet,
   contracts.treasury,
 ];
+
+/** Write-panel fund/send dropdowns — config tokens only (never auto-discovered). */
+export function writePanelTokens(): TokenConfig[] {
+  return tokens.filter((t) => isConfigured(t.address));
+}
+
+export function findTokenConfig(address: Address): TokenConfig | undefined {
+  return tokens.find((t) => t.address.toLowerCase() === address.toLowerCase());
+}
 
 export function isConfigured(addr: Address): boolean {
   return addr !== zeroAddress;

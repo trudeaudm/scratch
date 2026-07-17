@@ -7,11 +7,120 @@ import {
   tokens,
 } from "@/config/addresses";
 import { fmtToken, fmtUsd, countdown, shortAddr } from "@/utils/format";
-import type { TreasurySnapshot } from "@/hooks/useTreasuryData";
+import { priceTagLabel } from "@/utils/prices";
+import type { HoldingToken, TreasurySnapshot } from "@/hooks/useTreasuryData";
 
 function tokenDecimals(asset: string): number {
   const t = tokens.find((x) => x.address.toLowerCase() === asset.toLowerCase());
   return t?.decimals ?? 18;
+}
+
+function HoldingRows({ rows }: { rows: HoldingToken[] }) {
+  if (rows.length === 0) return null;
+  return (
+    <>
+      {rows.map((t) => (
+        <tr key={t.address}>
+          <td>
+            <span className="token-sym">{t.symbol}</span>
+            {t.kind === "stock" && t.ticker && (
+              <span className="ticker-tag" title="Underlying">
+                {t.ticker}
+              </span>
+            )}
+            {!t.verified && (
+              <span className="badge-unverified" title="Not in addresses.ts — treat with caution">
+                unverified
+              </span>
+            )}
+            <div className="mono muted" style={{ fontSize: "0.75rem" }}>
+              {shortAddr(t.address)}
+            </div>
+          </td>
+          <td className="num">{fmtToken(t.amount, t.decimals)}</td>
+          <td className="num">
+            {t.priceTag === "none" || t.usd === null ? (
+              <span className="muted">
+                —<span className="price-tag">no price</span>
+              </span>
+            ) : (
+              <>
+                {fmtUsd(t.usd)}
+                {priceTagLabel(t.priceTag) && (
+                  <span className="price-tag">{priceTagLabel(t.priceTag)}</span>
+                )}
+              </>
+            )}
+          </td>
+        </tr>
+      ))}
+    </>
+  );
+}
+
+function HolderCard({
+  h,
+}: {
+  h: TreasurySnapshot["holders"][number];
+}) {
+  const crypto = h.tokens.filter((t) => t.kind !== "stock");
+  const stocks = h.tokens.filter((t) => t.kind === "stock");
+
+  return (
+    <div className="card-block holder-card">
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+        <strong>{h.holder.label}</strong>
+        {isConfigured(h.holder.address) ? (
+          <a
+            href={explorerAddress(h.holder.address)}
+            target="_blank"
+            rel="noreferrer"
+            className="mono muted"
+          >
+            {shortAddr(h.holder.address)}
+          </a>
+        ) : (
+          <span className="muted">not configured</span>
+        )}
+      </div>
+
+      <table className="table">
+        <thead>
+          <tr>
+            <th>Asset</th>
+            <th className="num">Balance</th>
+            <th className="num">USD</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>ETH</td>
+            <td className="num">{fmtToken(h.eth, 18)}</td>
+            <td className="num">{fmtUsd(h.ethUsd)}</td>
+          </tr>
+          <HoldingRows rows={crypto} />
+        </tbody>
+      </table>
+
+      {stocks.length > 0 && (
+        <div className="stocks-block">
+          <h4 className="stocks-heading">Stocks &amp; RWAs</h4>
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Asset</th>
+                <th className="num">Balance</th>
+                <th className="num">USD</th>
+              </tr>
+            </thead>
+            <tbody>
+              <HoldingRows rows={stocks} />
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function ReadPanel({
@@ -34,6 +143,11 @@ export function ReadPanel({
 
       {data?.error && <p className="err">Refresh error: {data.error}</p>}
       {data?.prices.error && <p className="err">Prices: {data.prices.error}</p>}
+      {data?.discoveryWarning && (
+        <div className="banner-warn" role="status">
+          {data.discoveryWarning}
+        </div>
+      )}
 
       <p className="muted" style={{ marginTop: 0 }}>
         SCRATCH{" "}
@@ -48,48 +162,7 @@ export function ReadPanel({
       {!data?.holders.length ? (
         <p className="empty">Waiting for first fetch…</p>
       ) : (
-        data.holders.map((h) => (
-          <div key={h.holder.key} className="card-block">
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-              <strong>{h.holder.label}</strong>
-              {isConfigured(h.holder.address) ? (
-                <a
-                  href={explorerAddress(h.holder.address)}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="mono muted"
-                >
-                  {shortAddr(h.holder.address)}
-                </a>
-              ) : (
-                <span className="muted">not configured</span>
-              )}
-            </div>
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Asset</th>
-                  <th className="num">Balance</th>
-                  <th className="num">USD</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td>ETH</td>
-                  <td className="num">{fmtToken(h.eth, 18)}</td>
-                  <td className="num">{fmtUsd(h.ethUsd)}</td>
-                </tr>
-                {h.tokens.map((t) => (
-                  <tr key={t.symbol}>
-                    <td>{t.symbol}</td>
-                    <td className="num">{fmtToken(t.amount, t.decimals)}</td>
-                    <td className="num">{fmtUsd(t.usd)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ))
+        data.holders.map((h) => <HolderCard key={h.holder.key} h={h} />)
       )}
 
       <h3>PrizeVault inventory</h3>

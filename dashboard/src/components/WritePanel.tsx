@@ -18,6 +18,7 @@ import {
   isConfigured,
   sendTargets,
   tokens,
+  writePanelTokens,
 } from "@/config/addresses";
 import {
   erc20AbiTyped,
@@ -122,10 +123,7 @@ export function WritePanel({ tickets }: { tickets: TicketSourceVitals | null }) 
   const [grantAddrs, setGrantAddrs] = useState("");
   const [grantEach, setGrantEach] = useState("1");
 
-  const configuredTokens = useMemo(
-    () => tokens.filter((t) => isConfigured(t.address)),
-    [],
-  );
+  const configuredTokens = useMemo(() => writePanelTokens(), []);
   const configuredTargets = useMemo(
     () => sendTargets.filter((t) => isConfigured(t.address)),
     [],

@@ -41,6 +41,7 @@ export default function HomePage() {
           data?.prices ?? {
             scratchUsd: null,
             ethUsd: null,
+            byToken: {},
             fetchedAt: null,
             error: null,
           }

@@ -1,50 +1,180 @@
-import { formatUnits, type Address } from "viem";
-import { dexPairs, type TokenConfig } from "@/config/addresses";
+import { formatUnits, type Address, zeroAddress } from "viem";
+import {
+  DEX_MIN_LIQUIDITY_USD,
+  dexPairs,
+  findTokenConfig,
+  tokens,
+  type DexPair,
+  type TokenConfig,
+} from "../config/addresses";
 
 export type PriceMap = {
   scratchUsd: number | null;
   ethUsd: number | null;
+  /** Per-token USD unit price (discovered + config dex). Key = lowercase address. */
+  byToken: Record<string, TokenUnitPrice>;
   fetchedAt: number | null;
   error: string | null;
 };
 
+export type TokenUnitPrice = {
+  usd: number;
+  /** Source tag for UI. */
+  tag: "config" | "dex" | "peg";
+  liquidityUsd?: number;
+};
+
+export type PriceTag = "config" | "dex" | "peg" | "none";
+
 async function fetchPairUsd(chainId: string, pairAddress: Address): Promise<number | null> {
-  if (pairAddress === "0x0000000000000000000000000000000000000000") return null;
+  if (pairAddress === zeroAddress) return null;
   const url = `https://api.dexscreener.com/latest/dex/pairs/${chainId}/${pairAddress}`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`DexScreener ${res.status}`);
   const data = (await res.json()) as {
-    pair?: { priceUsd?: string } | null;
-    pairs?: { priceUsd?: string }[] | null;
+    pair?: { priceUsd?: string; liquidity?: { usd?: number } } | null;
+    pairs?: { priceUsd?: string; liquidity?: { usd?: number } }[] | null;
   };
-  const priceStr = data.pair?.priceUsd ?? data.pairs?.[0]?.priceUsd;
+  const pair = data.pair ?? data.pairs?.[0];
+  const priceStr = pair?.priceUsd;
   if (!priceStr) return null;
   const n = Number(priceStr);
   return Number.isFinite(n) ? n : null;
 }
 
-export async function fetchPrices(): Promise<PriceMap> {
+type DexPairHit = {
+  priceUsd: number;
+  liquidityUsd: number;
+  pairAddress: string;
+};
+
+/**
+ * Best DexScreener pair for a token with liquidity above the dashboard floor.
+ */
+export async function fetchTokenDexPrice(tokenAddress: Address): Promise<DexPairHit | null> {
+  if (tokenAddress === zeroAddress) return null;
+  const url = `https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`;
+  const res = await fetch(url);
+  if (!res.ok) return null;
+  const data = (await res.json()) as {
+    pairs?: {
+      priceUsd?: string;
+      liquidity?: { usd?: number };
+      pairAddress?: string;
+      chainId?: string;
+    }[] | null;
+  };
+  const pairs = data.pairs ?? [];
+  let best: DexPairHit | null = null;
+  for (const p of pairs) {
+    const price = Number(p.priceUsd);
+    const liq = Number(p.liquidity?.usd ?? 0);
+    if (!Number.isFinite(price) || price <= 0) continue;
+    if (liq < DEX_MIN_LIQUIDITY_USD) continue;
+    if (!best || liq > best.liquidityUsd) {
+      best = {
+        priceUsd: price,
+        liquidityUsd: liq,
+        pairAddress: p.pairAddress ?? "",
+      };
+    }
+  }
+  return best;
+}
+
+async function fetchPinnedPair(pair: DexPair): Promise<TokenUnitPrice | null> {
+  const usd = await fetchPairUsd(pair.chainId, pair.pairAddress);
+  if (usd == null) return null;
+  return { usd, tag: "config" };
+}
+
+export async function fetchPrices(extraTokenAddresses: Address[] = []): Promise<PriceMap> {
+  const byToken: Record<string, TokenUnitPrice> = {};
   try {
     const [scratchUsd, ethUsd] = await Promise.all([
       fetchPairUsd(dexPairs.scratch.chainId, dexPairs.scratch.pairAddress),
       fetchPairUsd(dexPairs.weth.chainId, dexPairs.weth.pairAddress),
     ]);
-    return { scratchUsd, ethUsd, fetchedAt: Date.now(), error: null };
+
+    // Curated token pricing
+    for (const t of tokens) {
+      if (t.address === zeroAddress) continue;
+      const key = t.address.toLowerCase();
+      if (t.price === "usdg") {
+        byToken[key] = { usd: 1, tag: "peg" };
+      } else if (t.price === "scratch" && scratchUsd != null) {
+        byToken[key] = { usd: scratchUsd, tag: "config" };
+      } else if (t.price === "eth" && ethUsd != null) {
+        byToken[key] = { usd: ethUsd, tag: "config" };
+      } else if (t.price === "dex") {
+        if (t.preferredPair) {
+          const pinned = await fetchPinnedPair(t.preferredPair);
+          if (pinned) byToken[key] = pinned;
+        }
+        if (!byToken[key]) {
+          const hit = await fetchTokenDexPrice(t.address);
+          if (hit) byToken[key] = { usd: hit.priceUsd, tag: "dex", liquidityUsd: hit.liquidityUsd };
+        }
+      }
+    }
+
+    // Discovered / extra addresses not already priced
+    const unique = [...new Set(extraTokenAddresses.map((a) => a.toLowerCase()))];
+    await Promise.all(
+      unique.map(async (key) => {
+        if (byToken[key]) return;
+        const cfg = findTokenConfig(key as Address);
+        if (cfg?.price === "none") return;
+        try {
+          const hit = await fetchTokenDexPrice(key as Address);
+          if (hit) {
+            byToken[key] = { usd: hit.priceUsd, tag: "dex", liquidityUsd: hit.liquidityUsd };
+          }
+        } catch {
+          /* leave unpriced */
+        }
+      }),
+    );
+
+    return { scratchUsd, ethUsd, byToken, fetchedAt: Date.now(), error: null };
   } catch (e) {
     return {
       scratchUsd: null,
       ethUsd: null,
+      byToken,
       fetchedAt: null,
       error: e instanceof Error ? e.message : "price fetch failed",
     };
   }
 }
 
+export function unitPriceFor(
+  address: Address,
+  prices: PriceMap,
+): TokenUnitPrice | null {
+  return prices.byToken[address.toLowerCase()] ?? null;
+}
+
+export function amountUsd(
+  amount: bigint,
+  decimals: number,
+  unit: TokenUnitPrice | null,
+): number | null {
+  if (!unit) return null;
+  const human = Number(formatUnits(amount, decimals));
+  if (!Number.isFinite(human)) return null;
+  return human * unit.usd;
+}
+
+/** @deprecated prefer amountUsd + unitPriceFor; kept for prize-table EV helpers. */
 export function tokenUsd(
   token: TokenConfig,
   amount: bigint,
   prices: PriceMap,
 ): number | null {
+  const unit = unitPriceFor(token.address, prices);
+  if (unit) return amountUsd(amount, token.decimals, unit);
+  // Fallback to legacy scratch/eth fields if byToken not populated yet
   const human = Number(formatUnits(amount, token.decimals));
   if (!Number.isFinite(human)) return null;
   if (token.price === "usdg") return human;
@@ -61,4 +191,10 @@ export function ethUsd(wei: bigint, prices: PriceMap): number | null {
   const human = Number(formatUnits(wei, 18));
   if (!Number.isFinite(human) || prices.ethUsd == null) return null;
   return human * prices.ethUsd;
+}
+
+export function priceTagLabel(tag: PriceTag): string | null {
+  if (tag === "dex") return "dex px";
+  if (tag === "none") return "no price";
+  return null;
 }
