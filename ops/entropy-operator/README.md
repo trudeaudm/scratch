@@ -49,6 +49,24 @@ The watcher:
 2. Reveals strictly in `nextFulfillSeq` order for the current epoch
 3. Advances `nextRevealIndex` in the state file after each confirmed `reveal`
 4. Retries failed txs with exponential backoff
+5. After each confirmed reveal, parses `ScratchSettled` from the fulfill receipt and appends a row to `payout-ledger.csv` (gitignored). Price failures / IO errors are logged and skipped — they never fail the reveal.
+
+## Payout ledger
+
+CSV columns: `timestamp,requestId,user,tier,rowIndex,asset,symbol,raw_amount,human_amount,price_usd,usd_value,retro`.
+
+- **Live append** (`npm run watch`): `retro=false`; `price_usd` from DexScreener (SCRATCH pair + token address for other assets); USDG pinned at `$1`; 60s in-process cache.
+- **Backfill** missing settlements (e.g. before the ledger existed):
+
+```bash
+export RPC_URL=https://…
+# optional: GAME_ADDRESS, GAME_DEPLOY_BLOCK (default 13138508), PAYOUT_LEDGER_PATH
+npm run backfill-ledger
+```
+
+Backfill prices at *current* market and sets `retro=true` so those rows are distinguishable.
+
+**VPS note:** When the operator moves to a VPS, the ledger file lives with the bot. The treasury dashboard’s quantity totals come from chain `ScratchSettled` logs and keep working without the CSV; the USD view syncs whenever you pull `payout-ledger.csv` onto the machine running the dashboard (`PAYOUT_LEDGER_PATH`).
 
 **Do not** call `registerChain` while requests are still pending unless you intend to orphan them (ScratchGame `rescue` after `rescueDelay`).
 

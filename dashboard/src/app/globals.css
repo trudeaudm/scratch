@@ -176,6 +176,10 @@ button {
   font-variant-numeric: tabular-nums;
 }
 
+.table-scroll {
+  overflow-x: auto;
+}
+
 .muted {
   color: var(--muted);
 }

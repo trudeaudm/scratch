@@ -10,6 +10,8 @@
  *   POLL_MS                 log poll interval (default 4000)
  *   REVEAL_MAX_RETRIES      tx retries (default 8)
  *   START_BLOCK             optional from-block for backfill (default: latest - 1)
+ *   GAME_ADDRESS            ScratchGame (for ScratchSettled ledger parse)
+ *   PAYOUT_LEDGER_PATH      CSV path (default ../payout-ledger.csv)
  *
  * Usage:
  *   node src/watch-and-reveal.js
@@ -18,6 +20,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Contract, JsonRpcProvider, Wallet, keccak256, solidityPacked } from "ethers";
+import { recordRevealSettlements } from "./payout-ledger.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_FILE = resolve(__dirname, "..", "entropy-state.json");
@@ -172,12 +175,19 @@ async function main() {
             }
 
             console.log(`revealing request ${key} with chain index ${state.nextRevealIndex}`);
-            await revealWithRetries(contract, requestId, preimage, maxRetries);
+            const receipt = await revealWithRetries(contract, requestId, preimage, maxRetries);
 
             state.nextRevealIndex -= 1;
             saveState(chainFile, state);
             processed.add(key);
             console.log(`  nextRevealIndex now ${state.nextRevealIndex}`);
+
+            // Ledger must never block or fail a reveal — errors are logged inside.
+            try {
+              await recordRevealSettlements(provider, receipt);
+            } catch (ledgerErr) {
+              console.warn(`ledger: ${ledgerErr?.message || ledgerErr}`);
+            }
           }
           rangeStart = rangeEnd + 1;
         }

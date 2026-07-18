@@ -6,7 +6,8 @@
   "description": "SelfEntropyProvider chain generator + reveal operator",
   "scripts": {
     "generate": "node src/generate-chain.js",
-    "watch": "node src/watch-and-reveal.js"
+    "watch": "node src/watch-and-reveal.js",
+    "backfill-ledger": "node src/backfill-ledger.js"
   },
   "engines": {
     "node": ">=18"

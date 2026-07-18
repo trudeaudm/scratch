@@ -97,6 +97,12 @@ Every action shows a plain-English summary **before** the wallet popup (`Review`
 | Release | `VestingWallet.release(SCRATCH)` |
 | Grant tickets | Address textarea (parse / dedupe / validate) + `amountEach` → `grant`; shows remaining daily allowance; refuses over-cap client-side |
 
+### Payouts
+
+Per-asset prize totals and win / no-win counts from on-chain `ScratchSettled` logs (always complete). USD totals and the last-20 table join `ops/entropy-operator/payout-ledger.csv` via `GET /api/payouts` when that file is present locally (`PAYOUT_LEDGER_PATH` override).
+
+**VPS note:** The entropy operator appends the ledger on the machine running the bot. Quantity view keeps working without the CSV; pull the CSV (or set `PAYOUT_LEDGER_PATH`) onto the dashboard host to sync USD / recent rows.
+
 ### Prize Tables
 
 Read (per tier Standard / Premium): current `ScratchGame` table with asset symbol, fixed amount or bps (bps also shows live payout = bps × vault balance), probability from `cumOdds` deltas (`%` and `1 in N`), and implied per-ticket EV in USD.

@@ -4,6 +4,7 @@ import { useSyncExternalStore } from "react";
 import { ReadPanel } from "@/components/ReadPanel";
 import { WritePanel } from "@/components/WritePanel";
 import { PrizeTablesPanel } from "@/components/PrizeTablesPanel";
+import { PayoutsPanel } from "@/components/PayoutsPanel";
 import { useTreasuryData } from "@/hooks/useTreasuryData";
 import { getTokensEpoch, subscribeTokens } from "@/config/addresses";
 import { REFRESH_MS } from "@/config/chain";
@@ -53,6 +54,8 @@ export default function HomePage() {
         pendingCount={data?.game?.pendingCount ?? 0}
         onRefresh={() => void refresh()}
       />
+
+      <PayoutsPanel />
     </main>
   );
 }
