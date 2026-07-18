@@ -41,7 +41,7 @@ export type HoldingToken = {
   amount: bigint;
   decimals: number;
   usd: number | null;
-  /** Present in addresses.ts config. */
+  /** Present in tokens.json verified config. */
   verified: boolean;
   kind: "crypto" | "stock";
   /** Underlying ticker for stocks (e.g. AAPL). */

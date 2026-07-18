@@ -1,5 +1,7 @@
 "use client";
 
+import { useState } from "react";
+import type { Address } from "viem";
 import {
   contracts,
   explorerAddress,
@@ -9,13 +11,22 @@ import {
 import { fmtToken, fmtUsd, countdown, shortAddr } from "@/utils/format";
 import { priceTagLabel } from "@/utils/prices";
 import type { HoldingToken, TreasurySnapshot } from "@/hooks/useTreasuryData";
+import { RemoveVerifiedModal, VerifyTokenModal } from "@/components/VerifyTokenModal";
 
 function tokenDecimals(asset: string): number {
   const t = tokens.find((x) => x.address.toLowerCase() === asset.toLowerCase());
   return t?.decimals ?? 18;
 }
 
-function HoldingRows({ rows }: { rows: HoldingToken[] }) {
+function HoldingRows({
+  rows,
+  onVerify,
+  onRemove,
+}: {
+  rows: HoldingToken[];
+  onVerify: (address: Address) => void;
+  onRemove: (token: { symbol: string; address: Address }) => void;
+}) {
   if (rows.length === 0) return null;
   return (
     <>
@@ -29,12 +40,27 @@ function HoldingRows({ rows }: { rows: HoldingToken[] }) {
               </span>
             )}
             {!t.verified && (
-              <span className="badge-unverified" title="Not in addresses.ts — treat with caution">
+              <span className="badge-unverified" title="Not in tokens.json — treat with caution">
                 unverified
               </span>
             )}
             <div className="mono muted" style={{ fontSize: "0.75rem" }}>
               {shortAddr(t.address)}
+            </div>
+            <div className="token-actions">
+              {!t.verified ? (
+                <button type="button" className="btn ghost btn-xs" onClick={() => onVerify(t.address)}>
+                  Verify &amp; add
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="btn ghost btn-xs"
+                  onClick={() => onRemove({ symbol: t.symbol, address: t.address })}
+                >
+                  Remove from verified
+                </button>
+              )}
             </div>
           </td>
           <td className="num">{fmtToken(t.amount, t.decimals)}</td>
@@ -60,8 +86,12 @@ function HoldingRows({ rows }: { rows: HoldingToken[] }) {
 
 function HolderCard({
   h,
+  onVerify,
+  onRemove,
 }: {
   h: TreasurySnapshot["holders"][number];
+  onVerify: (address: Address) => void;
+  onRemove: (token: { symbol: string; address: Address }) => void;
 }) {
   const crypto = h.tokens.filter((t) => t.kind !== "stock");
   const stocks = h.tokens.filter((t) => t.kind === "stock");
@@ -98,7 +128,7 @@ function HolderCard({
             <td className="num">{fmtToken(h.eth, 18)}</td>
             <td className="num">{fmtUsd(h.ethUsd)}</td>
           </tr>
-          <HoldingRows rows={crypto} />
+          <HoldingRows rows={crypto} onVerify={onVerify} onRemove={onRemove} />
         </tbody>
       </table>
 
@@ -114,7 +144,7 @@ function HolderCard({
               </tr>
             </thead>
             <tbody>
-              <HoldingRows rows={stocks} />
+              <HoldingRows rows={stocks} onVerify={onVerify} onRemove={onRemove} />
             </tbody>
           </table>
         </div>
@@ -132,8 +162,28 @@ export function ReadPanel({
   loading: boolean;
   onRefresh: () => void;
 }) {
+  const [verifyAddr, setVerifyAddr] = useState<Address | null>(null);
+  const [removeToken, setRemoveToken] = useState<{ symbol: string; address: Address } | null>(
+    null,
+  );
+
   return (
     <section className="panel">
+      {verifyAddr && (
+        <VerifyTokenModal
+          address={verifyAddr}
+          onClose={() => setVerifyAddr(null)}
+          onDone={onRefresh}
+        />
+      )}
+      {removeToken && (
+        <RemoveVerifiedModal
+          token={removeToken}
+          onClose={() => setRemoveToken(null)}
+          onDone={onRefresh}
+        />
+      )}
+
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
         <h2>Read</h2>
         <button type="button" className="btn ghost" onClick={onRefresh} disabled={loading}>
@@ -162,7 +212,14 @@ export function ReadPanel({
       {!data?.holders.length ? (
         <p className="empty">Waiting for first fetch…</p>
       ) : (
-        data.holders.map((h) => <HolderCard key={h.holder.key} h={h} />)
+        data.holders.map((h) => (
+          <HolderCard
+            key={h.holder.key}
+            h={h}
+            onVerify={setVerifyAddr}
+            onRemove={setRemoveToken}
+          />
+        ))
       )}
 
       <h3>PrizeVault inventory</h3>

@@ -258,6 +258,57 @@ button {
   border: 1px solid var(--border);
 }
 
+.btn.danger {
+  background: #7f1d1d;
+  color: #fecaca;
+  border: 1px solid var(--danger);
+}
+
+.btn-xs {
+  padding: 2px 8px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  margin-top: 6px;
+}
+
+.token-actions {
+  margin-top: 2px;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: #0c0e12cc;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 48px 16px;
+  overflow-y: auto;
+}
+
+.modal-card {
+  width: min(560px, 100%);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px 20px 20px;
+  box-shadow: 0 24px 64px #000a;
+}
+
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.modal-head h3 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
 .summary {
   background: var(--bg);
   border: 1px dashed var(--border);

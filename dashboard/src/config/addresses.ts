@@ -1,10 +1,14 @@
 import { type Address, zeroAddress } from "viem";
+import tokensJson from "./tokens.json";
 
 /**
  * Single source of truth for dashboard addresses and priced pairs.
  * Production Deploy2 + DeployOpsVesting (chain 4663).
  *
- * Config tokens are curated (verified symbols, pricing, write-panel dropdowns).
+ * Verified tokens live in `tokens.json` (committed state — review diffs before pushing).
+ * This module imports that list into a mutable `tokens` array so promote/remove can
+ * hot-update fund/send dropdowns without a full reload.
+ *
  * On-chain holdings also auto-discover via Blockscout — discovered-only tokens
  * render with an "unverified" badge and never enter write dropdowns.
  */
@@ -53,41 +57,28 @@ export const BLOCKSCOUT_API = `${EXPLORER_BASE}/api`;
 /** Min DexScreener pair liquidity (USD) to accept a discovered-token price. */
 export const DEX_MIN_LIQUIDITY_USD = 1_000;
 
-export const tokens: TokenConfig[] = [
-  {
-    symbol: "SCRATCH",
-    address: "0xf5E5f4D3C34A14B2fDfD59584Fe555Cd5e21F196",
-    decimals: 18,
-    price: "scratch",
-  },
-  {
-    symbol: "USDG",
-    // Canonical 4663 address (fork suite DEFAULT_USDG / README). On-chain decimals()=6.
-    address: "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
-    decimals: 6,
-    price: "usdg",
-  },
-  {
-    symbol: "WETH",
-    address: "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73",
-    decimals: 18,
-    price: "eth",
-  },
-  {
-    symbol: "SPCX",
-    address: "0x4a0e65a3eccec6dbe60ae065f2e7bb85fae35eea",
-    decimals: 18,
-    price: "dex",
-    kind: "stock",
-    ticker: "SPCX",
-    name: "SpaceX • Robinhood Token",
-    // Uniswap v4 SPCX/ETH (WETH) on DexScreener — highest-liq WETH/SPCX pair for this token.
-    preferredPair: {
-      chainId: "robinhood",
-      pairAddress: "0x7cf7a805185bce4766278dc4e4047fbc5d8e2bc8a33b3268270d43b86e10236b",
-    },
-  },
-];
+/** Mutable verified token list — seeded from `tokens.json`, updated by promote/remove. */
+export const tokens: TokenConfig[] = structuredClone(tokensJson) as TokenConfig[];
+
+let tokensEpoch = 0;
+const tokensListeners = new Set<() => void>();
+
+/** Bumps when `tokens` is replaced after a promote/remove (or HMR). */
+export function getTokensEpoch(): number {
+  return tokensEpoch;
+}
+
+export function subscribeTokens(listener: () => void): () => void {
+  tokensListeners.add(listener);
+  return () => tokensListeners.delete(listener);
+}
+
+/** Replace in-memory verified list (keeps same array reference for importers). */
+export function replaceVerifiedTokens(next: TokenConfig[]): void {
+  tokens.splice(0, tokens.length, ...next);
+  tokensEpoch += 1;
+  for (const l of tokensListeners) l();
+}
 
 /** DexScreener pairs used for SCRATCH and ETH/USD. Update chainId slug if DexScreener differs. */
 export const dexPairs = {

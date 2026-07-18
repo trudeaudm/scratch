@@ -95,7 +95,14 @@ function parseAddresses(raw: string): { addresses: Address[]; error: string | nu
   return { addresses, error: null };
 }
 
-export function WritePanel({ tickets }: { tickets: TicketSourceVitals | null }) {
+export function WritePanel({
+  tickets,
+  tokensEpoch = 0,
+}: {
+  tickets: TicketSourceVitals | null;
+  /** Bumps when verified tokens.json changes so fund/send dropdowns refresh. */
+  tokensEpoch?: number;
+}) {
   const { address, isConnected } = useAccount();
   const { connect, isPending: connecting } = useConnect();
   const { disconnect } = useDisconnect();
@@ -123,7 +130,12 @@ export function WritePanel({ tickets }: { tickets: TicketSourceVitals | null }) 
   const [grantAddrs, setGrantAddrs] = useState("");
   const [grantEach, setGrantEach] = useState("1");
 
-  const configuredTokens = useMemo(() => writePanelTokens(), []);
+  const configuredTokens = useMemo(
+    () => writePanelTokens(),
+    // Re-read after promote/remove updates the mutable tokens list.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- tokensEpoch from parent
+    [tokensEpoch],
+  );
   const configuredTargets = useMemo(
     () => sendTargets.filter((t) => isConfigured(t.address)),
     [],

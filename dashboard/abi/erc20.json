@@ -39,6 +39,17 @@
   },
   {
     "type": "function",
+    "name": "name",
+    "stateMutability": "view",
+    "inputs": [],
+    "outputs": [
+      {
+        "type": "string"
+      }
+    ]
+  },
+  {
+    "type": "function",
     "name": "allowance",
     "stateMutability": "view",
     "inputs": [

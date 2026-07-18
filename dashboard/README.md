@@ -24,13 +24,15 @@ npm test                     # prize-table validation unit tests
 Edit `src/config/addresses.ts` after Deploy2 (+ ops VestingWallet deploy):
 
 - Contract addresses: `prizeVault`, `stakingVault`, `standardTicketSource`, `scratchGame`, `vestingWallet`, `treasury`
-- Tokens: `SCRATCH` (required), `USDG` / `WETH` prefilled with canonical 4663 addresses — add more entries to extend **write-panel** dropdowns and curated pricing
-- Stock / RWA tokens: set `kind: "stock"`, `ticker: "AAPL"` (underlying), and optionally `preferredPair` to pin DexScreener pricing
 - DexScreener pairs: `dexPairs.scratch` and `dexPairs.weth` (`chainId` slug + `pairAddress`) for USD pricing
+
+Verified tokens live in **`src/config/tokens.json`** (imported by `addresses.ts`). Same shape as before (`symbol`, `address`, `decimals`, `price`, optional `kind` / `ticker` / `name` / `preferredPair`).
+
+**`tokens.json` is committed state — review diffs before pushing.** Prefer the Read-panel **Verify & add** / **Remove from verified** flow (writes via a localhost-only API route); do not hand-edit production-looking symbols without checking the on-chain + Blockscout facts in the modal.
 
 Zero addresses (`0x000…000`) skip on-chain reads for that row until filled.
 
-**Holdings are discovery-based:** the read panel also queries Blockscout `account/tokenlist` for every tracked address, merges with config, and shows all nonzero ERC-20s. Tokens not in config get an **unverified** badge (scam airdrops must not look curated). Write-panel fund/send dropdowns stay **config-only**. If Blockscout fails, the UI falls back to config balances with a warning bar.
+**Holdings are discovery-based:** the read panel also queries Blockscout `account/tokenlist` for every tracked address, merges with config, and shows all nonzero ERC-20s. Tokens not in `tokens.json` get an **unverified** badge (scam airdrops must not look curated) and a **Verify & add** button. Write-panel fund/send dropdowns stay **config-only** and refresh immediately after promote/remove. If Blockscout fails, the UI falls back to config balances with a warning bar.
 
 
 ### Copy ABIs from Foundry `out/`
@@ -71,7 +73,8 @@ Balances for PrizeVault, StakingVault, StandardTicketSource, ops VestingWallet, 
 
 - Config ERC-20s + **Blockscout-discovered** tokens (nonzero only) + native ETH
 - Config tokens: curated symbol + pair/peg pricing
-- Discovered tokens: Blockscout symbol/decimals + **unverified** badge; DexScreener token price if a pair has liquidity &gt; $1k (`dex px`), else `no price`
+- Discovered tokens: Blockscout symbol/decimals + **unverified** badge + **Verify & add** (modal reads on-chain metadata, Blockscout facts, DexScreener pairs; typed symbol confirm writes `tokens.json`)
+- Verified rows: **Remove from verified** (typed confirm)
 - **Stocks & RWAs** subsection for config tokens with `kind: "stock"` (shows underlying `ticker`) — screenshot source for “today’s vault” posts
 - USD: SCRATCH and ETH from DexScreener pairs; USDG pegged at $1; stocks via `preferredPair` or best Dex pair
 

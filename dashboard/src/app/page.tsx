@@ -1,13 +1,16 @@
 "use client";
 
+import { useSyncExternalStore } from "react";
 import { ReadPanel } from "@/components/ReadPanel";
 import { WritePanel } from "@/components/WritePanel";
 import { PrizeTablesPanel } from "@/components/PrizeTablesPanel";
 import { useTreasuryData } from "@/hooks/useTreasuryData";
+import { getTokensEpoch, subscribeTokens } from "@/config/addresses";
 import { REFRESH_MS } from "@/config/chain";
 
 export default function HomePage() {
   const { data, loading, refresh } = useTreasuryData();
+  const tokensEpoch = useSyncExternalStore(subscribeTokens, getTokensEpoch, getTokensEpoch);
 
   return (
     <main className="app">
@@ -31,10 +34,11 @@ export default function HomePage() {
 
       <div className="grid grid-2">
         <ReadPanel data={data} loading={loading} onRefresh={() => void refresh()} />
-        <WritePanel tickets={data?.tickets ?? null} />
+        <WritePanel tickets={data?.tickets ?? null} tokensEpoch={tokensEpoch} />
       </div>
 
       <PrizeTablesPanel
+        key={tokensEpoch}
         prizeTables={data?.prizeTables ?? null}
         vaultAssets={data?.vaultAssets ?? []}
         prices={

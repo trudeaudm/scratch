@@ -48,38 +48,85 @@ type DexPairHit = {
   pairAddress: string;
 };
 
+export type DexPairOption = {
+  chainId: string;
+  pairAddress: `0x${string}`;
+  label: string;
+  liquidityUsd: number;
+  priceUsd: number | null;
+  dexId: string;
+};
+
+type DexScreenerPairRow = {
+  priceUsd?: string;
+  liquidity?: { usd?: number };
+  pairAddress?: string;
+  chainId?: string;
+  dexId?: string;
+  baseToken?: { symbol?: string; address?: string };
+  quoteToken?: { symbol?: string; address?: string };
+};
+
+/**
+ * Top DexScreener pairs for a token (sorted by liquidity, highest first).
+ */
+export async function fetchTokenDexPairs(
+  tokenAddress: Address,
+  limit = 8,
+): Promise<DexPairOption[]> {
+  if (tokenAddress === zeroAddress) return [];
+  const url = `https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`;
+  const res = await fetch(url);
+  if (!res.ok) return [];
+  const data = (await res.json()) as { pairs?: DexScreenerPairRow[] | null };
+  const rows = [...(data.pairs ?? [])]
+    .map((p) => {
+      const liq = Number(p.liquidity?.usd ?? 0);
+      const price = Number(p.priceUsd);
+      const pairAddress = (p.pairAddress ?? "") as `0x${string}`;
+      const chainId = p.chainId ?? "";
+      if (!pairAddress || !chainId || !Number.isFinite(liq)) return null;
+      const base = p.baseToken?.symbol ?? "?";
+      const quote = p.quoteToken?.symbol ?? "?";
+      return {
+        chainId,
+        pairAddress,
+        label: `${base}/${quote} · ${p.dexId ?? "dex"} · $${Math.round(liq).toLocaleString()} liq`,
+        liquidityUsd: liq,
+        priceUsd: Number.isFinite(price) && price > 0 ? price : null,
+        dexId: p.dexId ?? "",
+      } satisfies DexPairOption;
+    })
+    .filter((x): x is DexPairOption => x !== null)
+    .sort((a, b) => b.liquidityUsd - a.liquidityUsd);
+
+  const seen = new Set<string>();
+  const out: DexPairOption[] = [];
+  for (const row of rows) {
+    const key = `${row.chainId}:${row.pairAddress.toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(row);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
 /**
  * Best DexScreener pair for a token with liquidity above the dashboard floor.
  */
 export async function fetchTokenDexPrice(tokenAddress: Address): Promise<DexPairHit | null> {
-  if (tokenAddress === zeroAddress) return null;
-  const url = `https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`;
-  const res = await fetch(url);
-  if (!res.ok) return null;
-  const data = (await res.json()) as {
-    pairs?: {
-      priceUsd?: string;
-      liquidity?: { usd?: number };
-      pairAddress?: string;
-      chainId?: string;
-    }[] | null;
-  };
-  const pairs = data.pairs ?? [];
-  let best: DexPairHit | null = null;
+  const pairs = await fetchTokenDexPairs(tokenAddress, 12);
   for (const p of pairs) {
-    const price = Number(p.priceUsd);
-    const liq = Number(p.liquidity?.usd ?? 0);
-    if (!Number.isFinite(price) || price <= 0) continue;
-    if (liq < DEX_MIN_LIQUIDITY_USD) continue;
-    if (!best || liq > best.liquidityUsd) {
-      best = {
-        priceUsd: price,
-        liquidityUsd: liq,
-        pairAddress: p.pairAddress ?? "",
-      };
-    }
+    if (p.liquidityUsd < DEX_MIN_LIQUIDITY_USD) continue;
+    if (p.priceUsd == null || p.priceUsd <= 0) continue;
+    return {
+      priceUsd: p.priceUsd,
+      liquidityUsd: p.liquidityUsd,
+      pairAddress: p.pairAddress,
+    };
   }
-  return best;
+  return null;
 }
 
 async function fetchPinnedPair(pair: DexPair): Promise<TokenUnitPrice | null> {
