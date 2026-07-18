@@ -138,6 +138,20 @@ const ABI_STAKING = [
   },
   {
     type: 'function',
+    name: 'emissionRate',
+    inputs: [],
+    outputs: [{ type: 'uint256' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'totalStaked',
+    inputs: [],
+    outputs: [{ type: 'uint256' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
     name: 'ticketsOf',
     inputs: [{ name: 'user', type: 'address' }],
     outputs: [{ type: 'uint256' }],
@@ -155,6 +169,10 @@ const ABI_STAKING = [
     stateMutability: 'view',
   },
 ];
+
+const EVENT_TRANSFER = parseAbiItem(
+  'event Transfer(address indexed from, address indexed to, uint256 value)',
+);
 
 const ABI_PRIZE_VAULT = [
   {
@@ -371,8 +389,44 @@ function formatCountdown(totalSec) {
   return `${h}:${m}:${sec}`;
 }
 
+function formatScratchWhole(amount) {
+  const n = Number(formatUnits(amount ?? 0n, 18));
+  if (!Number.isFinite(n)) return '0';
+  return Math.round(n).toLocaleString('en-US');
+}
+
+function minStakePretty() {
+  return Number(formatUnits(state.minStake, 18)).toLocaleString('en-US', {
+    maximumFractionDigits: 0,
+  });
+}
+
 function ticketCount(raw) {
   return Number(raw / CONFIG.ticketCost);
+}
+
+/** Eligible for staked-tier accrual (same rule as StakingVault). */
+function isStakeEligible(staked = state.userStaked) {
+  return staked >= state.minStake && staked !== 0n;
+}
+
+/**
+ * Seconds until the next whole staked ticket at the user's current share of emissions.
+ * remaining = 1e18 − fractional(pending+banked); rate = emissionRate × stake / totalStaked.
+ */
+function computeStakeNextTicketSec() {
+  const staked = state.userStaked ?? 0n;
+  const total = state.totalStaked ?? 0n;
+  const emission = state.emissionRate ?? 0n;
+  if (!isStakeEligible(staked) || total === 0n || emission === 0n) return null;
+
+  const tickets = state.liveTickets.prem ?? 0n;
+  const frac = tickets % CONFIG.ticketCost;
+  const remaining = CONFIG.ticketCost - frac;
+  const userRate = (emission * staked) / total;
+  if (userRate === 0n) return null;
+
+  return Number((remaining + userRate - 1n) / userRate);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -388,6 +442,10 @@ const state = {
   pendingRequestId: null,
   rescueDelay: 24n * 60n * 60n,
   minStake: 1_000_000n * 10n ** 18n,
+  emissionRate: 0n,
+  totalStaked: 0n,
+  userStaked: 0n,
+  scratchBalance: 0n,
   prices: {
     scratchUsd: null,
     ethUsd: null,
@@ -402,8 +460,10 @@ const state = {
   refreshTimer: null,
   reassureTimer: null,
   eventUnwatch: null,
+  transferUnwatch: null,
   expirySec: 0,
   userExpiry: 0n,
+  _stakeNextSecs: null,
   session: {
     phase: PHASE.IDLE,
     requestId: null,
@@ -812,7 +872,7 @@ async function refreshMinStake() {
     });
     state.minStake = min;
     const human = formatUnits(min, 18);
-    const pretty = Number(human).toLocaleString('en-US', { maximumFractionDigits: 0 });
+    const pretty = minStakePretty();
 
     document.querySelectorAll('.usd-live[data-scratch-amount]').forEach((el) => {
       el.dataset.scratchAmount = human;
@@ -832,6 +892,9 @@ async function refreshMinStake() {
     }
 
     fillUsdLive();
+    if (state.account && !stageBusy() && activeTierTickets() <= 0) {
+      renderEmptyStageNote();
+    }
   } catch {
     /* keep previous */
   }
@@ -1024,9 +1087,7 @@ function renderTier() {
   setText($('cntStd'), String(t.std));
   setText($('cntPrem'), String(t.prem));
 
-  const minPretty = Number(formatUnits(state.minStake, 18)).toLocaleString('en-US', {
-    maximumFractionDigits: 0,
-  });
+  const minPretty = minStakePretty();
   const human = formatUnits(state.minStake, 18);
   const tierNote = $('tierNote');
   if (tierNote && !busy) {
@@ -1061,7 +1122,76 @@ function renderTier() {
   if (promptEl) {
     promptEl.textContent = locked ? 'No tickets left on this tier' : 'Choose your free scratch';
   }
+  if (locked) renderEmptyStageNote();
+  else if (lockedNote) lockedNote.innerHTML = '';
   updateScratchButtons();
+}
+
+function renderEmptyStageNote() {
+  const lockedNote = $('lockedNote');
+  if (!lockedNote) return;
+  const minPretty = minStakePretty();
+
+  if (state.mode === 'demo') {
+    lockedNote.innerHTML =
+      'Out of demo tickets on this tier. Use <b>Demo: reset</b> after a reveal, or switch tiers.';
+    state._stakeNextSecs = null;
+    return;
+  }
+
+  if (state.tier === 'std') {
+    state._stakeNextSecs = null;
+    if (state.scratchBalance >= state.minStake) {
+      lockedNote.textContent = `Holder tickets drop daily to wallets holding ${minPretty}+ SCRATCH.`;
+    } else {
+      lockedNote.textContent = `Hold ${minPretty}+ SCRATCH to receive the daily drop.`;
+    }
+    return;
+  }
+
+  // Staked tier — countdown only when the user is actually accruing.
+  if (!isStakeEligible()) {
+    state._stakeNextSecs = null;
+    let msg = `Stake ${minPretty}+ SCRATCH to start earning tickets`;
+    if (state.scratchBalance >= state.minStake) {
+      msg += " — you're holding enough — stake it to start the clock";
+    }
+    lockedNote.textContent = msg;
+    return;
+  }
+
+  const sec = computeStakeNextTicketSec();
+  state._stakeNextSecs = sec;
+  if (sec == null) {
+    lockedNote.textContent = `Stake ${minPretty}+ SCRATCH to start earning tickets`;
+    return;
+  }
+  lockedNote.innerHTML = `Out of tickets on this tier. Next ticket accrues in <b id="accrueTimer">${formatCountdown(sec)}</b> — or stake more to earn faster.`;
+  setText($('nextTicket'), formatCountdown(sec));
+}
+
+function updateStakeFormBalances() {
+  const walletEl = $('stakeWalletBal');
+  const stakedEl = $('withdrawStakedBal');
+  if (!state.account) {
+    if (walletEl) walletEl.textContent = 'Wallet: —';
+    if (stakedEl) stakedEl.textContent = 'Staked: —';
+    return;
+  }
+  if (walletEl) {
+    walletEl.textContent = `Wallet: ${formatScratchWhole(state.scratchBalance)} SCRATCH`;
+  }
+  if (stakedEl) {
+    stakedEl.textContent = `Staked: ${formatScratchWhole(state.userStaked)} SCRATCH`;
+  }
+}
+
+function fillMaxAmount(inputId, amount) {
+  const input = $(inputId);
+  if (!input || amount == null) return;
+  // Trim trailing zeros from full-precision units for a clean MAX fill.
+  const raw = formatUnits(amount, 18);
+  input.value = raw.replace(/(\.\d*?[1-9])0+$/, '$1').replace(/\.0+$/, '');
 }
 
 function updateScratchButtons() {
@@ -1404,7 +1534,9 @@ async function connectWallet() {
     if (state.mode === 'demo') setMode('live');
     await refreshWalletPanel({ skipStage: true });
     updateScratchButtons();
+    watchScratchTransfers();
     await rehydratePendingSession();
+    if (!stageBusy()) renderTier();
   } catch (err) {
     const msg = err?.shortMessage || err?.message || String(err);
     if (btn) btn.textContent = 'Connect';
@@ -1434,13 +1566,19 @@ function disconnectOrCopy() {
   } else {
     state.account = null;
     state.walletClient = null;
+    state.userStaked = 0n;
+    state.scratchBalance = 0n;
+    state._stakeNextSecs = null;
+    stopScratchTransferWatch();
     if (btn) {
       btn.textContent = 'Connect';
       delete btn.dataset.connected;
     }
     const panel = $('walletPanel');
     if (panel) panel.hidden = true;
+    updateStakeFormBalances();
     updateScratchButtons();
+    if (!stageBusy()) renderTier();
   }
 }
 
@@ -1448,42 +1586,67 @@ async function refreshWalletPanel(opts = {}) {
   const panel = $('walletPanel');
   if (!state.account) {
     if (panel) panel.hidden = true;
+    state.userStaked = 0n;
+    state.scratchBalance = 0n;
+    state._stakeNextSecs = null;
+    updateStakeFormBalances();
     return;
   }
   try {
-    const [user, stdTickets, premTickets, expiry] = await Promise.all([
-      publicClient.readContract({
-        address: addr.staking,
-        abi: ABI_STAKING,
-        functionName: 'users',
-        args: [state.account],
-      }),
-      publicClient.readContract({
-        address: addr.standard,
-        abi: ABI_STANDARD,
-        functionName: 'ticketsOf',
-        args: [state.account],
-      }),
-      publicClient.readContract({
-        address: addr.staking,
-        abi: ABI_STAKING,
-        functionName: 'ticketsOf',
-        args: [state.account],
-      }),
-      publicClient.readContract({
-        address: addr.standard,
-        abi: ABI_STANDARD,
-        functionName: 'expiryOf',
-        args: [state.account],
-      }),
-    ]);
+    const [user, stdTickets, premTickets, expiry, scratchBal, emissionRate, totalStaked] =
+      await Promise.all([
+        publicClient.readContract({
+          address: addr.staking,
+          abi: ABI_STAKING,
+          functionName: 'users',
+          args: [state.account],
+        }),
+        publicClient.readContract({
+          address: addr.standard,
+          abi: ABI_STANDARD,
+          functionName: 'ticketsOf',
+          args: [state.account],
+        }),
+        publicClient.readContract({
+          address: addr.staking,
+          abi: ABI_STAKING,
+          functionName: 'ticketsOf',
+          args: [state.account],
+        }),
+        publicClient.readContract({
+          address: addr.standard,
+          abi: ABI_STANDARD,
+          functionName: 'expiryOf',
+          args: [state.account],
+        }),
+        publicClient.readContract({
+          address: addr.scratch,
+          abi: ABI_ERC20,
+          functionName: 'balanceOf',
+          args: [state.account],
+        }),
+        publicClient.readContract({
+          address: addr.staking,
+          abi: ABI_STAKING,
+          functionName: 'emissionRate',
+        }),
+        publicClient.readContract({
+          address: addr.staking,
+          abi: ABI_STAKING,
+          functionName: 'totalStaked',
+        }),
+      ]);
 
     state.liveTickets.std = stdTickets;
     state.liveTickets.prem = premTickets;
     state.userExpiry = BigInt(expiry);
+    state.emissionRate = emissionRate;
+    state.totalStaked = totalStaked;
+    state.scratchBalance = scratchBal;
 
     const staked = user.staked ?? user[0];
     const banked = user.banked ?? user[2];
+    state.userStaked = staked;
     const now = Math.floor(Date.now() / 1000);
     const expSec = Number(expiry);
     const remain = expSec > now ? expSec - now : 0;
@@ -1495,6 +1658,7 @@ async function refreshWalletPanel(opts = {}) {
     setText($('walletStdTickets'), String(ticketCount(stdTickets)));
     setText($('walletPremTickets'), String(ticketCount(premTickets)));
     setText($('walletExpiry'), remain > 0 ? formatCountdown(remain) : '—');
+    updateStakeFormBalances();
 
     // Reconcile ticket balances from chain; optimistic delta cleared once pending/settled.
     if (state.session.phase === PHASE.PENDING || state.session.phase === PHASE.READY || state.session.phase === PHASE.REVEALED) {
@@ -1506,10 +1670,49 @@ async function refreshWalletPanel(opts = {}) {
     if (!opts.skipStage && !stageBusy()) renderTier();
     else if (!opts.skipStage && stageBusy()) {
       // counts already updated above
+    } else if (opts.skipStage && !stageBusy()) {
+      // Keep empty-stage copy / countdown in sync after stake/withdraw without resetting stage UI.
+      if (activeTierTickets() <= 0) renderEmptyStageNote();
+      else state._stakeNextSecs = isStakeEligible() ? computeStakeNextTicketSec() : null;
     }
   } catch (e) {
     const status = $('scratchStatus');
     if (status) status.textContent = e instanceof Error ? e.message : 'Wallet read failed';
+  }
+}
+
+function stopScratchTransferWatch() {
+  try {
+    state.transferUnwatch?.();
+  } catch {
+    /* ignore */
+  }
+  state.transferUnwatch = null;
+}
+
+function watchScratchTransfers() {
+  stopScratchTransferWatch();
+  if (!state.account) return;
+  try {
+    state.transferUnwatch = publicClient.watchContractEvent({
+      address: addr.scratch,
+      abi: [EVENT_TRANSFER],
+      eventName: 'Transfer',
+      onLogs: (logs) => {
+        const me = state.account?.toLowerCase();
+        if (!me) return;
+        for (const log of logs) {
+          const from = log.args?.from?.toLowerCase?.() || '';
+          const to = log.args?.to?.toLowerCase?.() || '';
+          if (from === me || to === me) {
+            refreshWalletPanel({ skipStage: stageBusy() });
+            break;
+          }
+        }
+      },
+    });
+  } catch (err) {
+    console.warn('transfer watch', err);
   }
 }
 
@@ -2060,7 +2263,8 @@ async function doStake() {
     setStatus(status, 'Staking…');
     await publicClient.waitForTransactionReceipt({ hash });
     setStatus(status, 'Staked ✓');
-    input.value = '';
+    if (input) input.value = '';
+    if (pathInput) pathInput.value = '';
     await refreshWalletPanel();
   } catch (err) {
     setStatus(status, err?.shortMessage || err?.message || String(err));
@@ -2228,6 +2432,14 @@ function wireUi() {
     doStake();
   });
   $('withdrawBtn')?.addEventListener('click', doWithdraw);
+  $('stakeMaxBtn')?.addEventListener('click', () => {
+    fillMaxAmount('stakeAmount', state.scratchBalance);
+    const path = $('stakeAmountPath');
+    if (path) fillMaxAmount('stakeAmountPath', state.scratchBalance);
+  });
+  $('withdrawMaxBtn')?.addEventListener('click', () => {
+    fillMaxAmount('withdrawAmount', state.userStaked);
+  });
 
   $('scratchBtnStd')?.addEventListener('click', () => {
     state.tier = 'std';
@@ -2285,11 +2497,20 @@ function wireUi() {
       if (!accs?.length) {
         state.account = null;
         state.walletClient = null;
+        state.userStaked = 0n;
+        state.scratchBalance = 0n;
+        state._stakeNextSecs = null;
+        stopScratchTransferWatch();
         const btn = $('connectBtn');
         if (btn) {
           btn.textContent = 'Connect';
           delete btn.dataset.connected;
         }
+        const panel = $('walletPanel');
+        if (panel) panel.hidden = true;
+        updateStakeFormBalances();
+        updateScratchButtons();
+        if (!stageBusy()) renderTier();
       } else {
         state.account = getAddress(accs[0]);
         state.walletClient = createWalletClient({
@@ -2302,6 +2523,7 @@ function wireUi() {
           btn.textContent = shortAddr(state.account);
           btn.dataset.connected = '1';
         }
+        watchScratchTransfers();
         refreshWalletPanel();
       }
     });
@@ -2311,23 +2533,34 @@ function wireUi() {
     });
   }
 
-  // Expiry / next-ticket countdown
+  // Holder expiry + staked next-ticket countdown (per-tier empty stage).
   setInterval(() => {
-    if (state.userExpiry > 0n && state.account && state.mode === 'live') {
-      const now = Math.floor(Date.now() / 1000);
-      const remain = Math.max(0, Number(state.userExpiry) - now);
-      state.expirySec = remain;
-      const str = formatCountdown(remain);
-      setText($('nextTicket'), remain > 0 ? str : '—');
-      setText($('accrueTimer'), remain > 0 ? str : '—');
-      setText($('walletExpiry'), str);
-    } else if (state.mode === 'demo') {
-      // soft demo timer
+    if (state.mode === 'demo') {
       if (!state._demoSecs) state._demoSecs = 2 * 3600 + 12 * 60 + 44;
       state._demoSecs = state._demoSecs > 0 ? state._demoSecs - 1 : 86400;
       const str = formatCountdown(state._demoSecs);
       setText($('nextTicket'), str);
       setText($('accrueTimer'), str);
+      return;
+    }
+
+    if (state.account && state.userExpiry > 0n) {
+      const now = Math.floor(Date.now() / 1000);
+      const remain = Math.max(0, Number(state.userExpiry) - now);
+      state.expirySec = remain;
+      setText($('walletExpiry'), remain > 0 ? formatCountdown(remain) : '—');
+    }
+
+    if (
+      state.account &&
+      state.tier === 'prem' &&
+      state._stakeNextSecs != null &&
+      isStakeEligible()
+    ) {
+      state._stakeNextSecs = Math.max(0, state._stakeNextSecs - 1);
+      const str = formatCountdown(state._stakeNextSecs);
+      setText($('accrueTimer'), str);
+      setText($('nextTicket'), str);
     }
   }, 1000);
 }
