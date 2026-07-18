@@ -396,8 +396,20 @@
   .claim-row{margin-top:14px;display:none}
   .claim-row.show{display:block;animation:rise .35s ease}
   @keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
-  .claim-row .btn{width:100%;background:#21CE99;color:#0B1015}
-  .claim-row .btn:hover{background:#1BB786}
+  .claim-actions{display:flex;flex-wrap:wrap;gap:8px}
+  .claim-actions .btn{flex:1 1 140px;min-height:44px;background:#21CE99;color:#0B1015}
+  .claim-actions .btn:hover{background:#1BB786}
+  .claim-actions .btn.share-x{
+    background:#0B1015;color:#E8EDF0;border:1px solid #3A4A55;
+  }
+  .claim-actions .btn.share-x:hover{background:#151C24;border-color:#21CE99;color:#fff}
+  .claim-row .btn.save-win{
+    width:100%;margin-top:8px;min-height:36px;padding:8px 12px;
+    font-size:12.5px;font-weight:600;background:transparent;color:#8FA3B0;
+    border:1px solid #2A3640;
+  }
+  .claim-row .btn.save-win:hover{color:#E8EDF0;border-color:#21CE99}
+  .claim-row .btn[hidden],.claim-actions .btn[hidden]{display:none!important}
   .next-wait{
     display:none;font-size:13px;line-height:1.5;color:#8FA3B0;text-align:center;padding:4px 2px;
   }
@@ -651,7 +663,11 @@
         </div>
         <p class="session-reassure" id="sessionReassure">Reveals usually land in seconds — your ticket is safe either way.</p>
         <div class="claim-row" id="claimRow">
-          <button class="btn" id="claimBtn">Scratch another</button>
+          <div class="claim-actions" id="claimActions">
+            <button class="btn" id="claimBtn" type="button">Scratch another</button>
+            <button class="btn share-x" id="shareXBtn" type="button" hidden>Share on 𝕏</button>
+          </div>
+          <button class="btn save-win" id="saveWinCardBtn" type="button" hidden>Save win card</button>
           <div class="next-wait" id="nextWaitNote"></div>
         </div>
       </div>
@@ -810,6 +826,6 @@
 <div class="toast-host" id="toastHost" aria-live="polite" aria-relevant="additions"></div>
 
 <!-- Bump ?v= to the short commit hash on every site/ ship so Render/CDN cannot serve stale app.js -->
-<script type="module" src="./app.js?v=mint-og-1"></script>
+<script type="module" src="./app.js?v=share-win-1"></script>
 </body>
 </html>

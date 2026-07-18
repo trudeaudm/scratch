@@ -3,7 +3,7 @@
  * Wire from index.html: <script type="module" src="./app.js?v=…"></script>
  * Bump ASSET_VERSION (and the index.html ?v=) on every site/ commit.
  */
-export const ASSET_VERSION = 'mint-og-1';
+export const ASSET_VERSION = 'share-win-1';
 
 import {
   createPublicClient,
@@ -489,6 +489,8 @@ const state = {
   walletClient: null,
   tier: 'std', // 'std' | 'prem'
   currentWin: false,
+  /** @type {{ requestId: string, txHash: string|null, sharePrize: string, cardPrize: string, tierKey: string }|null} */
+  lastWin: null,
   pendingRequestId: null,
   rescueDelay: 24n * 60n * 60n,
   minStake: 1_000_000n * 10n ** 18n,
@@ -1460,11 +1462,17 @@ function renderPostRevealAction() {
   const claimRow = $('claimRow');
   const btn = $('claimBtn');
   const wait = $('nextWaitNote');
+  const shareBtn = $('shareXBtn');
+  const saveBtn = $('saveWinCardBtn');
   if (!claimRow || sessionPhase() !== PHASE.REVEALED) return;
 
   claimRow.classList.add('show');
   // Remaining on the tier we just scratched (optimistic spend still applied if chain is stale).
   const left = spendableOnTier(state.session.tierKey || state.tier);
+  const showShare = !!(state.currentWin && state.lastWin);
+
+  if (shareBtn) shareBtn.hidden = !showShare;
+  if (saveBtn) saveBtn.hidden = !showShare;
 
   if (left >= 1) {
     if (btn) {
@@ -1487,6 +1495,217 @@ function renderPostRevealAction() {
     wait.classList.remove('show');
     wait.textContent = '';
   }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Share win → X + win-card PNG                                                */
+/* -------------------------------------------------------------------------- */
+
+function buildWinShareText(win) {
+  const prize = win.sharePrize || '+?';
+  const lines = [
+    `scratched a free ticket on @scratch4663 and hit ${prize} 🎟️`,
+  ];
+  if (win.txHash) {
+    lines.push(`receipt: ${CONFIG.explorer}/tx/${win.txHash}`);
+  }
+  lines.push('scratch4663.xyz');
+  let text = lines.join('\n');
+  if (text.length > 270) {
+    // Drop emoji first, then shorten receipt host if somehow still long.
+    text = text.replace(' 🎟️', '');
+  }
+  return text.slice(0, 280);
+}
+
+function shareWinOnX() {
+  const win = state.lastWin;
+  if (!win || !state.currentWin) return;
+  const text = buildWinShareText(win);
+  const url = `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`;
+  window.open(url, '_blank', 'noopener,noreferrer');
+}
+
+function isLikelyWalletWebView() {
+  const ua = navigator.userAgent || '';
+  return /MetaMaskMobile|CoinbaseWallet|TrustWallet|Rainbow|StatusIM|WebView|FBAN|FBAV|Instagram|Line\/|MicroMessenger/i.test(
+    ua,
+  );
+}
+
+function triggerPngDownload(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.rel = 'noopener';
+  const canDownload =
+    typeof a.download === 'string' && a.download !== '' && !isLikelyWalletWebView();
+  if (canDownload) {
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } else {
+    const opened = window.open(url, '_blank', 'noopener,noreferrer');
+    if (!opened) {
+      // Last resort: navigate current tab (rare popup-blocked wallets).
+      location.href = url;
+      return;
+    }
+  }
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
+function drawLetterspaced(ctx, text, x, y, tracking, align = 'left') {
+  const chars = [...String(text)];
+  if (!chars.length) return;
+  const widths = chars.map((c) => ctx.measureText(c).width);
+  const total =
+    widths.reduce((a, b) => a + b, 0) + tracking * Math.max(0, chars.length - 1);
+  let cx = x;
+  if (align === 'right') cx = x - total;
+  else if (align === 'center') cx = x - total / 2;
+  for (let i = 0; i < chars.length; i++) {
+    ctx.fillText(chars[i], cx, y);
+    cx += widths[i] + tracking;
+  }
+}
+
+function roundRectPath(ctx, x, y, w, h, r) {
+  const rr = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rr);
+  ctx.arcTo(x + w, y + h, x, y + h, rr);
+  ctx.arcTo(x, y + h, x, y, rr);
+  ctx.arcTo(x, y, x + w, y, rr);
+  ctx.closePath();
+}
+
+function renderWinCardCanvas(win) {
+  const W = 1200;
+  const H = 675;
+  const canvas = document.createElement('canvas');
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+
+  ctx.fillStyle = '#0B1015';
+  ctx.fillRect(0, 0, W, H);
+
+  // Soft vignette
+  const vig = ctx.createRadialGradient(W / 2, H / 2, 80, W / 2, H / 2, 520);
+  vig.addColorStop(0, 'rgba(33,206,153,0.07)');
+  vig.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = vig;
+  ctx.fillRect(0, 0, W, H);
+
+  const cardX = 90;
+  const cardY = 70;
+  const cardW = W - 180;
+  const cardH = H - 160;
+  roundRectPath(ctx, cardX, cardY, cardW, cardH, 28);
+  ctx.fillStyle = '#10161C';
+  ctx.fill();
+  ctx.strokeStyle = '#22303A';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Certificate frame
+  ctx.strokeStyle = '#21CE99';
+  ctx.lineWidth = 3;
+  roundRectPath(ctx, cardX + 28, cardY + 28, cardW - 56, cardH - 56, 10);
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(33,206,153,0.45)';
+  ctx.lineWidth = 1.5;
+  roundRectPath(ctx, cardX + 40, cardY + 40, cardW - 80, cardH - 80, 6);
+  ctx.stroke();
+
+  // Gold confetti around card edges (outside + near rim)
+  const golds = ['#C9A227', '#EAD37E', '#F4E7B0', '#8F6E14', '#F2C94C'];
+  for (let i = 0; i < 70; i++) {
+    const edge = i % 4;
+    let x;
+    let y;
+    if (edge === 0) {
+      x = cardX + Math.random() * cardW;
+      y = cardY - 8 + Math.random() * 36;
+    } else if (edge === 1) {
+      x = cardX + Math.random() * cardW;
+      y = cardY + cardH - 28 + Math.random() * 40;
+    } else if (edge === 2) {
+      x = cardX - 10 + Math.random() * 40;
+      y = cardY + Math.random() * cardH;
+    } else {
+      x = cardX + cardW - 30 + Math.random() * 40;
+      y = cardY + Math.random() * cardH;
+    }
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(Math.random() * Math.PI);
+    ctx.fillStyle = golds[i % golds.length];
+    ctx.fillRect(-3 - Math.random() * 3, -5 - Math.random() * 4, 5 + Math.random() * 5, 8 + Math.random() * 6);
+    ctx.restore();
+  }
+
+  const reqLabel = win.requestId ? `REQUEST #${win.requestId}` : 'REQUEST';
+  const prem = win.tierKey === 'prem';
+  const tierLabel = prem ? 'PREMIUM' : 'STANDARD';
+
+  ctx.font = '700 22px Inter, system-ui, sans-serif';
+  ctx.fillStyle = '#7E93A0';
+  drawLetterspaced(ctx, reqLabel, cardX + 64, cardY + 88, 4, 'left');
+  ctx.fillStyle = prem ? '#C9A227' : '#21CE99';
+  drawLetterspaced(ctx, tierLabel, cardX + cardW - 64, cardY + 88, 5, 'right');
+
+  ctx.fillStyle = '#21CE99';
+  ctx.font = '800 72px Inter, system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const prize = win.cardPrize || '+?';
+  // Shrink slightly if the prize string is very long
+  let prizeSize = 72;
+  while (prizeSize > 40 && ctx.measureText(prize).width > cardW - 120) {
+    prizeSize -= 4;
+    ctx.font = `800 ${prizeSize}px Inter, system-ui, sans-serif`;
+  }
+  ctx.fillText(prize, W / 2, H / 2 - 8);
+
+  ctx.fillStyle = '#8FA3B0';
+  ctx.font = '500 26px Inter, system-ui, sans-serif';
+  ctx.fillText('Paid to your wallet', W / 2, H / 2 + 52);
+
+  ctx.fillStyle = '#7E93A0';
+  ctx.font = '600 20px Inter, system-ui, sans-serif';
+  ctx.fillText('scratch4663.xyz', W / 2, cardY + cardH + 48);
+
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  return canvas;
+}
+
+async function saveWinCardPng() {
+  const win = state.lastWin;
+  if (!win || !state.currentWin) return;
+  try {
+    if (document.fonts?.ready) await document.fonts.ready;
+  } catch {
+    /* draw with fallback stack */
+  }
+  const canvas = renderWinCardCanvas(win);
+  if (!canvas) return;
+  const n = win.requestId || 'win';
+  const filename = `scratch-win-${n}.png`;
+  await new Promise((resolve) => {
+    canvas.toBlob(
+      (blob) => {
+        if (blob) triggerPngDownload(blob, filename);
+        resolve();
+      },
+      'image/png',
+    );
+  });
 }
 
 function updateStakeFormBalances() {
@@ -2137,6 +2356,8 @@ function resetSessionToIdle(opts = {}) {
   state.session.ticketsAtPick = null;
   state.session.requestedAt = 0n;
   state.pendingRequestId = null;
+  state.lastWin = null;
+  state.currentWin = false;
   hidePrintingOverlay();
   $('scratchCardEl')?.classList.remove('ready-pop');
   $('scratchFrame')?.classList.remove('foil-shake');
@@ -2155,6 +2376,10 @@ function resetSessionToIdle(opts = {}) {
     claimBtn.hidden = false;
     claimBtn.disabled = false;
   }
+  const shareBtn = $('shareXBtn');
+  const saveBtn = $('saveWinCardBtn');
+  if (shareBtn) shareBtn.hidden = true;
+  if (saveBtn) saveBtn.hidden = true;
   clearStageFooter();
   setReassure(false);
   show($('pendingRescue'), false);
@@ -2242,7 +2467,7 @@ function enterPendingUI(requestId, requestedAt) {
   }, 30_000);
 }
 
-async function enterReadyUI(asset, amount) {
+async function enterReadyUI(asset, amount, opts = {}) {
   state.session.phase = PHASE.READY;
   clearSessionTimers();
   const panel = $('panel');
@@ -2266,9 +2491,11 @@ async function enterReadyUI(asset, amount) {
     }
     setText($('prizeLbl'), 'Same time tomorrow');
     state.currentWin = false;
+    state.lastWin = null;
   } else {
     const meta = await tokenMeta(asset);
-    const label = `+${formatHuman(amount, meta.decimals)} ${meta.symbol}`;
+    const human = formatHuman(amount, meta.decimals);
+    const label = `+${human} ${meta.symbol}`;
     const amtEl = $('prizeAmt');
     if (amtEl) {
       amtEl.textContent = label;
@@ -2276,6 +2503,17 @@ async function enterReadyUI(asset, amount) {
     }
     setText($('prizeLbl'), 'Paid to your wallet');
     state.currentWin = true;
+    const req =
+      opts.requestId ?? state.session.requestId ?? state.pendingRequestId;
+    const sharePrize =
+      meta.symbol === 'SCRATCH' ? `+${human} $SCRATCH` : `+${human} ${meta.symbol}`;
+    state.lastWin = {
+      requestId: req != null ? req.toString() : '',
+      txHash: opts.txHash || null,
+      sharePrize,
+      cardPrize: `+${human} ${meta.symbol}`,
+      tierKey: state.session.tierKey || state.tier,
+    };
   }
 
   const claimBtn = $('claimBtn');
@@ -2283,6 +2521,10 @@ async function enterReadyUI(asset, amount) {
     claimBtn.hidden = true;
     claimBtn.disabled = false;
   }
+  const shareBtn = $('shareXBtn');
+  const saveBtn = $('saveWinCardBtn');
+  if (shareBtn) shareBtn.hidden = true;
+  if (saveBtn) saveBtn.hidden = true;
   const wait = $('nextWaitNote');
   if (wait) {
     wait.classList.remove('show');
@@ -2313,7 +2555,7 @@ function canScratchInput() {
   return state.session.phase === PHASE.READY && !revealed;
 }
 
-async function applySettledPrize(asset, amount) {
+async function applySettledPrize(asset, amount, opts = {}) {
   if (
     state.session.phase !== PHASE.PENDING &&
     state.session.phase !== PHASE.PICKED &&
@@ -2327,7 +2569,7 @@ async function applySettledPrize(asset, amount) {
   } catch {
     /* continue into ready UI */
   }
-  await enterReadyUI(asset, amount);
+  await enterReadyUI(asset, amount, opts);
 }
 
 async function pollRequest(requestId) {
@@ -2355,6 +2597,7 @@ async function pollRequest(requestId) {
         state.pollTimer = null;
         let asset = zeroAddress;
         let amount = 0n;
+        let txHash = null;
         const tip = await publicClient.getBlockNumber();
         const lookback = 900_000n;
         const from = tip > lookback ? tip - lookback : 0n;
@@ -2373,8 +2616,10 @@ async function pollRequest(requestId) {
               toBlock: start,
             });
             if (recent.length) {
-              asset = recent[recent.length - 1].args.asset;
-              amount = recent[recent.length - 1].args.amount;
+              const settled = recent[recent.length - 1];
+              asset = settled.args.asset;
+              amount = settled.args.amount;
+              txHash = settled.transactionHash || null;
               break;
             }
           } catch {
@@ -2383,7 +2628,7 @@ async function pollRequest(requestId) {
           if (clampedFrom <= from) break;
           start = clampedFrom - 1n;
         }
-        await applySettledPrize(asset, amount);
+        await applySettledPrize(asset, amount, { txHash, requestId });
         await refreshWalletPanel({ skipStage: true });
         return;
       }
@@ -2439,7 +2684,10 @@ async function pollRequest(requestId) {
               /* ignore */
             }
             state.eventUnwatch = null;
-            await applySettledPrize(log.args.asset, log.args.amount);
+            await applySettledPrize(log.args.asset, log.args.amount, {
+              txHash: log.transactionHash || null,
+              requestId: log.args.requestId ?? requestId,
+            });
             await refreshWalletPanel({ skipStage: true });
           }
         }
@@ -2851,6 +3099,11 @@ function wireUi() {
       this.textContent = 'Claim reward';
       this.disabled = false;
     }, 2600);
+  });
+
+  $('shareXBtn')?.addEventListener('click', () => shareWinOnX());
+  $('saveWinCardBtn')?.addEventListener('click', () => {
+    void saveWinCardPng();
   });
 
   const connectBtn = $('connectBtn');
