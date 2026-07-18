@@ -6,4 +6,5 @@ cd "$ROOT"
 if [[ ! -d node_modules ]]; then
   npm install --silent
 fi
-exec node run.mjs "$@"
+# Node's bundled CAs often miss corporate/OS trust-store roots; cast works, ethers needs this.
+exec node --use-system-ca run.mjs "$@"

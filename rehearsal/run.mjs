@@ -397,7 +397,7 @@ function startWatcher(env, state) {
     POLL_MS: "2000",
   };
   const fd = openSync(WATCHER_LOG, "a");
-  const child = spawn(process.execPath, [watchScript], {
+  const child = spawn(process.execPath, ["--use-system-ca", watchScript], {
     cwd: resolve(REPO_ROOT, "ops/entropy-operator"),
     env: childEnv,
     detached: true,
