@@ -73,10 +73,17 @@
   .wallet-grid .v{font-weight:700;font-variant-numeric:tabular-nums;margin-top:2px}
   .wallet-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
   .wallet-actions .btn{flex:1 1 140px;text-align:center;min-height:44px}
-  .stake-row,.withdraw-row{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+  .stake-row,.withdraw-row{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:flex-end}
+  .field-wrap{flex:1;min-width:140px;display:flex;flex-direction:column;gap:6px}
+  .field-meta{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:12px;color:var(--muted);padding:0 6px;line-height:1.3}
+  .field-meta .max-btn{
+    border:0;background:transparent;color:var(--green-dark);font:inherit;font-weight:800;
+    font-size:11px;letter-spacing:.06em;cursor:pointer;padding:0;min-height:auto;
+  }
+  .field-meta .max-btn:hover{text-decoration:underline}
   .stake-row input,.withdraw-row input{
-    flex:1;min-width:120px;border:1.5px solid var(--line);border-radius:100px;padding:11px 16px;
-    font-family:'Inter';font-size:14px;min-height:44px;
+    width:100%;border:1.5px solid var(--line);border-radius:100px;padding:11px 16px;
+    font-family:'Inter';font-size:14px;min-height:44px;box-sizing:border-box;
   }
   .stake-status,.scratch-status{font-size:12.5px;color:var(--muted);margin-top:8px;min-height:16px}
   .withdraw-warn{font-size:12.5px;color:#9B3B2E;font-weight:600;margin-top:8px;line-height:1.45}
@@ -85,6 +92,28 @@
     background:#FFF4D6;border:1px solid #EAD37E;font-size:13px;
   }
   .pending-rescue.show{display:block}
+  .scratch-panel.session-pending .scratch-card{
+    animation:panelShimmer 2.4s ease-in-out infinite;
+  }
+  @keyframes panelShimmer{
+    0%,100%{box-shadow:0 28px 60px -20px rgba(0,0,0,.7)}
+    50%{box-shadow:0 28px 60px -20px rgba(0,0,0,.7),0 0 28px rgba(33,206,153,.35)}
+  }
+  .stage.premium .scratch-panel.session-pending .scratch-card{
+    animation:panelShimmerGold 2.4s ease-in-out infinite;
+  }
+  @keyframes panelShimmerGold{
+    0%,100%{box-shadow:0 28px 60px -20px rgba(160,128,20,.25)}
+    50%{box-shadow:0 28px 60px -20px rgba(160,128,20,.25),0 0 28px rgba(201,162,39,.4)}
+  }
+  .session-note{
+    font-size:12.5px;font-weight:600;color:#9FB4A8;margin-top:12px;min-height:18px;
+  }
+  .session-note.cancel{color:#E8A0A0}
+  .session-reassure{
+    display:none;font-size:12px;color:#8FA3B0;margin-top:8px;line-height:1.45;text-align:center;
+  }
+  .session-reassure.show{display:block}
   .inv-block,.wins-block{margin-top:22px}
   .inv-block h4,.wins-block h4{font-size:13px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin-bottom:10px}
   .inv-row,.win-row{
@@ -422,12 +451,24 @@
       <button type="button" class="btn sm" id="rescueBtn" style="margin-top:8px;width:100%">Rescue (refund ticket)</button>
     </div>
     <div class="stake-row">
-      <input type="text" inputmode="decimal" id="stakeAmount" placeholder="Amount to stake" aria-label="Amount to stake">
+      <div class="field-wrap">
+        <div class="field-meta">
+          <span id="stakeWalletBal">Wallet: —</span>
+          <button type="button" class="max-btn" id="stakeMaxBtn">MAX</button>
+        </div>
+        <input type="text" inputmode="decimal" id="stakeAmount" placeholder="Amount to stake" aria-label="Amount to stake">
+      </div>
       <button type="button" class="btn sm" id="stakeBtn">Stake</button>
     </div>
     <div class="stake-status" id="stakeStatus"></div>
     <div class="withdraw-row">
-      <input type="text" inputmode="decimal" id="withdrawAmount" placeholder="Amount to withdraw" aria-label="Amount to withdraw">
+      <div class="field-wrap">
+        <div class="field-meta">
+          <span id="withdrawStakedBal">Staked: —</span>
+          <button type="button" class="max-btn" id="withdrawMaxBtn">MAX</button>
+        </div>
+        <input type="text" inputmode="decimal" id="withdrawAmount" placeholder="Amount to withdraw" aria-label="Amount to withdraw">
+      </div>
       <button type="button" class="btn ghost sm" id="withdrawBtn">Withdraw</button>
     </div>
     <div class="withdraw-warn" id="withdrawWarn"></div>
@@ -442,7 +483,8 @@
       <button class="card" aria-label="Pick card three"><span class="mark"><i></i></span></button>
     </div>
 
-    <div class="locked-note" id="lockedNote">Out of tickets on this tier. Next ticket accrues in <b id="accrueTimer">—</b> — or stake more to earn faster.</div>
+    <div class="locked-note" id="lockedNote"></div>
+    <div class="session-note" id="sessionNote"></div>
 
     <div class="scratch-panel" id="panel">
       <div class="scratch-card" id="scratchCardEl">
@@ -458,6 +500,7 @@
           <div class="sc-timer">Next ticket in <b id="nextTicket">—</b></div>
           <button class="again" id="againBtn" style="display:none">Demo: reset</button>
         </div>
+        <p class="session-reassure" id="sessionReassure">Reveals usually land in seconds — your ticket is safe either way.</p>
         <div class="claim-row" id="claimRow">
           <button class="btn" id="claimBtn">Paid to your wallet</button>
         </div>

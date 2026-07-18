@@ -248,6 +248,15 @@ const STATUS = { None: 0, Pending: 1, Settled: 2, Rescued: 3 };
 const TIER_STD = 0;
 const TIER_PREM = 1;
 
+/** Scratch stage session — owns fan/panel while ≠ IDLE. */
+const PHASE = {
+  IDLE: 'idle',
+  PICKED: 'picked',
+  PENDING: 'pending',
+  READY: 'ready',
+  REVEALED: 'revealed',
+};
+
 const DEMO_STORAGE_KEY = 'scratch_demo_tickets_v1';
 const SPCX_PAIR = {
   chainId: 'robinhood',
@@ -391,9 +400,54 @@ const state = {
   drawing: false,
   pollTimer: null,
   refreshTimer: null,
+  reassureTimer: null,
+  eventUnwatch: null,
   expirySec: 0,
   userExpiry: 0n,
+  session: {
+    phase: PHASE.IDLE,
+    requestId: null,
+    tier: TIER_STD,
+    tierKey: 'std',
+    startedAt: 0,
+    optimisticDelta: 0,
+    requestedAt: 0n,
+  },
 };
+
+function stageBusy() {
+  return state.session.phase !== PHASE.IDLE;
+}
+
+function clearSessionTimers() {
+  if (state.pollTimer) {
+    clearInterval(state.pollTimer);
+    state.pollTimer = null;
+  }
+  if (state.reassureTimer) {
+    clearTimeout(state.reassureTimer);
+    state.reassureTimer = null;
+  }
+  try {
+    state.eventUnwatch?.();
+  } catch {
+    /* ignore */
+  }
+  state.eventUnwatch = null;
+}
+
+function setSessionNote(msg, kind) {
+  const el = $('sessionNote');
+  if (!el) return;
+  el.textContent = msg || '';
+  el.classList.toggle('cancel', kind === 'cancel');
+}
+
+function setReassure(on) {
+  const el = $('sessionReassure');
+  if (!el) return;
+  el.classList.toggle('show', !!on);
+}
 
 const DEMO_PRIZES = {
   std: [
@@ -441,10 +495,13 @@ function activeTier() {
   if (state.mode === 'demo') {
     return { std: state.demoTickets.std, prem: state.demoTickets.prem };
   }
-  return {
-    std: ticketCount(state.liveTickets.std),
-    prem: ticketCount(state.liveTickets.prem),
-  };
+  let std = ticketCount(state.liveTickets.std);
+  let prem = ticketCount(state.liveTickets.prem);
+  if (state.session.optimisticDelta > 0) {
+    if (state.session.tierKey === 'std') std = Math.max(0, std - state.session.optimisticDelta);
+    else prem = Math.max(0, prem - state.session.optimisticDelta);
+  }
+  return { std, prem };
 }
 
 function activeTierTickets() {
@@ -917,7 +974,13 @@ function isDemo() {
 }
 
 function setMode(mode) {
-  state.mode = mode === 'demo' ? 'demo' : 'live';
+  const next = mode === 'demo' ? 'demo' : 'live';
+  if (next === 'demo' && stageBusy()) {
+    // Drop in-flight live session before entering demo
+    resetSessionToIdle({ keepNote: true });
+    setSessionNote('Switched to demo — live draw cancelled on this screen only (check chain if a tx already confirmed).');
+  }
+  state.mode = next;
   const note = $('demoNote');
   if (note) {
     if (state.mode === 'demo') {
@@ -951,15 +1014,12 @@ function renderTier() {
   const panel = $('panel');
   const promptEl = $('prompt');
   const lockedNote = $('lockedNote');
+  const busy = stageBusy() && state.mode === 'live';
 
   tabStd?.classList.toggle('active', state.tier === 'std');
   tabStd?.setAttribute('aria-selected', String(state.tier === 'std'));
   tabPrem?.classList.toggle('active', state.tier === 'prem');
   tabPrem?.setAttribute('aria-selected', String(state.tier === 'prem'));
-  stage?.classList.toggle('premium', state.tier === 'prem');
-  $('scratchCardEl')?.classList.toggle('premium', state.tier === 'prem');
-  const badge = $('premBadge');
-  if (badge) badge.style.display = state.tier === 'prem' ? 'inline' : 'none';
 
   setText($('cntStd'), String(t.std));
   setText($('cntPrem'), String(t.prem));
@@ -969,7 +1029,7 @@ function renderTier() {
   });
   const human = formatUnits(state.minStake, 18);
   const tierNote = $('tierNote');
-  if (tierNote) {
+  if (tierNote && !busy) {
     if (state.tier === 'std') {
       tierNote.innerHTML =
         'Holder (standard) tickets from grants · odds are live from the game contract · pays $SCRATCH &amp; USDG';
@@ -979,9 +1039,21 @@ function renderTier() {
     fillUsdLive();
   }
 
+  if (busy) {
+    updateScratchButtons();
+    return;
+  }
+
+  stage?.classList.toggle('premium', state.tier === 'prem');
+  $('scratchCardEl')?.classList.toggle('premium', state.tier === 'prem');
+  const badge = $('premBadge');
+  if (badge) badge.style.display = state.tier === 'prem' ? 'inline' : 'none';
+
   panel?.classList.remove('show');
+  panel?.classList.remove('session-pending');
   fan?.classList.remove('picked');
   $('claimRow')?.classList.remove('show');
+  setReassure(false);
 
   const locked = activeTierTickets() <= 0;
   fan?.classList.toggle('locked', locked);
@@ -994,13 +1066,18 @@ function renderTier() {
 
 function updateScratchButtons() {
   const t = activeTier();
+  const busy = stageBusy() && state.mode === 'live';
   const stdBtn = $('scratchBtnStd');
   const premBtn = $('scratchBtnPrem');
+  const stdPath = $('scratchBtnStdPath');
   if (stdBtn) {
-    stdBtn.disabled = t.std < 1 || (state.mode === 'live' && !state.account);
+    stdBtn.disabled = busy || t.std < 1 || (state.mode === 'live' && !state.account);
   }
   if (premBtn) {
-    premBtn.disabled = t.prem < 1 || (state.mode === 'live' && !state.account);
+    premBtn.disabled = busy || t.prem < 1 || (state.mode === 'live' && !state.account);
+  }
+  if (stdPath) {
+    stdPath.disabled = busy || t.std < 1 || (state.mode === 'live' && !state.account);
   }
 }
 
@@ -1135,6 +1212,7 @@ function doReveal() {
     promptEl.textContent = state.currentWin ? 'Nice.' : 'Better luck tomorrow.';
   }
   if (state.currentWin) burstConfetti();
+  if (state.mode === 'live') enterRevealedUI();
 }
 
 function checkReveal() {
@@ -1209,6 +1287,7 @@ function wireCanvas() {
   ctx = canvas.getContext('2d');
   canvas.addEventListener('pointerdown', (e) => {
     if (canvas.style.pointerEvents === 'none') return;
+    if (!canScratchInput()) return;
     drawing = true;
     last = null;
     canvas.setPointerCapture(e.pointerId);
@@ -1219,7 +1298,11 @@ function wireCanvas() {
   canvas.addEventListener('pointercancel', release);
   window.addEventListener('resize', () => {
     const panel = $('panel');
-    if (panel?.classList.contains('show') && !revealed) paintFoil();
+    if (!panel?.classList.contains('show') || revealed) return;
+    if (state.mode === 'live' && state.session.phase === PHASE.READY) paintFoil();
+    else if (state.mode === 'live' && (state.session.phase === PHASE.PICKED || state.session.phase === PHASE.PENDING))
+      lockFoilWaiting();
+    else if (state.mode === 'demo') paintFoil();
   });
 }
 
@@ -1319,8 +1402,9 @@ async function connectWallet() {
       btn.style.minHeight = '44px';
     }
     if (state.mode === 'demo') setMode('live');
-    await refreshWalletPanel();
+    await refreshWalletPanel({ skipStage: true });
     updateScratchButtons();
+    await rehydratePendingSession();
   } catch (err) {
     const msg = err?.shortMessage || err?.message || String(err);
     if (btn) btn.textContent = 'Connect';
@@ -1360,7 +1444,7 @@ function disconnectOrCopy() {
   }
 }
 
-async function refreshWalletPanel() {
+async function refreshWalletPanel(opts = {}) {
   const panel = $('walletPanel');
   if (!state.account) {
     if (panel) panel.hidden = true;
@@ -1412,10 +1496,17 @@ async function refreshWalletPanel() {
     setText($('walletPremTickets'), String(ticketCount(premTickets)));
     setText($('walletExpiry'), remain > 0 ? formatCountdown(remain) : '—');
 
-    setText($('cntStd'), String(ticketCount(stdTickets)));
-    setText($('cntPrem'), String(ticketCount(premTickets)));
+    // Reconcile ticket balances from chain; optimistic delta cleared once pending/settled.
+    if (state.session.phase === PHASE.PENDING || state.session.phase === PHASE.READY || state.session.phase === PHASE.REVEALED) {
+      state.session.optimisticDelta = 0;
+    }
+    setText($('cntStd'), String(activeTier().std));
+    setText($('cntPrem'), String(activeTier().prem));
     updateScratchButtons();
-    renderTier();
+    if (!opts.skipStage && !stageBusy()) renderTier();
+    else if (!opts.skipStage && stageBusy()) {
+      // counts already updated above
+    }
   } catch (e) {
     const status = $('scratchStatus');
     if (status) status.textContent = e instanceof Error ? e.message : 'Wallet read failed';
@@ -1423,27 +1514,116 @@ async function refreshWalletPanel() {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Live scratch                                                                */
+/* Live scratch — session state machine                                        */
 /* -------------------------------------------------------------------------- */
 
-function showPanelDrawing() {
-  const amtEl = $('prizeAmt');
-  if (amtEl) {
-    amtEl.textContent = 'Drawing…';
-    amtEl.className = 'amt';
-  }
-  setText($('prizeLbl'), 'Waiting for on-chain randomness');
-  state.currentWin = false;
-  $('fan')?.classList.add('picked');
-  $('panel')?.classList.add('show');
-  setText($('prompt'), 'Confirm settled — then scratch to reveal');
+function resetSessionToIdle(opts = {}) {
+  clearSessionTimers();
+  state.session.phase = PHASE.IDLE;
+  state.session.requestId = null;
+  state.session.optimisticDelta = 0;
+  state.session.requestedAt = 0n;
+  state.pendingRequestId = null;
+  const panel = $('panel');
+  panel?.classList.remove('show');
+  panel?.classList.remove('session-pending');
+  $('fan')?.classList.remove('picked');
   $('claimRow')?.classList.remove('show');
-  lockFoilWaiting();
-  show($('rescueBtn'), false);
+  $('lockedNote')?.classList.remove('show');
+  setReassure(false);
   show($('pendingRescue'), false);
+  show($('rescueBtn'), false);
+  if (opts.cancelNote) setSessionNote(opts.cancelNote, 'cancel');
+  else if (!opts.keepNote) setSessionNote('');
+  renderTier();
 }
 
-async function applySettledPrize(asset, amount) {
+function enterPickedUI(tier, tierKey) {
+  state.session.phase = PHASE.PICKED;
+  state.session.tier = tier;
+  state.session.tierKey = tierKey;
+  state.session.startedAt = Date.now();
+  state.session.requestId = null;
+  state.session.optimisticDelta = 1;
+  state.tier = tierKey;
+
+  const stage = $('stage');
+  stage?.classList.toggle('premium', tierKey === 'prem');
+  $('scratchCardEl')?.classList.toggle('premium', tierKey === 'prem');
+  const badge = $('premBadge');
+  if (badge) badge.style.display = tierKey === 'prem' ? 'inline' : 'none';
+
+  setSessionNote('');
+  setReassure(false);
+  show($('pendingRescue'), false);
+  show($('rescueBtn'), false);
+  $('claimRow')?.classList.remove('show');
+  $('lockedNote')?.classList.remove('show');
+
+  const amtEl = $('prizeAmt');
+  if (amtEl) {
+    amtEl.textContent = '…';
+    amtEl.className = 'amt';
+  }
+  setText($('prizeLbl'), 'Hang tight');
+  setText($('prompt'), 'Printing your ticket…');
+  setText($('ticketNo'), 'Confirm in wallet…');
+
+  $('fan')?.classList.add('picked');
+  const panel = $('panel');
+  panel?.classList.add('show');
+  panel?.classList.remove('session-pending');
+
+  setText($('cntStd'), String(activeTier().std));
+  setText($('cntPrem'), String(activeTier().prem));
+  updateScratchButtons();
+
+  requestAnimationFrame(() =>
+    requestAnimationFrame(() => {
+      lockFoilWaiting();
+    }),
+  );
+}
+
+function enterPendingUI(requestId, requestedAt) {
+  state.session.phase = PHASE.PENDING;
+  state.session.requestId = requestId;
+  state.session.requestedAt = requestedAt ?? 0n;
+  state.session.optimisticDelta = 0;
+  state.pendingRequestId = requestId;
+
+  const panel = $('panel');
+  panel?.classList.add('show');
+  panel?.classList.add('session-pending');
+  $('fan')?.classList.add('picked');
+
+  setText($('ticketNo'), `Request #${requestId.toString()}`);
+  setText($('prompt'), 'Ticket printing…');
+  const amtEl = $('prizeAmt');
+  if (amtEl) {
+    amtEl.textContent = '…';
+    amtEl.className = 'amt';
+  }
+  setText($('prizeLbl'), 'Waiting for randomness');
+  lockFoilWaiting();
+  setReassure(false);
+
+  if (state.reassureTimer) clearTimeout(state.reassureTimer);
+  state.reassureTimer = setTimeout(() => {
+    if (state.session.phase === PHASE.PENDING) setReassure(true);
+  }, 30_000);
+}
+
+async function enterReadyUI(asset, amount) {
+  state.session.phase = PHASE.READY;
+  clearSessionTimers();
+  const panel = $('panel');
+  panel?.classList.remove('session-pending');
+  panel?.classList.add('show');
+  setReassure(false);
+  show($('pendingRescue'), false);
+  show($('rescueBtn'), false);
+
   const isWin =
     asset &&
     asset.toLowerCase() !== zeroAddress.toLowerCase() &&
@@ -1472,18 +1652,33 @@ async function applySettledPrize(asset, amount) {
 
   const claimBtn = $('claimBtn');
   if (claimBtn) {
-    claimBtn.textContent = state.currentWin ? 'Already sent' : 'No claim needed';
-    claimBtn.disabled = true;
-  }
-  const claimRow = $('claimRow');
-  if (claimRow && state.currentWin) {
-    // Shown after foil reveal via doReveal; pre-label for when revealed
+    claimBtn.textContent = state.currentWin ? 'Already sent · done' : 'Done';
+    claimBtn.disabled = false;
   }
 
-  setText($('prompt'), 'Scratch to reveal your reward');
+  setText($('prompt'), 'Scratch to reveal');
   unlockFoilForScratch();
-  show($('rescueBtn'), false);
-  show($('pendingRescue'), false);
+}
+
+function enterRevealedUI() {
+  state.session.phase = PHASE.REVEALED;
+  $('panel')?.classList.remove('session-pending');
+}
+
+function canScratchInput() {
+  if (state.mode === 'demo') return true;
+  return state.session.phase === PHASE.READY && !revealed;
+}
+
+async function applySettledPrize(asset, amount) {
+  if (
+    state.session.phase !== PHASE.PENDING &&
+    state.session.phase !== PHASE.PICKED &&
+    state.session.phase !== PHASE.READY
+  ) {
+    return;
+  }
+  await enterReadyUI(asset, amount);
 }
 
 async function pollRequest(requestId) {
@@ -1491,6 +1686,9 @@ async function pollRequest(requestId) {
   state.pendingRequestId = requestId;
 
   const check = async () => {
+    if (state.session.phase !== PHASE.PENDING && state.session.phase !== PHASE.PICKED) {
+      return;
+    }
     try {
       const req = await publicClient.readContract({
         address: addr.game,
@@ -1500,6 +1698,7 @@ async function pollRequest(requestId) {
       });
       const status = Number(req.status ?? req[3]);
       const requestedAt = BigInt(req.requestedAt ?? req[2]);
+      state.session.requestedAt = requestedAt;
       const now = BigInt(Math.floor(Date.now() / 1000));
 
       if (status === STATUS.Settled) {
@@ -1536,7 +1735,7 @@ async function pollRequest(requestId) {
           start = clampedFrom - 1n;
         }
         await applySettledPrize(asset, amount);
-        await refreshWalletPanel();
+        await refreshWalletPanel({ skipStage: true });
         return;
       }
 
@@ -1547,11 +1746,17 @@ async function pollRequest(requestId) {
         setText($('prizeLbl'), 'Ticket refunded');
         setText($('prompt'), 'Ticket returned to your balance');
         show($('rescueBtn'), false);
-        await refreshWalletPanel();
+        setReassure(false);
+        await refreshWalletPanel({ skipStage: true });
+        resetSessionToIdle({ keepNote: true });
+        setSessionNote('Ticket rescued — refunded to your balance.');
         return;
       }
 
       if (status === STATUS.Pending) {
+        if (state.session.phase !== PHASE.PENDING) {
+          enterPendingUI(requestId, requestedAt);
+        }
         const due = now >= requestedAt + state.rescueDelay;
         show($('pendingRescue'), due);
         show($('rescueBtn'), due);
@@ -1568,9 +1773,8 @@ async function pollRequest(requestId) {
   await check();
   state.pollTimer = setInterval(check, 2000);
 
-  // Also watch logs
   try {
-    const unwatch = publicClient.watchContractEvent({
+    state.eventUnwatch = publicClient.watchContractEvent({
       address: addr.game,
       abi: [EVENT_SCRATCH_SETTLED],
       eventName: 'ScratchSettled',
@@ -1580,9 +1784,14 @@ async function pollRequest(requestId) {
           if (log.args.requestId === requestId) {
             clearInterval(state.pollTimer);
             state.pollTimer = null;
-            unwatch?.();
+            try {
+              state.eventUnwatch?.();
+            } catch {
+              /* ignore */
+            }
+            state.eventUnwatch = null;
             await applySettledPrize(log.args.asset, log.args.amount);
-            await refreshWalletPanel();
+            await refreshWalletPanel({ skipStage: true });
           }
         }
       },
@@ -1609,7 +1818,9 @@ async function rescueRequest(requestId) {
     setText($('prizeLbl'), 'Ticket refunded');
     setText($('prizeAmt'), 'Rescued');
     show($('rescueBtn'), false);
-    await refreshWalletPanel();
+    await refreshWalletPanel({ skipStage: true });
+    resetSessionToIdle({ keepNote: true });
+    setSessionNote('Ticket rescued — refunded to your balance.');
   } catch (err) {
     setText(
       $('prizeLbl'),
@@ -1636,9 +1847,20 @@ function extractRequestId(receipt) {
   return null;
 }
 
+function isUserRejection(err) {
+  const msg = `${err?.shortMessage || ''} ${err?.message || ''} ${err?.code || ''}`;
+  return (
+    err?.code === 4001 ||
+    err?.code === 'ACTION_REJECTED' ||
+    /user rejected|denied|rejected the request|user cancelled/i.test(msg)
+  );
+}
+
 async function startLiveScratch(tierOverride) {
+  if (stageBusy()) return;
+
   const tier = tierOverride != null ? tierOverride : activeChainTier();
-  const statusEl = $('prizeLbl');
+  const tierKey = tier === TIER_STD ? 'std' : 'prem';
 
   if (!window.ethereum) {
     alert('Connect a wallet to scratch live tickets.');
@@ -1656,11 +1878,10 @@ async function startLiveScratch(tierOverride) {
     return;
   }
 
+  enterPickedUI(tier, tierKey);
+
   try {
     await ensureChain();
-    showPanelDrawing();
-    setText(statusEl, 'Confirm in wallet…');
-    setText($('prompt'), 'Confirm in wallet…');
 
     const hash = await state.walletClient.writeContract({
       address: addr.game,
@@ -1671,11 +1892,12 @@ async function startLiveScratch(tierOverride) {
       chain: robinhoodChain,
     });
 
-    setText(statusEl, 'Submitted — waiting for confirmation…');
+    setText($('prompt'), 'Ticket printing…');
+    setText($('prizeLbl'), 'Submitted — waiting for confirmation…');
+
     const receipt = await publicClient.waitForTransactionReceipt({ hash });
     let requestId = extractRequestId(receipt);
     if (requestId == null) {
-      // Fallback: decode from scratch return via simulation is gone; search Requested logs in receipt block
       const logs = await publicClient.getLogs({
         address: addr.game,
         event: EVENT_SCRATCH_REQUESTED,
@@ -1686,31 +1908,103 @@ async function startLiveScratch(tierOverride) {
       if (logs.length) requestId = logs[logs.length - 1].args.requestId;
     }
     if (requestId == null) {
-      setText(statusEl, 'Could not find request id in receipt');
+      setText($('prizeLbl'), 'Could not find request id in receipt');
+      resetSessionToIdle({
+        cancelNote:
+          'Something went wrong finding the request — check your wallet activity.',
+      });
       return;
     }
 
-    setText($('ticketNo'), `Request #${requestId.toString()}`);
-    setText(statusEl, 'Drawing… waiting for randomness');
-    await refreshWalletPanel();
+    enterPendingUI(requestId);
+    await refreshWalletPanel({ skipStage: true });
     await pollRequest(requestId);
   } catch (err) {
     const msg = err?.shortMessage || err?.message || String(err);
-    setText(statusEl, msg);
-    setText($('prompt'), 'Scratch cancelled');
-    alert(`Scratch failed: ${msg}`);
-    $('panel')?.classList.remove('show');
-    $('fan')?.classList.remove('picked');
-    renderTier();
+    if (isUserRejection(err)) {
+      resetSessionToIdle({ cancelNote: 'Cancelled — ticket unspent.' });
+      return;
+    }
+    resetSessionToIdle({ cancelNote: `Scratch failed: ${msg}` });
   }
 }
 
 function onCardPick() {
+  if (state.mode === 'live' && stageBusy()) return;
   if (activeTierTickets() <= 0) return;
   if (state.mode === 'demo') {
     startDemoScratch();
   } else {
     startLiveScratch();
+  }
+}
+
+/** Find newest Pending ScratchRequested for connected wallet and rehydrate. */
+async function rehydratePendingSession() {
+  if (!state.account || state.mode !== 'live' || stageBusy()) return;
+  try {
+    const tip = await publicClient.getBlockNumber();
+    const lookbackBlocks = BigInt(
+      Math.min(Math.ceil((CONFIG.winsLookbackSec * 2) / 0.1), 1_000_000),
+    );
+    const fromBlock = tip > lookbackBlocks ? tip - lookbackBlocks : 0n;
+    let newest = null;
+
+    for (let start = fromBlock; start <= tip; start += CONFIG.logChunkBlocks) {
+      const end =
+        start + CONFIG.logChunkBlocks - 1n > tip
+          ? tip
+          : start + CONFIG.logChunkBlocks - 1n;
+      let logs = [];
+      try {
+        logs = await publicClient.getLogs({
+          address: addr.game,
+          event: EVENT_SCRATCH_REQUESTED,
+          args: { user: state.account },
+          fromBlock: start,
+          toBlock: end,
+        });
+      } catch {
+        continue;
+      }
+      for (const log of logs) {
+        const requestId = log.args.requestId;
+        if (requestId == null) continue;
+        try {
+          const req = await publicClient.readContract({
+            address: addr.game,
+            abi: ABI_GAME,
+            functionName: 'requests',
+            args: [requestId],
+          });
+          const status = Number(req.status ?? req[3]);
+          if (status === STATUS.Pending) {
+            newest = {
+              requestId,
+              tier: Number(req.tier ?? req[1]),
+              requestedAt: BigInt(req.requestedAt ?? req[2]),
+            };
+          }
+        } catch {
+          /* skip */
+        }
+      }
+    }
+
+    if (!newest) return;
+
+    const tierKey = newest.tier === TIER_PREM ? 'prem' : 'std';
+    state.tier = tierKey;
+    state.session.tier = newest.tier;
+    state.session.tierKey = tierKey;
+    const stage = $('stage');
+    stage?.classList.toggle('premium', tierKey === 'prem');
+    $('scratchCardEl')?.classList.toggle('premium', tierKey === 'prem');
+    enterPendingUI(newest.requestId, newest.requestedAt);
+    setSessionNote('Resumed a pending draw from your wallet.');
+    await pollRequest(newest.requestId);
+  } catch (err) {
+    console.warn('rehydrate pending', err);
   }
 }
 
@@ -1876,10 +2170,12 @@ async function refreshPublic() {
 
 function wireUi() {
   $('tabStd')?.addEventListener('click', () => {
+    if (stageBusy() && state.mode === 'live') return;
     state.tier = 'std';
     renderTier();
   });
   $('tabPrem')?.addEventListener('click', () => {
+    if (stageBusy() && state.mode === 'live') return;
     state.tier = 'prem';
     renderTier();
   });
@@ -1898,8 +2194,7 @@ function wireUi() {
 
   $('claimBtn')?.addEventListener('click', function () {
     if (state.mode === 'live') {
-      this.textContent = 'Already sent';
-      this.disabled = true;
+      resetSessionToIdle();
       return;
     }
     this.textContent = 'Claimed ✓';
@@ -2045,7 +2340,7 @@ function init() {
   const again = $('againBtn');
   if (again) again.style.display = 'none';
   renderTier();
-  refreshPublic();
+  refreshPublic().then(() => rehydratePendingSession());
   state.refreshTimer = setInterval(refreshPublic, CONFIG.refreshMs);
 }
 
