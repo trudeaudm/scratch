@@ -1176,6 +1176,8 @@ function updateStakeFormBalances() {
   if (!state.account) {
     if (walletEl) walletEl.textContent = 'Wallet: —';
     if (stakedEl) stakedEl.textContent = 'Staked: —';
+    setPctRowEnabled('stakePctRow', false);
+    setPctRowEnabled('withdrawPctRow', false);
     return;
   }
   if (walletEl) {
@@ -1184,14 +1186,50 @@ function updateStakeFormBalances() {
   if (stakedEl) {
     stakedEl.textContent = `Staked: ${formatScratchWhole(state.userStaked)} SCRATCH`;
   }
+  setPctRowEnabled('stakePctRow', state.scratchBalance > 0n);
+  setPctRowEnabled('withdrawPctRow', state.userStaked > 0n);
 }
 
-function fillMaxAmount(inputId, amount) {
+function setPctRowEnabled(rowId, enabled) {
+  const row = $(rowId);
+  if (!row) return;
+  row.classList.toggle('disabled', !enabled);
+  row.querySelectorAll('button').forEach((btn) => {
+    btn.disabled = !enabled;
+  });
+}
+
+/** Fill input with pct% of balance at full token precision (bigint math). */
+function fillPctAmount(inputId, balance, pct) {
   const input = $(inputId);
-  if (!input || amount == null) return;
-  // Trim trailing zeros from full-precision units for a clean MAX fill.
-  const raw = formatUnits(amount, 18);
-  input.value = raw.replace(/(\.\d*?[1-9])0+$/, '$1').replace(/\.0+$/, '');
+  if (!input || balance == null || balance <= 0n) return 0n;
+  const amount = pct >= 100 ? balance : (balance * BigInt(pct)) / 100n;
+  input.value = formatUnits(amount, 18);
+  return amount;
+}
+
+function belowMinStakeHint() {
+  return `Below minimum — stake at least ${minStakePretty()} SCRATCH to start earning tickets`;
+}
+
+function applyStakePctFill(pct) {
+  const amount = fillPctAmount('stakeAmount', state.scratchBalance, pct);
+  const path = $('stakeAmountPath');
+  if (path) fillPctAmount('stakeAmountPath', state.scratchBalance, pct);
+
+  const status = $('stakeStatus');
+  const resulting = (state.userStaked ?? 0n) + amount;
+  if (amount > 0n && (resulting < state.minStake || resulting === 0n)) {
+    setStatus(status, belowMinStakeHint());
+    status?.classList.add('warn');
+  } else if (status?.classList.contains('warn')) {
+    setStatus(status, '');
+    status.classList.remove('warn');
+  }
+}
+
+function applyWithdrawPctFill(pct) {
+  fillPctAmount('withdrawAmount', state.userStaked, pct);
 }
 
 function updateScratchButtons() {
@@ -1253,9 +1291,12 @@ function paintFoil() {
   ctx.fillRect(0, 0, r.width, r.height);
   ctx.strokeStyle = prem ? 'rgba(201,162,39,.55)' : 'rgba(255,244,214,.55)';
   ctx.lineWidth = 2;
-  ctx.setLineDash([7, 6]);
-  ctx.strokeRect(8, 8, r.width - 16, r.height - 16);
-  ctx.setLineDash([]);
+  // Marching-ants stamp lives on the print overlay; skip static dash while printing.
+  if ($('foilPrintOverlay')?.hidden !== false) {
+    ctx.setLineDash([7, 6]);
+    ctx.strokeRect(8, 8, r.width - 16, r.height - 16);
+    ctx.setLineDash([]);
+  }
   ctx.fillStyle = prem ? '#C9A227' : '#5C3F12';
   ctx.font = "800 56px 'Inter'";
   ctx.textAlign = 'center';
@@ -1275,7 +1316,10 @@ function paintFoil() {
   ctx.fill();
   ctx.fillStyle = prem ? 'rgba(201,162,39,.8)' : 'rgba(92,63,18,.9)';
   ctx.font = "700 11px 'Inter'";
-  ctx.fillText('SCRATCH TO REVEAL', r.width / 2, r.height - 20);
+  // Printing overlay owns the caption; keep canvas clear of competing copy.
+  if ($('foilPrintOverlay')?.hidden !== false) {
+    ctx.fillText('SCRATCH TO REVEAL', r.width / 2, r.height - 20);
+  }
   ctx.globalCompositeOperation = 'destination-out';
   ctx.lineWidth = 34;
   ctx.lineCap = 'round';
@@ -1288,10 +1332,38 @@ function paintFoil() {
 function resetScratch() {
   clearTimeout(disableTimer);
   if (!canvas) return;
+  hidePrintingOverlay();
   canvas.style.transition = 'none';
   canvas.style.opacity = '1';
   canvas.style.pointerEvents = 'auto';
+  canvas.classList.remove('is-printing');
+  canvas.style.cursor = '';
   paintFoil();
+}
+
+function showPrintingOverlay() {
+  const ov = $('foilPrintOverlay');
+  if (ov) {
+    ov.hidden = false;
+    ov.setAttribute('aria-hidden', 'false');
+  }
+  if (canvas) {
+    canvas.style.pointerEvents = 'none';
+    canvas.classList.add('is-printing');
+    canvas.style.cursor = 'not-allowed';
+  }
+  $('scratchCardEl')?.classList.remove('ready-pop');
+}
+
+function hidePrintingOverlay() {
+  const ov = $('foilPrintOverlay');
+  if (ov) {
+    ov.hidden = true;
+    ov.setAttribute('aria-hidden', 'true');
+  }
+  if (canvas) {
+    canvas.classList.remove('is-printing');
+  }
 }
 
 function lockFoilWaiting() {
@@ -1300,14 +1372,52 @@ function lockFoilWaiting() {
   canvas.style.transition = 'none';
   canvas.style.opacity = '1';
   canvas.style.pointerEvents = 'none';
+  canvas.classList.add('is-printing');
+  canvas.style.cursor = 'not-allowed';
+  showPrintingOverlay();
   paintFoil();
 }
 
 function unlockFoilForScratch() {
   if (!canvas) return;
+  hidePrintingOverlay();
   canvas.style.pointerEvents = 'auto';
   canvas.style.opacity = '1';
+  canvas.classList.remove('is-printing');
+  canvas.style.cursor = 'grab';
   paintFoil();
+  playReadyPop();
+}
+
+function playReadyPop() {
+  const card = $('scratchCardEl');
+  if (!card) return;
+  card.classList.remove('ready-pop');
+  // Force reflow so the animation retriggers.
+  void card.offsetWidth;
+  card.classList.add('ready-pop');
+  const clear = () => card.classList.remove('ready-pop');
+  card.addEventListener('animationend', clear, { once: true });
+}
+
+function shakeFoilFrame() {
+  const frame = $('scratchFrame');
+  if (!frame) return;
+  frame.classList.remove('foil-shake');
+  void frame.offsetWidth;
+  frame.classList.add('foil-shake');
+  frame.addEventListener(
+    'animationend',
+    () => frame.classList.remove('foil-shake'),
+    { once: true },
+  );
+}
+
+function isPrintingPhase() {
+  return (
+    state.mode === 'live' &&
+    (state.session.phase === PHASE.PICKED || state.session.phase === PHASE.PENDING)
+  );
 }
 
 function pos(e) {
@@ -1417,7 +1527,10 @@ function wireCanvas() {
   ctx = canvas.getContext('2d');
   canvas.addEventListener('pointerdown', (e) => {
     if (canvas.style.pointerEvents === 'none') return;
-    if (!canScratchInput()) return;
+    if (!canScratchInput()) {
+      if (isPrintingPhase()) shakeFoilFrame();
+      return;
+    }
     drawing = true;
     last = null;
     canvas.setPointerCapture(e.pointerId);
@@ -1426,6 +1539,15 @@ function wireCanvas() {
   canvas.addEventListener('pointermove', scratchMove);
   canvas.addEventListener('pointerup', release);
   canvas.addEventListener('pointercancel', release);
+
+  const overlay = $('foilPrintOverlay');
+  const onPrintTap = (e) => {
+    if (!isPrintingPhase()) return;
+    e.preventDefault();
+    shakeFoilFrame();
+  };
+  overlay?.addEventListener('pointerdown', onPrintTap);
+
   window.addEventListener('resize', () => {
     const panel = $('panel');
     if (!panel?.classList.contains('show') || revealed) return;
@@ -1727,6 +1849,9 @@ function resetSessionToIdle(opts = {}) {
   state.session.optimisticDelta = 0;
   state.session.requestedAt = 0n;
   state.pendingRequestId = null;
+  hidePrintingOverlay();
+  $('scratchCardEl')?.classList.remove('ready-pop');
+  $('scratchFrame')?.classList.remove('foil-shake');
   const panel = $('panel');
   panel?.classList.remove('show');
   panel?.classList.remove('session-pending');
@@ -1769,7 +1894,7 @@ function enterPickedUI(tier, tierKey) {
     amtEl.className = 'amt';
   }
   setText($('prizeLbl'), 'Hang tight');
-  setText($('prompt'), 'Printing your ticket…');
+  setText($('prompt'), 'ticket printing…');
   setText($('ticketNo'), 'Confirm in wallet…');
 
   $('fan')?.classList.add('picked');
@@ -1801,7 +1926,7 @@ function enterPendingUI(requestId, requestedAt) {
   $('fan')?.classList.add('picked');
 
   setText($('ticketNo'), `Request #${requestId.toString()}`);
-  setText($('prompt'), 'Ticket printing…');
+  setText($('prompt'), 'ticket printing…');
   const amtEl = $('prizeAmt');
   if (amtEl) {
     amtEl.textContent = '…';
@@ -1859,7 +1984,7 @@ async function enterReadyUI(asset, amount) {
     claimBtn.disabled = false;
   }
 
-  setText($('prompt'), 'Scratch to reveal');
+  setText($('prompt'), 'scratch to reveal');
   unlockFoilForScratch();
 }
 
@@ -2095,7 +2220,7 @@ async function startLiveScratch(tierOverride) {
       chain: robinhoodChain,
     });
 
-    setText($('prompt'), 'Ticket printing…');
+    setText($('prompt'), 'ticket printing…');
     setText($('prizeLbl'), 'Submitted — waiting for confirmation…');
 
     const receipt = await publicClient.waitForTransactionReceipt({ hash });
@@ -2226,11 +2351,13 @@ async function doStake() {
   const raw = ((input?.value || pathInput?.value || '')).trim();
   if (!raw || Number(raw) <= 0) {
     setStatus(status, 'Enter an amount');
+    status?.classList.remove('warn');
     return;
   }
   try {
     await ensureChain();
     const amount = parseUnits(raw, 18);
+    status?.classList.remove('warn');
     setStatus(status, 'Checking allowance…');
     const allowance = await publicClient.readContract({
       address: addr.scratch,
@@ -2432,13 +2559,15 @@ function wireUi() {
     doStake();
   });
   $('withdrawBtn')?.addEventListener('click', doWithdraw);
-  $('stakeMaxBtn')?.addEventListener('click', () => {
-    fillMaxAmount('stakeAmount', state.scratchBalance);
-    const path = $('stakeAmountPath');
-    if (path) fillMaxAmount('stakeAmountPath', state.scratchBalance);
+  $('stakePctRow')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-pct]');
+    if (!btn || btn.disabled) return;
+    applyStakePctFill(Number(btn.dataset.pct));
   });
-  $('withdrawMaxBtn')?.addEventListener('click', () => {
-    fillMaxAmount('withdrawAmount', state.userStaked);
+  $('withdrawPctRow')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-pct]');
+    if (!btn || btn.disabled) return;
+    applyWithdrawPctFill(Number(btn.dataset.pct));
   });
 
   $('scratchBtnStd')?.addEventListener('click', () => {
