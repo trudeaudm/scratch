@@ -61,6 +61,46 @@
   .btn.ghost{background:transparent;color:var(--ink);border:1.5px solid var(--line)}
   .btn.ghost:hover{border-color:var(--ink);background:transparent}
   .btn:disabled{background:var(--line);color:var(--muted);cursor:default;transform:none}
+  .btn.sm{padding:10px 16px;font-size:13px;min-height:44px}
+  .nav-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+  .wallet-panel{
+    max-width:720px;margin:28px auto 0;text-align:left;
+    border:1px solid var(--line);border-radius:18px;padding:18px 18px 16px;background:#fff;
+  }
+  .wallet-panel h3{font-size:14px;font-weight:800;letter-spacing:-.01em;margin-bottom:10px}
+  .wallet-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;font-size:13px}
+  .wallet-grid .k{color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+  .wallet-grid .v{font-weight:700;font-variant-numeric:tabular-nums;margin-top:2px}
+  .wallet-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+  .wallet-actions .btn{flex:1 1 140px;text-align:center;min-height:44px}
+  .stake-row,.withdraw-row{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+  .stake-row input,.withdraw-row input{
+    flex:1;min-width:120px;border:1.5px solid var(--line);border-radius:100px;padding:11px 16px;
+    font-family:'Inter';font-size:14px;min-height:44px;
+  }
+  .stake-status,.scratch-status{font-size:12.5px;color:var(--muted);margin-top:8px;min-height:16px}
+  .withdraw-warn{font-size:12.5px;color:#9B3B2E;font-weight:600;margin-top:8px;line-height:1.45}
+  .pending-rescue{
+    display:none;margin-top:12px;padding:12px 14px;border-radius:12px;
+    background:#FFF4D6;border:1px solid #EAD37E;font-size:13px;
+  }
+  .pending-rescue.show{display:block}
+  .inv-block,.wins-block{margin-top:22px}
+  .inv-block h4,.wins-block h4{font-size:13px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin-bottom:10px}
+  .inv-row,.win-row{
+    display:flex;justify-content:space-between;gap:12px;align-items:baseline;
+    padding:10px 0;border-bottom:1px solid var(--line);font-size:14px;
+  }
+  .inv-row .sym{font-weight:700}
+  .inv-sub{font-size:12px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--gold);margin:14px 0 6px}
+  .win-row .who{font-family:'IBM Plex Mono';font-size:12.5px;color:var(--muted)}
+  .win-row .age{font-family:'IBM Plex Mono';font-size:12px;color:var(--muted);white-space:nowrap}
+  .fairness{
+    margin-top:18px;padding:14px 16px;border-radius:12px;background:#fff;
+    border:1px solid var(--line);font-size:13px;line-height:1.55;color:var(--muted);
+  }
+  .fairness b{color:var(--ink)}
+  .mode-bar{display:flex;justify-content:center;gap:10px;margin-top:14px;flex-wrap:wrap}
 
   header{text-align:center;padding:clamp(48px,7vw,84px) 20px 24px}
   .eyebrow{
@@ -320,8 +360,10 @@
     .paths,.ref-grid{grid-template-columns:1fr}
   }
   @media(max-width:480px){
-    nav > a.btn.ghost{font-size:0;padding:12px 16px;min-width:44px;text-align:center}
-    nav > a.btn.ghost::before{content:"𝕏";font-size:16px;font-weight:700}
+    nav .btn.ghost.x-link{font-size:0;padding:12px 16px;min-width:44px;text-align:center}
+    nav .btn.ghost.x-link::before{content:"𝕏";font-size:16px;font-weight:700}
+    .nav-actions{gap:6px}
+    .nav-actions .btn{padding:11px 14px;font-size:13px}
   }
   @media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
 </style>
@@ -333,26 +375,63 @@
   <div class="nav-links">
     <a href="#auction">Auction</a>
     <a href="#paths">Earn tickets</a>
-    <a href="#referral">Referrals</a>
+    <a href="#vault">Vault</a>
+    <a href="#wins">Wins</a>
     <a href="#lore">The lore</a>
   </div>
-  <a class="btn ghost" href="https://x.com/scratch4663" target="_blank" rel="noopener">@scratch4663</a>
-  <a class="btn" href="https://dexscreener.com/robinhood/0x3f66e1430c12a7a64839f43050165db6d1bf1ae5bd7df11e47a37a8e73bc00ef" target="_blank" rel="noopener">Chart</a>
+  <div class="nav-actions">
+    <a class="btn ghost x-link" href="https://x.com/scratch4663" target="_blank" rel="noopener">@scratch4663</a>
+    <a class="btn ghost sm" href="https://dexscreener.com/robinhood/0x3f66e1430c12a7a64839f43050165db6d1bf1ae5bd7df11e47a37a8e73bc00ef" target="_blank" rel="noopener">Chart</a>
+    <button type="button" class="btn sm" id="connectBtn">Connect</button>
+  </div>
 </nav>
 
-<div class="announce">$SCRATCH is live and trading — <a href="https://dexscreener.com/robinhood/0x3f66e1430c12a7a64839f43050165db6d1bf1ae5bd7df11e47a37a8e73bc00ef" target="_blank" rel="noopener">chart</a> · auction cleared 91% above floor, 100% sold · <b>game &amp; staking go live within ~24h</b></div>
+<div class="announce">$SCRATCH is live and trading — <a href="https://dexscreener.com/robinhood/0x3f66e1430c12a7a64839f43050165db6d1bf1ae5bd7df11e47a37a8e73bc00ef" target="_blank" rel="noopener">chart</a> · auction cleared 91% above floor, 100% sold · <b>game &amp; staking are live onchain</b></div>
 
 <header>
-  <div class="eyebrow">Live on Robinhood Chain · game launching today</div>
+  <div class="eyebrow">Live on Robinhood Chain · scratch now</div>
   <h1>Your free stock era is back.<br><span>Every single day.</span></h1>
   <p class="sub">Hold $SCRATCH and earn tickets by the second. <b>Stake it</b> and your cards can hide USDG, blue-chip memes — <b>or actual onchain stock.</b></p>
 
   <div class="tiers" role="tablist">
-    <button class="tier-tab active" id="tabStd" role="tab" aria-selected="true">Holder cards <span class="count" id="cntStd">3</span></button>
-    <button class="tier-tab premium" id="tabPrem" role="tab" aria-selected="false"><span class="star">★</span> Staked cards <span class="count" id="cntPrem">2</span></button>
+    <button class="tier-tab active" id="tabStd" role="tab" aria-selected="true">Holder cards <span class="count" id="cntStd">0</span></button>
+    <button class="tier-tab premium" id="tabPrem" role="tab" aria-selected="false"><span class="star">★</span> Staked cards <span class="count" id="cntPrem">0</span></button>
   </div>
-  <div class="demo-note"><b>Playable demo below</b> — tickets are simulated. Real tickets start printing when the game goes live, later today.</div>
-  <div class="tier-note" id="tierNote">Earned by holding <b>1,000,000 $SCRATCH <span class="usd-live" data-scratch-amount="1000000"></span></b> in your wallet · pays $SCRATCH &amp; USDG</div>
+  <div class="mode-bar">
+    <button type="button" class="btn ghost sm" id="playModeDemo">Try the demo</button>
+  </div>
+  <div class="demo-note" id="demoNote" hidden></div>
+  <div class="tier-note" id="tierNote">Connect a wallet to see your live tickets · odds below are read from the game contract</div>
+
+  <div class="wallet-panel" id="walletPanel" hidden>
+    <h3>Your position</h3>
+    <div class="wallet-grid">
+      <div><div class="k">Staked</div><div class="v" id="walletStaked">—</div></div>
+      <div><div class="k">Holder tickets</div><div class="v" id="walletStdTickets">—</div></div>
+      <div><div class="k">Holder expiry</div><div class="v" id="walletExpiry">—</div></div>
+      <div><div class="k">Staked tickets</div><div class="v" id="walletPremTickets">—</div></div>
+      <div><div class="k">Banked (stake)</div><div class="v" id="walletBanked">—</div></div>
+    </div>
+    <div class="wallet-actions">
+      <button type="button" class="btn sm" id="scratchBtnStd">Scratch holder card</button>
+      <button type="button" class="btn sm" id="scratchBtnPrem">Scratch staked card</button>
+    </div>
+    <div class="scratch-status" id="scratchStatus"></div>
+    <div class="pending-rescue" id="pendingRescue">
+      Draw still pending past rescue delay.
+      <button type="button" class="btn sm" id="rescueBtn" style="margin-top:8px;width:100%">Rescue (refund ticket)</button>
+    </div>
+    <div class="stake-row">
+      <input type="text" inputmode="decimal" id="stakeAmount" placeholder="Amount to stake" aria-label="Amount to stake">
+      <button type="button" class="btn sm" id="stakeBtn">Stake</button>
+    </div>
+    <div class="stake-status" id="stakeStatus"></div>
+    <div class="withdraw-row">
+      <input type="text" inputmode="decimal" id="withdrawAmount" placeholder="Amount to withdraw" aria-label="Amount to withdraw">
+      <button type="button" class="btn ghost sm" id="withdrawBtn">Withdraw</button>
+    </div>
+    <div class="withdraw-warn" id="withdrawWarn"></div>
+  </div>
 
   <div class="stage" id="stage">
     <div class="stage-prompt" id="prompt">Choose your free scratch</div>
@@ -363,30 +442,30 @@
       <button class="card" aria-label="Pick card three"><span class="mark"><i></i></span></button>
     </div>
 
-    <div class="locked-note" id="lockedNote">Out of tickets on this tier. Next ticket accrues in <b id="accrueTimer">02:12:44</b> — or stake more to earn faster.</div>
+    <div class="locked-note" id="lockedNote">Out of tickets on this tier. Next ticket accrues in <b id="accrueTimer">—</b> — or stake more to earn faster.</div>
 
     <div class="scratch-panel" id="panel">
       <div class="scratch-card" id="scratchCardEl">
         <div class="sc-head"><span id="ticketNo">Daily reward · Ticket Nº 0004-6631</span><span class="prem" id="premBadge" style="display:none">★ PREMIUM</span></div>
         <div class="scratch-frame">
           <div class="prize">
-            <div class="amt win" id="prizeAmt">+500 $SCRATCH</div>
-            <div class="lbl" id="prizeLbl">Sent to your wallet automatically</div>
+            <div class="amt" id="prizeAmt">…</div>
+            <div class="lbl" id="prizeLbl">Scratch to reveal</div>
           </div>
           <canvas id="scratchCanvas" aria-label="Scratch area — click and drag to reveal your reward"></canvas>
         </div>
         <div class="sc-foot">
-          <div class="sc-timer">Next ticket in <b id="nextTicket">02:12:44</b></div>
-          <button class="again" id="againBtn">Demo: reset</button>
+          <div class="sc-timer">Next ticket in <b id="nextTicket">—</b></div>
+          <button class="again" id="againBtn" style="display:none">Demo: reset</button>
         </div>
         <div class="claim-row" id="claimRow">
-          <button class="btn" id="claimBtn">Claim reward</button>
+          <button class="btn" id="claimBtn">Paid to your wallet</button>
         </div>
       </div>
     </div>
   </div>
 
-  <div class="expiry">Tickets expire <b>7 days</b> after they're earned · bank up to <b>7 days'</b> accrual · unstaking burns pending tickets</div>
+  <div class="expiry">Tickets expire <b>7 days</b> after they're earned · bank up to <b>7 days'</b> accrual · any staking withdrawal burns all staking tickets</div>
 </header>
 
 <div class="pool">
@@ -411,8 +490,9 @@
       <div class="pool-stat"><div class="v"><em>1%</em></div><div class="k">pool fee → prize treasury</div></div>
       <div class="pool-stat"><div class="v">1 year</div><div class="k">LP timelock, visible to bidders</div></div>
       <div class="pool-stat"><div class="v">20%</div><div class="k">of raise → prize inventory &amp; ops</div></div>
-      <div class="pool-stat"><div class="v">Provably fair</div><div class="k">settlement details at game launch</div></div>
+      <div class="pool-stat"><div class="v">Onchain odds</div><div class="k">same table the game enforces</div></div>
     </div>
+    <div class="fairness" id="fairnessNote"></div>
   </div>
 </div>
 
@@ -424,7 +504,7 @@
     <div class="step-mini"><div class="n">01</div><h4>Bids in ETH</h4><p>Bids were placed at any price at or above the floor during the 12-hour window. Bids were onchain and refundable if the auction didn't clear.</p></div>
     <div class="step-mini"><div class="n">02</div><h4>One clearing price</h4><p>At close, the auction found the single price where demand met supply. <b>Everyone above it won at exactly that price.</b> Everyone below was refunded.</p></div>
     <div class="step-mini"><div class="n">03</div><h4>Liquidity deployed itself</h4><p>The pool launched at the clearing price with a <b>dense USDG shelf under it</b> and the LP position locked for a year — the lock was verifiable before bidding.</p></div>
-    <div class="step-mini"><div class="n">04</div><h4>Then you scratch</h4><p>Game contracts go live today. The prize vault opens stocked by <b>the auction itself</b> — purchases published with receipts.</p></div>
+    <div class="step-mini"><div class="n">04</div><h4>Then you scratch</h4><p>Game &amp; staking are live. The prize vault is stocked by <b>the auction itself</b> — purchases published with receipts.</p></div>
   </div>
   <a class="btn" href="https://dexscreener.com/robinhood/0x3f66e1430c12a7a64839f43050165db6d1bf1ae5bd7df11e47a37a8e73bc00ef" target="_blank" rel="noopener" style="display:block;width:100%;text-align:center;margin-top:26px">View the chart →</a>
   <div class="params">
@@ -445,38 +525,50 @@
   <div class="paths">
     <div class="path">
       <div class="p-tag">Hold in wallet</div>
-      <h3>Holder cards <span class="status">daily drops from game launch</span></h3>
-      <div class="rate">Just hold <b>1,000,000 $SCRATCH <span class="usd-live" data-scratch-amount="1000000"></span></b> · your share of <b>35%</b> of emissions</div>
-      <div class="prize-list">
-        <div class="prize-row"><span class="p">+250 $SCRATCH</span><span class="o">1 in 6</span></div>
-        <div class="prize-row"><span class="p">+500 $SCRATCH</span><span class="o">1 in 14</span></div>
-        <div class="prize-row"><span class="p">+5,000 $SCRATCH</span><span class="o">1 in 220</span></div>
-        <div class="prize-row"><span class="p">+25 USDG</span><span class="o">1 in 500</span></div>
+      <h3>Holder cards <span class="status" style="background:var(--green-tint);color:var(--green-dark);border-color:var(--green)">live</span></h3>
+      <div class="rate" id="minStakeLive">Promo / grant tickets · odds below are live from the game contract</div>
+      <div class="prize-list" id="prizeListStd">
+        <div class="prize-row"><span class="p muted">Loading live odds…</span><span class="o">…</span></div>
       </div>
-      <div class="cta"><a class="btn ghost" href="#auction" style="display:block">Buy in the auction, hold to earn</a></div>
+      <div class="cta"><button type="button" class="btn ghost" id="scratchBtnStdPath" style="display:block;width:100%">Scratch a holder card</button></div>
     </div>
 
     <div class="path premium">
       <div class="p-tag">★ Stake in vault</div>
-      <h3>Staked cards <span class="status">live at game launch</span></h3>
-      <div class="rate">Stake in the vault · your share of <b>65%</b> of emissions · <b>no lockup</b>, withdraw anytime</div>
-      <div class="prize-list">
-        <div class="prize-row"><span class="p">+1,000 $SCRATCH</span><span class="o">1 in 8</span></div>
-        <div class="prize-row"><span class="p">+50 USDG</span><span class="o">1 in 120</span></div>
-        <div class="prize-row"><span class="p"><span class="tk">MEME</span>Top RH Chain memecoin</span><span class="o">1 in 400</span></div>
-        <div class="prize-row"><span class="p"><span class="tk">STOCK</span>Onchain AAPL / TSLA share</span><span class="o">1 in 2,500</span></div>
+      <h3>Staked cards <span class="status" style="background:var(--green-tint);color:var(--green-dark);border-color:var(--green)">live</span></h3>
+      <div class="rate" id="minStakeRate">Stake at least <b id="minStakeAmount">…</b> $SCRATCH <span class="usd-live" data-scratch-amount="0"></span> · your share of <b>65%</b> of emissions · <b>no lockup</b></div>
+      <div class="prize-list" id="prizeListPrem">
+        <div class="prize-row"><span class="p muted">Loading live odds…</span><span class="o">…</span></div>
       </div>
       <div class="stake-mini">
-        <input type="text" inputmode="decimal" placeholder="Amount to stake" aria-label="Amount to stake" disabled>
-        <button class="btn" disabled>Opens at game launch</button>
+        <input type="text" inputmode="decimal" id="stakeAmountPath" placeholder="Amount to stake" aria-label="Amount to stake">
+        <button type="button" class="btn" id="stakeBtnPath">Stake</button>
       </div>
     </div>
   </div>
 </section>
 
+<section id="vault">
+  <div class="sec-eyebrow">Prize vault</div>
+  <h2>What's in the vault right now.</h2>
+  <p class="sec-sub">Balances are read live from PrizeVault every 30s. Odds on this page come from the same contract that settles your scratch.</p>
+  <div class="inv-block" id="vaultInventory">
+    <div class="inv-row"><span class="sym">Loading…</span><span>—</span></div>
+  </div>
+</section>
+
+<section id="wins">
+  <div class="sec-eyebrow">Recent wins</div>
+  <h2>Onchain scratches that paid out.</h2>
+  <p class="sec-sub">Last ~24 hours of <b>ScratchSettled</b> wins (no-wins omitted).</p>
+  <div class="wins-block" id="recentWins">
+    <div class="win-row"><span>Loading…</span><span class="age">—</span></div>
+  </div>
+</section>
+
 <section id="referral">
   <div class="sec-eyebrow">Referrals</div>
-  <h2>Bring a friend, both of you scratch. <span class="status">after launch</span></h2>
+  <h2>Bring a friend, both of you scratch. <span class="status">coming soon</span></h2>
   <p class="sec-sub">When a wallet you refer <b>buys $100+ of $SCRATCH</b> and holds it for 6 hours, you both get a bonus card. Bought means bought — <b>tokens transferred in from another wallet don't count,</b> and both sides must stay above $100. Max 5 referral cards per day.</p>
 
   <div class="ref-grid">
@@ -511,324 +603,18 @@
   <div class="sec-eyebrow">The lore</div>
   <h2>Pick a card. Any card. It's probably a $5 card.</h2>
   <p>Robinhood's referral reward was a masterpiece of suspense: three cards, one pick, a scratch, and a mystery stock. <b>Almost always five bucks</b> — but it might be Apple, and that "might" onboarded millions of first-time investors.</p>
-  <p>Then the design got labeled gamification and the ritual was sanded down into a plain claim button. <b>$SCRATCH restores it</b> — cards, scratch, suspense, and yes, on Robinhood Chain the mystery prize can literally be Apple again. The odds are printed on the page and the vault is onchain. <b>Check our math.</b></p>
+  <p>Then the design got labeled gamification and the ritual was sanded down into a plain claim button. <b>$SCRATCH restores it</b> — cards, scratch, suspense, and yes, on Robinhood Chain the mystery prize can literally be a stock again. The odds are printed on this page from the live game contract and the vault is onchain. <b>Check our math.</b></p>
 </section>
 
 <footer>
   <div class="logo" style="font-size:15px"><span class="leaf"></span>$SCRATCH</div>
-  <div class="ca">CA: 0xf5E5f4D3C34A14B2fDfD59584Fe555Cd5e21F196 — the only other place this appears is the pinned post of <a href="https://x.com/scratch4663" style="color:var(--green-dark)">@scratch4663</a>. Anything else is fake. · Pool: 0x3f66e1430c12a7a64839f43050165db6d1bf1ae5bd7df11e47a37a8e73bc00ef</div>
-  <div class="socials"><a href="https://x.com/scratch4663" target="_blank" rel="noopener">X / Twitter</a><span>·</span><a href="https://dexscreener.com/robinhood/0x3f66e1430c12a7a64839f43050165db6d1bf1ae5bd7df11e47a37a8e73bc00ef" target="_blank" rel="noopener">Chart</a></div>
-  <div class="fine">Fan fiction with a claim button. Not affiliated with, endorsed by, or gamified by Robinhood Markets, Inc. Contracts go live at launch — until the pinned post says otherwise, nothing is real. Memecoins are gambling; scratch responsibly. There is no official Telegram. Anyone claiming otherwise is trying to scam you.</div>
+  <div class="ca">CA: 0xf5E5f4D3C34A14B2fDfD59584Fe555Cd5e21F196 — the only other place this appears is the pinned post of <a href="https://x.com/scratch4663" style="color:var(--green-dark)">@scratch4663</a>. Anything else is fake. · Pool: 0x3f66e1430c12a7a64839f43050165db6d1bf1ae5bd7df11e47a37a8e73bc00ef · Game: 0xBeD604b5AB226134EdF154cc31881d8C93f4C9e6</div>
+  <div class="socials"><a href="https://x.com/scratch4663" target="_blank" rel="noopener">X / Twitter</a><span>·</span><a href="https://dexscreener.com/robinhood/0x3f66e1430c12a7a64839f43050165db6d1bf1ae5bd7df11e47a37a8e73bc00ef" target="_blank" rel="noopener">Chart</a><span>·</span><a href="https://robinhoodchain.blockscout.com/address/0xBeD604b5AB226134EdF154cc31881d8C93f4C9e6" target="_blank" rel="noopener">Explorer</a></div>
+  <div class="fine">Fan fiction with a claim button. Not affiliated with, endorsed by, or gamified by Robinhood Markets, Inc. Memecoins are gambling; scratch responsibly. There is no official Telegram. Anyone claiming otherwise is trying to scam you.</div>
 </footer>
 
 <canvas id="confetti"></canvas>
 
-<script>
-  const DEXSCREENER_PAIR_URL = 'https://api.dexscreener.com/latest/dex/pairs/robinhood/0x3f66e1430c12a7a64839f43050165db6d1bf1ae5bd7df11e47a37a8e73bc00ef';
-  const motionOK = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-
-  // ---------- live USD for token amounts (absence beats wrongness) ----------
-  let scratchPriceUsd = null;
-  function formatApproxUsd(usd){
-    if (!(usd > 0) || !Number.isFinite(usd)) return '';
-    const n = Number(usd.toPrecision(2));
-    const display = n >= 100
-      ? Math.round(n).toLocaleString('en-US')
-      : String(n);
-    return `(≈$${display})`;
-  }
-  function fillUsdLive(){
-    document.querySelectorAll('.usd-live').forEach(el=>{
-      if (scratchPriceUsd == null){ el.textContent = ''; return; }
-      const amount = Number(el.dataset.scratchAmount);
-      el.textContent = formatApproxUsd(amount * scratchPriceUsd);
-    });
-  }
-  fetch(DEXSCREENER_PAIR_URL)
-    .then(r => { if (!r.ok) throw new Error('bad status'); return r.json(); })
-    .then(data => {
-      const price = Number(data?.pairs?.[0]?.priceUsd);
-      if (!(price > 0)) throw new Error('no price');
-      scratchPriceUsd = price;
-      fillUsdLive();
-    })
-    .catch(()=>{ scratchPriceUsd = null; fillUsdLive(); });
-
-  // ---------- tier state ----------
-  const tiers = {
-    std: {
-      tickets: 3,
-      note: 'Earned by holding <b>1,000,000 $SCRATCH <span class="usd-live" data-scratch-amount="1000000"></span></b> in your wallet · pays $SCRATCH &amp; USDG',
-      prizes: [
-        ['+250 $SCRATCH','Sent to your wallet automatically','win'],
-        ['+500 $SCRATCH','Sent to your wallet automatically','win'],
-        ['+5,000 $SCRATCH','Big one. Sent automatically','win'],
-        ['+25 USDG','Stable win. Sent automatically','win'],
-        ['Not this time','Same time tomorrow',''],
-        ['Not this time','Same time tomorrow',''],
-      ],
-    },
-    prem: {
-      tickets: 2,
-      note: 'Earned by <b>staking in the vault</b> · pays $SCRATCH, USDG, top memes &amp; onchain stocks',
-      prizes: [
-        ['+1,000 $SCRATCH','Sent to your wallet automatically','win'],
-        ['+50 USDG','Stable win. Sent automatically','win'],
-        ['+MEME','Top RH Chain memecoin. Sent automatically','gold'],
-        ['1× AAPL','An actual onchain Apple share.','gold'],
-        ['Not this time','Keep staking — same time tomorrow',''],
-      ],
-    },
-  };
-  let tier = 'std';
-  let currentWin = true;
-
-  const stage = document.getElementById('stage');
-  const fan = document.getElementById('fan');
-  const panel = document.getElementById('panel');
-  const promptEl = document.getElementById('prompt');
-  const lockedNote = document.getElementById('lockedNote');
-  const tabStd = document.getElementById('tabStd');
-  const tabPrem = document.getElementById('tabPrem');
-
-  function renderTier(){
-    const t = tiers[tier];
-    tabStd.classList.toggle('active', tier==='std');
-    tabStd.setAttribute('aria-selected', tier==='std');
-    tabPrem.classList.toggle('active', tier==='prem');
-    tabPrem.setAttribute('aria-selected', tier==='prem');
-    stage.classList.toggle('premium', tier==='prem');
-    document.getElementById('scratchCardEl').classList.toggle('premium', tier==='prem');
-    document.getElementById('premBadge').style.display = tier==='prem' ? 'inline' : 'none';
-    document.getElementById('tierNote').innerHTML = t.note;
-    fillUsdLive();
-    document.getElementById('cntStd').textContent = tiers.std.tickets;
-    document.getElementById('cntPrem').textContent = tiers.prem.tickets;
-    // reset game view
-    panel.classList.remove('show');
-    fan.classList.remove('picked');
-    document.getElementById('claimRow').classList.remove('show');
-    const locked = t.tickets <= 0;
-    fan.classList.toggle('locked', locked);
-    lockedNote.classList.toggle('show', locked);
-    promptEl.textContent = locked ? 'No tickets left on this tier' : 'Choose your free scratch';
-  }
-  tabStd.addEventListener('click', ()=>{ tier='std'; renderTier(); });
-  tabPrem.addEventListener('click', ()=>{ tier='prem'; renderTier(); });
-
-  // ---------- pick-a-card flow ----------
-  let disableTimer = null;
-  function resetScratch(){
-    clearTimeout(disableTimer);
-    canvas.style.transition = 'none';
-    canvas.style.opacity = '1';
-    canvas.style.pointerEvents = 'auto';
-    paintFoil();
-  }
-  function rollPrize(){
-    const list = tiers[tier].prizes;
-    const [amt,lbl,cls] = list[Math.floor(Math.random()*list.length)];
-    const amtEl = document.getElementById('prizeAmt');
-    amtEl.textContent = amt;
-    amtEl.className = 'amt' + (cls ? ' '+cls : '');
-    document.getElementById('prizeLbl').textContent = lbl;
-    currentWin = !!cls;
-  }
-  fan.querySelectorAll('.card').forEach(card=>{
-    card.addEventListener('click', ()=>{
-      if (tiers[tier].tickets <= 0) return;
-      tiers[tier].tickets--;
-      rollPrize();
-      fan.classList.add('picked');
-      promptEl.textContent = 'Scratch to reveal your reward';
-      panel.classList.add('show');
-      document.getElementById('cntStd').textContent = tiers.std.tickets;
-      document.getElementById('cntPrem').textContent = tiers.prem.tickets;
-      requestAnimationFrame(()=>requestAnimationFrame(resetScratch));
-      setTimeout(resetScratch, 350);
-    });
-  });
-  document.getElementById('againBtn').addEventListener('click', ()=>{
-    tiers[tier].tickets++; // demo affordance only — production is one shot per ticket
-    renderTier();
-    resetScratch();
-  });
-  document.getElementById('claimBtn').addEventListener('click', function(){
-    this.textContent = 'Claimed ✓';
-    this.disabled = true;
-    setTimeout(()=>{ this.textContent='Claim reward'; this.disabled=false; }, 2600);
-  });
-
-  // ---------- scratch layer ----------
-  const canvas = document.getElementById('scratchCanvas');
-  const ctx = canvas.getContext('2d');
-  let revealed = false;
-
-  function paintFoil(){
-    const dpr = window.devicePixelRatio || 1;
-    const r = canvas.getBoundingClientRect();
-    if (r.width === 0){
-      if (!paintFoil._retried){ paintFoil._retried = true; setTimeout(paintFoil, 250); }
-      return;
-    }
-    paintFoil._retried = false;
-    canvas.width = r.width*dpr; canvas.height = r.height*dpr;
-    ctx.setTransform(dpr,0,0,dpr,0,0);
-    ctx.globalCompositeOperation = 'source-over';
-    // period-accurate foil: brown paper stamp with "?" (premium: dark w/ gold)
-    const prem = tier==='prem';
-    const g = ctx.createLinearGradient(0, 0, r.width, r.height);
-    if (prem){ g.addColorStop(0,'#1A222B'); g.addColorStop(1,'#10161C'); }
-    else { g.addColorStop(0,'#B07F35'); g.addColorStop(1,'#8F6222'); }
-    ctx.fillStyle = g;
-    ctx.fillRect(0,0,r.width,r.height);
-    // dashed inner border like the stamp
-    ctx.strokeStyle = prem ? 'rgba(201,162,39,.55)' : 'rgba(255,244,214,.55)';
-    ctx.lineWidth = 2;
-    ctx.setLineDash([7,6]);
-    ctx.strokeRect(8, 8, r.width-16, r.height-16);
-    ctx.setLineDash([]);
-    ctx.fillStyle = prem ? '#C9A227' : '#5C3F12';
-    ctx.font = "800 56px 'Inter'";
-    ctx.textAlign = 'center';
-    ctx.fillText('?', r.width/2, r.height/2 + 8);
-    ctx.fillStyle = g;
-    ctx.fillRect(r.width/2 - 22, r.height/2 - 6, 44, 18);
-    ctx.fillStyle = prem ? '#C9A227' : '#5C3F12';
-    ctx.beginPath();
-    const dcx=r.width/2, dcy=r.height/2+4, ds=8;
-    ctx.moveTo(dcx,dcy-ds);
-    ctx.lineTo(dcx+ds*0.78,dcy);
-    ctx.lineTo(dcx,dcy+ds);
-    ctx.lineTo(dcx-ds*0.78,dcy);
-    ctx.closePath();
-    ctx.fill();
-    ctx.fillStyle = prem ? 'rgba(201,162,39,.8)' : 'rgba(92,63,18,.9)';
-    ctx.font = "700 11px 'Inter'";
-    ctx.fillText('SCRATCH TO REVEAL', r.width/2, r.height - 20);
-    ctx.globalCompositeOperation = 'destination-out';
-    ctx.lineWidth = 34; ctx.lineCap='round'; ctx.lineJoin='round';
-    revealed = false;
-    strokeDist = 0; moveCount = 0;
-  }
-
-  let drawing=false, last=null, strokeDist=0, moveCount=0;
-  const pos = e => { const r=canvas.getBoundingClientRect(); return {x:e.clientX-r.left,y:e.clientY-r.top}; };
-  function scratch(e){
-    if(!drawing) return;
-    const p = pos(e);
-    if(last) strokeDist += Math.hypot(p.x-last.x, p.y-last.y);
-    ctx.beginPath();
-    ctx.moveTo((last||p).x,(last||p).y);
-    ctx.lineTo(p.x,p.y);
-    ctx.stroke();
-    last=p;
-    if(++moveCount % 6 === 0) checkReveal();
-  }
-  function doReveal(){
-    if(revealed) return;
-    revealed = true;
-    canvas.style.transition='opacity .55s ease';
-    canvas.style.opacity='0';
-    disableTimer = setTimeout(()=>{ canvas.style.pointerEvents='none'; },500);
-    document.getElementById('claimRow').classList.toggle('show', currentWin);
-    promptEl.textContent = currentWin ? 'Nice.' : 'Better luck tomorrow.';
-    if(currentWin) burstConfetti();
-  }
-  function checkReveal(){
-    if(revealed) return;
-    // sample only the center band where the reward text sits — clearing the
-    // edges/corners shouldn't be required once the reveal is readable
-    const rx = Math.floor(canvas.width * 0.18), rw = Math.floor(canvas.width * 0.64);
-    const ry = Math.floor(canvas.height * 0.28), rh = Math.floor(canvas.height * 0.44);
-    if (rw <= 0 || rh <= 0) return;
-    const d = ctx.getImageData(rx, ry, rw, rh).data;
-    let clear=0, total=0;
-    for(let i=3;i<d.length;i+=64){ total++; if(d[i]===0) clear++; }
-    if(clear/total > 0.6){
-      doReveal();
-    }
-  }
-  function release(){
-    drawing=false; last=null;
-    if(!revealed && strokeDist > 30) doReveal();
-  }
-  canvas.addEventListener('pointerdown',e=>{drawing=true;last=null;canvas.setPointerCapture(e.pointerId);scratch(e);});
-  canvas.addEventListener('pointermove',scratch);
-  canvas.addEventListener('pointerup',release);
-  canvas.addEventListener('pointercancel',release);
-  window.addEventListener('resize',()=>{ if(panel.classList.contains('show') && !revealed) paintFoil(); });
-
-  // ---------- referral demo ----------
-  document.getElementById('copyBtn').addEventListener('click', function(){
-    const code = document.getElementById('refCode').textContent.trim();
-    if (navigator.clipboard) navigator.clipboard.writeText(code);
-    this.textContent = 'Copied ✓';
-    setTimeout(()=>{ this.textContent='Copy'; }, 1800);
-  });
-  document.getElementById('applyBtn').addEventListener('click', ()=>{
-    const v = document.getElementById('refInput').value.trim();
-    const msg = document.getElementById('enterMsg');
-    if(/^SCRTCH-[A-Z0-9]{4}$/i.test(v)){
-      msg.textContent = 'Code applied — buy $100+ through the site to start the clock.';
-      msg.style.color = 'var(--green-dark)';
-    } else {
-      msg.textContent = 'Codes look like SCRTCH-XXXX.';
-      msg.style.color = '#B04A3A';
-    }
-  });
-
-  // ---------- confetti ----------
-  const cCan = document.getElementById('confetti');
-  const cCtx = cCan.getContext('2d');
-  function burstConfetti(){
-    cCan.width = innerWidth; cCan.height = innerHeight;
-    const colors = tier==='prem'
-      ? ['#C9A227','#EAD37E','#F4E7B0','#8F6E14']
-      : ['#F2C94C','#E0A93F','#B67F1E','#F7E3A8'];
-    const parts = Array.from({length:90},()=>({
-      x:innerWidth/2 + (Math.random()-.5)*260,
-      y:innerHeight*0.30,
-      vx:(Math.random()-.5)*2.2,
-      vy:-(Math.random()*2.5+0.8),
-      w:5+Math.random()*5, h:8+Math.random()*6,
-      c:colors[Math.floor(Math.random()*colors.length)],
-      rot:Math.random()*Math.PI, vr:(Math.random()-.5)*.12,
-      sway:Math.random()*Math.PI*2,
-    }));
-    let frames = 0;
-    (function tick(){
-      cCtx.clearRect(0,0,cCan.width,cCan.height);
-      for(const p of parts){
-        p.sway += 0.05;
-        p.x += p.vx + Math.sin(p.sway)*0.7;
-        p.y += p.vy;
-        p.vy = Math.min(p.vy + 0.055, 2.4); // gentle gravity, terminal velocity
-        p.rot += p.vr;
-        cCtx.save();
-        cCtx.translate(p.x,p.y); cCtx.rotate(p.rot);
-        cCtx.fillStyle=p.c;
-        cCtx.fillRect(-p.w/2,-p.h/2,p.w,p.h);
-        cCtx.restore();
-      }
-      if(++frames<380) requestAnimationFrame(tick);
-      else cCtx.clearRect(0,0,cCan.width,cCan.height);
-    })();
-  }
-
-  // ---------- countdowns ----------
-  let secs = 2*3600 + 12*60 + 44;
-  setInterval(()=>{
-    secs = secs>0 ? secs-1 : 86400;
-    const h=String(Math.floor(secs/3600)).padStart(2,'0'),
-          m=String(Math.floor(secs%3600/60)).padStart(2,'0'),
-          s=String(secs%60).padStart(2,'0');
-    const str = `${h}:${m}:${s}`;
-    document.getElementById('nextTicket').textContent = str;
-    document.getElementById('accrueTimer').textContent = str;
-  },1000);
-
-  renderTier();
-</script>
+<script type="module" src="./app.js"></script>
 </body>
 </html>
