@@ -47,8 +47,30 @@
     position:sticky;top:0;z-index:50;
     background:rgba(255,255,255,.92);backdrop-filter:blur(8px);
   }
-  .logo{font-weight:800;font-size:17px;letter-spacing:-.02em;display:flex;align-items:center;gap:9px}
-  .logo .leaf{width:16px;height:16px;background:var(--green);border-radius:50% 50% 50% 2px;transform:rotate(-45deg)}
+  .logo{
+    font-weight:800;font-size:17px;letter-spacing:-.02em;display:flex;align-items:center;gap:9px;
+    color:inherit;text-decoration:none;cursor:pointer;
+  }
+  .logo:hover{color:var(--ink)}
+  .logo .leaf{width:16px;height:16px;background:var(--green);border-radius:50% 50% 50% 2px;transform:rotate(-45deg);flex-shrink:0}
+  .toast-host{
+    position:fixed;top:76px;right:16px;z-index:200;display:flex;flex-direction:column;gap:10px;
+    width:min(360px,calc(100vw - 32px));pointer-events:none;
+  }
+  .toast{
+    pointer-events:auto;background:#131A21;color:#E8EDF0;border:1px solid #2A3640;
+    border-radius:14px;padding:14px 16px;font-size:13.5px;line-height:1.5;font-weight:500;
+    box-shadow:0 16px 40px -18px rgba(0,0,0,.55);
+    animation:toastIn .28s cubic-bezier(.22,1,.36,1);
+  }
+  .toast.warn{border-color:#C9A227;background:#1A1810}
+  .toast.error{border-color:#9B3B2E;background:#1A1210}
+  .toast.out{animation:toastOut .22s ease forwards}
+  @keyframes toastIn{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:none}}
+  @keyframes toastOut{to{opacity:0;transform:translateY(-6px)}}
+  @media(max-width:480px){
+    .toast-host{top:auto;bottom:16px;right:12px;left:12px;width:auto}
+  }
   .nav-links{display:flex;gap:26px;font-size:14px;font-weight:600;color:var(--muted)}
   .nav-links a{color:inherit;text-decoration:none}
   .nav-links a:hover{color:var(--ink)}
@@ -502,7 +524,7 @@
 <body>
 
 <nav>
-  <div class="logo"><span class="leaf"></span>$SCRATCH</div>
+  <a class="logo" href="/" aria-label="$SCRATCH home"><span class="leaf"></span>$SCRATCH</a>
   <div class="nav-links">
     <a href="#auction">Auction</a>
     <a href="#paths">Earn tickets</a>
@@ -785,8 +807,9 @@
 </footer>
 
 <canvas id="confetti"></canvas>
+<div class="toast-host" id="toastHost" aria-live="polite" aria-relevant="additions"></div>
 
 <!-- Bump ?v= to the short commit hash on every site/ ship so Render/CDN cannot serve stale app.js -->
-<script type="module" src="./app.js?v=anim-2"></script>
+<script type="module" src="./app.js?v=toast-1"></script>
 </body>
 </html>

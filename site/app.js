@@ -3,7 +3,7 @@
  * Wire from index.html: <script type="module" src="./app.js?v=…"></script>
  * Bump ASSET_VERSION (and the index.html ?v=) on every site/ commit.
  */
-export const ASSET_VERSION = 'anim-2';
+export const ASSET_VERSION = 'toast-1';
 
 import {
   createPublicClient,
@@ -343,6 +343,36 @@ function $(id) {
 
 function setText(el, text) {
   if (el) el.textContent = text;
+}
+
+const WALLET_REJECT_TOAST =
+  "Request declined in your wallet. If you didn't mean to: retry and approve the 'Add Robinhood Chain' prompt — and if you use multiple wallet extensions, make sure the right one responded.";
+
+/** Non-blocking toast. kind: '' | 'warn' | 'error' */
+function showToast(message, opts = {}) {
+  const host = $('toastHost');
+  if (!host || !message) return;
+  const el = document.createElement('div');
+  el.className = 'toast' + (opts.kind ? ` ${opts.kind}` : '');
+  el.setAttribute('role', 'status');
+  el.textContent = message;
+  host.appendChild(el);
+  const ms = opts.duration ?? (opts.kind === 'warn' || opts.kind === 'error' ? 7000 : 4500);
+  const dismiss = () => {
+    el.classList.add('out');
+    setTimeout(() => el.remove(), 220);
+  };
+  el.addEventListener('click', dismiss);
+  setTimeout(dismiss, ms);
+}
+
+function toastWalletError(err, fallback) {
+  if (isUserRejection(err)) {
+    showToast(WALLET_REJECT_TOAST, { kind: 'warn', duration: 9000 });
+    return;
+  }
+  const msg = err?.shortMessage || err?.message || fallback || String(err);
+  showToast(msg, { kind: 'error' });
 }
 
 function setHtml(el, html) {
@@ -1915,7 +1945,9 @@ async function connectWallet() {
   try {
     if (!window.ethereum) {
       setStatus(btn, 'No wallet');
-      alert('No Ethereum wallet detected. Install MetaMask or a compatible wallet.');
+      showToast('No Ethereum wallet detected. Install MetaMask or a compatible wallet.', {
+        kind: 'error',
+      });
       return;
     }
     await ensureChain();
@@ -1939,9 +1971,8 @@ async function connectWallet() {
     await rehydratePendingSession();
     if (!stageBusy()) renderTier();
   } catch (err) {
-    const msg = err?.shortMessage || err?.message || String(err);
     if (btn) btn.textContent = 'Connect';
-    alert(`Wallet: ${msg}`);
+    toastWalletError(err, 'Wallet connection failed');
   }
 }
 
@@ -2482,7 +2513,7 @@ async function startLiveScratch(tierOverride) {
   const tierKey = tier === TIER_STD ? 'std' : 'prem';
 
   if (!window.ethereum) {
-    alert('Connect a wallet to scratch live tickets.');
+    showToast('Connect a wallet to scratch live tickets.', { kind: 'warn' });
     return;
   }
   if (!state.account) {
@@ -2493,7 +2524,7 @@ async function startLiveScratch(tierOverride) {
   const tickets =
     tier === TIER_STD ? state.liveTickets.std : state.liveTickets.prem;
   if (tickets < CONFIG.ticketCost) {
-    alert('No tickets on this tier.');
+    showToast('No tickets on this tier.', { kind: 'warn' });
     return;
   }
 
@@ -2532,6 +2563,9 @@ async function startLiveScratch(tierOverride) {
         cancelNote:
           'Something went wrong finding the request — check your wallet activity.',
       });
+      showToast('Could not find the scratch request — check your wallet activity.', {
+        kind: 'error',
+      });
       return;
     }
 
@@ -2542,9 +2576,11 @@ async function startLiveScratch(tierOverride) {
     const msg = err?.shortMessage || err?.message || String(err);
     if (isUserRejection(err)) {
       resetSessionToIdle({ cancelNote: 'Cancelled — ticket unspent.' });
+      showToast(WALLET_REJECT_TOAST, { kind: 'warn', duration: 9000 });
       return;
     }
     resetSessionToIdle({ cancelNote: `Scratch failed: ${msg}` });
+    showToast(`Scratch failed: ${msg}`, { kind: 'error' });
   }
 }
 
