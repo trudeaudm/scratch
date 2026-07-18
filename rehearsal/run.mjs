@@ -381,7 +381,7 @@ function watcherRunning() {
   }
 }
 
-function startWatcher(env, state) {
+async function startWatcher(env, state) {
   if (watcherRunning()) {
     console.log("Watcher already running (pid file present).");
     state.checkpoints.watcherStarted = true;
@@ -397,6 +397,18 @@ function startWatcher(env, state) {
     CHAIN_FILE: state.entropyChainFile || ENTROPY_FILE,
     POLL_MS: "2000",
   };
+  // Backfill so a restart still picks up in-flight RandomnessRequested logs.
+  if (process.env.START_BLOCK) {
+    childEnv.START_BLOCK = process.env.START_BLOCK;
+  } else if (state.watcherStartBlock != null) {
+    childEnv.START_BLOCK = String(state.watcherStartBlock);
+  } else {
+    const provider = new JsonRpcProvider(env.RPC_URL);
+    const tip = await provider.getBlockNumber();
+    const lookback = 20_000; // ~33 min at 100ms blocks; enough for rescueDelay drills
+    childEnv.START_BLOCK = String(Math.max(0, tip - lookback));
+    state.watcherStartBlock = Number(childEnv.START_BLOCK);
+  }
   const fd = openSync(WATCHER_LOG, "a");
   const child = spawn(process.execPath, ["--use-system-ca", watchScript], {
     cwd: resolve(REPO_ROOT, "ops/entropy-operator"),
@@ -408,7 +420,9 @@ function startWatcher(env, state) {
   writeFileSync(WATCHER_PID, String(child.pid));
   state.checkpoints.watcherStarted = true;
   saveState(state);
-  console.log(`Watcher started pid=${child.pid} log=${WATCHER_LOG}`);
+  console.log(
+    `Watcher started pid=${child.pid} START_BLOCK=${childEnv.START_BLOCK} log=${WATCHER_LOG}`,
+  );
 }
 
 function stopWatcher() {
@@ -658,7 +672,7 @@ async function phaseWatcher(env, state) {
   if (!existsSync(state.entropyChainFile || ENTROPY_FILE)) {
     throw new Error("Entropy state file missing — run entropy phase first");
   }
-  startWatcher(env, state);
+  await startWatcher(env, state);
   console.log("Checkpoint 2 PASS — operator watcher running.");
   await sleep(3_000);
   return state;
@@ -921,7 +935,7 @@ async function drillD4(env, state) {
 
     // Restart watcher — late fulfill should emit ScratchLateFulfillment, no payout
     state.entropyChainFile = ENTROPY_FILE;
-    startWatcher(env, state);
+    await startWatcher(env, state);
     logDrill(id, "watcher restarted — waiting for late fulfill…");
 
     let late = false;
@@ -967,7 +981,7 @@ async function drillD4(env, state) {
     logDrill(id, `FAIL ${e.message}`);
     // try to restart watcher for subsequent drills
     try {
-      startWatcher(env, state);
+      await startWatcher(env, state);
     } catch {
       /* ignore */
     }
@@ -1130,7 +1144,7 @@ async function drillD7(env, state) {
     state.entropyChainFile = ENTROPY_FILE_D7;
     state.entropyCommitment = commitment;
     saveState(state);
-    startWatcher(env, state);
+    await startWatcher(env, state);
 
     recordDrill(state, id, {
       status: "PASS",
@@ -1143,7 +1157,7 @@ async function drillD7(env, state) {
     recordDrill(state, id, { status: "FAIL", error: e.message });
     logDrill(id, `FAIL ${e.message}`);
     try {
-      startWatcher(env, state);
+      await startWatcher(env, state);
     } catch {
       /* ignore */
     }
