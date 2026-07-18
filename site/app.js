@@ -3,7 +3,7 @@
  * Wire from index.html: <script type="module" src="./app.js?v=…"></script>
  * Bump ASSET_VERSION (and the index.html ?v=) on every site/ commit.
  */
-export const ASSET_VERSION = 'anim-1';
+export const ASSET_VERSION = 'anim-2';
 
 import {
   createPublicClient,
@@ -491,6 +491,8 @@ const state = {
     tierKey: 'std',
     startedAt: 0,
     optimisticDelta: 0,
+    /** Ticket-wei balance snapshot at pick — used to know when chain reflects the spend. */
+    ticketsAtPick: null,
     requestedAt: 0n,
   },
 };
@@ -742,6 +744,7 @@ function activeTier() {
   }
   let std = ticketCount(state.liveTickets.std);
   let prem = ticketCount(state.liveTickets.prem);
+  // Keep deducting the in-flight scratch until ticketsOf drops below the pick snapshot.
   if (state.session.optimisticDelta > 0) {
     if (state.session.tierKey === 'std') std = Math.max(0, std - state.session.optimisticDelta);
     else prem = Math.max(0, prem - state.session.optimisticDelta);
@@ -749,9 +752,31 @@ function activeTier() {
   return { std, prem };
 }
 
-function activeTierTickets() {
+/** Spendable whole tickets on a tier (floor), honoring in-flight optimistic spend. */
+function spendableOnTier(tierKey) {
   const t = activeTier();
-  return state.tier === 'std' ? t.std : t.prem;
+  return tierKey === 'std' ? t.std : t.prem;
+}
+
+function activeTierTickets() {
+  // Post-reveal / in-flight must use the session's scratched tier, not a tab that changed underneath.
+  const tierKey =
+    sessionPhase() !== PHASE.IDLE ? state.session.tierKey || state.tier : state.tier;
+  return spendableOnTier(tierKey);
+}
+
+/** Clear optimistic spend only once chain balance is below the pick-time snapshot. */
+function reconcileOptimisticSpend() {
+  if (state.session.optimisticDelta <= 0) return;
+  if (state.session.ticketsAtPick == null) {
+    state.session.optimisticDelta = 0;
+    return;
+  }
+  const key = state.session.tierKey === 'prem' ? 'prem' : 'std';
+  if (state.liveTickets[key] < state.session.ticketsAtPick) {
+    state.session.optimisticDelta = 0;
+    state.session.ticketsAtPick = null;
+  }
 }
 
 function activeChainTier() {
@@ -1408,7 +1433,8 @@ function renderPostRevealAction() {
   if (!claimRow || sessionPhase() !== PHASE.REVEALED) return;
 
   claimRow.classList.add('show');
-  const left = activeTierTickets();
+  // Remaining on the tier we just scratched (optimistic spend still applied if chain is stale).
+  const left = spendableOnTier(state.session.tierKey || state.tier);
 
   if (left >= 1) {
     if (btn) {
@@ -1423,8 +1449,10 @@ function renderPostRevealAction() {
     return;
   }
 
-  if (btn) btn.hidden = true;
-  // Exhausted: footer already carries the truth-table copy; keep claim wait empty.
+  if (btn) {
+    btn.hidden = true;
+    btn.textContent = 'Scratch another';
+  }
   if (wait) {
     wait.classList.remove('show');
     wait.textContent = '';
@@ -2002,6 +2030,7 @@ async function refreshWalletPanel(opts = {}) {
     state.emissionRate = emissionRate;
     state.totalStaked = totalStaked;
     state.scratchBalance = scratchBal;
+    reconcileOptimisticSpend();
 
     const staked = user.staked ?? user[0];
     state.userStaked = staked;
@@ -2019,10 +2048,6 @@ async function refreshWalletPanel(opts = {}) {
     updateStakedTicketsTip();
     updateStakeFormBalances();
 
-    // Reconcile ticket balances from chain; optimistic delta cleared once pending/settled.
-    if (state.session.phase === PHASE.PENDING || state.session.phase === PHASE.READY || state.session.phase === PHASE.REVEALED) {
-      state.session.optimisticDelta = 0;
-    }
     if (!opts.skipStage && sessionPhase() === PHASE.IDLE) {
       renderTier();
     } else {
@@ -2078,6 +2103,7 @@ function resetSessionToIdle(opts = {}) {
   state.session.phase = PHASE.IDLE;
   state.session.requestId = null;
   state.session.optimisticDelta = 0;
+  state.session.ticketsAtPick = null;
   state.session.requestedAt = 0n;
   state.pendingRequestId = null;
   hidePrintingOverlay();
@@ -2115,6 +2141,8 @@ function enterPickedUI(tier, tierKey) {
   state.session.startedAt = Date.now();
   state.session.requestId = null;
   state.session.optimisticDelta = 1;
+  state.session.ticketsAtPick =
+    tierKey === 'prem' ? state.liveTickets.prem : state.liveTickets.std;
   state.tier = tierKey;
 
   const stage = $('stage');
@@ -2157,7 +2185,7 @@ function enterPendingUI(requestId, requestedAt) {
   state.session.phase = PHASE.PENDING;
   state.session.requestId = requestId;
   state.session.requestedAt = requestedAt ?? 0n;
-  state.session.optimisticDelta = 0;
+  // Keep optimisticDelta until reconcileOptimisticSpend sees chain drop below ticketsAtPick.
   state.pendingRequestId = requestId;
 
   const panel = $('panel');
