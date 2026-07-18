@@ -2,7 +2,7 @@ import { type Address, zeroAddress } from "viem";
 
 /**
  * Single source of truth for dashboard addresses and priced pairs.
- * Fill after Deploy2 (+ script/DeployOpsVesting.s.sol). Zero addresses disable that row until set.
+ * Production Deploy2 + DeployOpsVesting (chain 4663).
  *
  * Config tokens are curated (verified symbols, pricing, write-panel dropdowns).
  * On-chain holdings also auto-discover via Blockscout — discovered-only tokens
@@ -11,7 +11,8 @@ import { type Address, zeroAddress } from "viem";
 export type DexPair = {
   /** DexScreener chain slug in /latest/dex/pairs/{chainId}/{pairAddress}. */
   chainId: string;
-  pairAddress: Address;
+  /** Pair id (EOA-style address or Uniswap v4 pool id — DexScreener path segment). */
+  pairAddress: `0x${string}`;
 };
 
 export type TokenKind = "crypto" | "stock";
@@ -53,12 +54,13 @@ export const DEX_MIN_LIQUIDITY_USD = 1_000;
 export const tokens: TokenConfig[] = [
   {
     symbol: "SCRATCH",
-    address: Z, // fill post-deploy
+    address: "0xf5E5f4D3C34A14B2fDfD59584Fe555Cd5e21F196",
     decimals: 18,
     price: "scratch",
   },
   {
     symbol: "USDG",
+    // Canonical 4663 address (fork suite DEFAULT_USDG / README).
     address: "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
     decimals: 18,
     price: "usdg",
@@ -83,11 +85,12 @@ export const tokens: TokenConfig[] = [
 
 /** DexScreener pairs used for SCRATCH and ETH/USD. Update chainId slug if DexScreener differs. */
 export const dexPairs = {
+  /** Production SCRATCH/ETH Uniswap v4 pool (site chart + DexScreener). */
   scratch: {
     chainId: "robinhood",
-    pairAddress: Z,
+    pairAddress: "0x3f66e1430c12a7a64839f43050165db6d1bf1ae5bd7df11e47a37a8e73bc00ef",
   } satisfies DexPair,
-  /** WETH/USDG or WETH/stable used for native ETH USD. */
+  /** WETH/USDG or WETH/stable used for native ETH USD — unset until a stable pair is pinned. */
   weth: {
     chainId: "robinhood",
     pairAddress: Z,
@@ -98,33 +101,38 @@ export const contracts = {
   prizeVault: {
     key: "prizeVault",
     label: "PrizeVault",
-    address: Z,
+    address: "0x86Ade8b30D481bBd9D2897d20931b107e776Ba52",
   } satisfies ContractEntry,
   stakingVault: {
     key: "stakingVault",
     label: "StakingVault",
-    address: Z,
+    address: "0x577Cecbe33d1B2F7f4DF7E0D8Bf03690C2b17eD6",
   } satisfies ContractEntry,
   standardTicketSource: {
     key: "standardTicketSource",
     label: "StandardTicketSource",
-    address: Z,
+    address: "0xC94894Cd3986E2D0f85616a0Dc59914f1057f003",
   } satisfies ContractEntry,
   scratchGame: {
     key: "scratchGame",
     label: "ScratchGame",
-    address: Z,
+    address: "0xBeD604b5AB226134EdF154cc31881d8C93f4C9e6",
   } satisfies ContractEntry,
-  /** Ops VestingWallet — fill after `forge script script/DeployOpsVesting.s.sol`. */
+  selfEntropyProvider: {
+    key: "selfEntropyProvider",
+    label: "SelfEntropyProvider",
+    address: "0xd305290DaF2b14b60FE3aaE7281C4A001B973aB0",
+  } satisfies ContractEntry,
+  /** Ops VestingWallet — DeployOpsVesting.s.sol. */
   vestingWallet: {
     key: "vestingWallet",
     label: "Ops VestingWallet",
-    address: Z,
+    address: "0xf2c4bfe47E8B24A526F1584b86810EeEd495cbde",
   } satisfies ContractEntry,
   treasury: {
     key: "treasury",
     label: "Treasury EOA",
-    address: Z,
+    address: "0x429A47560F348753E96Bbe0C9dDfD9bFF902eB85",
   } satisfies ContractEntry,
 } as const;
 

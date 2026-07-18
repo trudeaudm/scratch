@@ -26,7 +26,7 @@ export type TokenUnitPrice = {
 
 export type PriceTag = "config" | "dex" | "peg" | "none";
 
-async function fetchPairUsd(chainId: string, pairAddress: Address): Promise<number | null> {
+async function fetchPairUsd(chainId: string, pairAddress: `0x${string}`): Promise<number | null> {
   if (pairAddress === zeroAddress) return null;
   const url = `https://api.dexscreener.com/latest/dex/pairs/${chainId}/${pairAddress}`;
   const res = await fetch(url);
