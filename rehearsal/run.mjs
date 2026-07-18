@@ -284,7 +284,7 @@ function parseDeployLog(stdout, label) {
 }
 
 function parseEqLog(stdout, key) {
-  const re = new RegExp(`${key}=(0x[a-fA-F0-9]{40}|0x[a-fA-F0-9]{64})`);
+  const re = new RegExp(`${key}=\\s*(0x[a-fA-F0-9]{40}|0x[a-fA-F0-9]{64})`);
   const m = stdout.match(re);
   if (!m) throw new Error(`Could not parse ${key}= from output`);
   return m[1];
