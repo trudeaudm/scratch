@@ -3,6 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
 <title>SCRATCH — daily onchain scratch-offs on Robinhood Chain.</title>
 <meta name="description" content="Robinhood retired its scratch-off — regulators called it gamification. $SCRATCH is live on Robinhood Chain: hold for a daily ticket, stake to scratch for USDG and actual tokenized stocks. Could be SPCX. Probably $5.">
 <link rel="icon" type="image/png" href="/icon.png">
@@ -262,12 +264,14 @@
   .fan.picked .card:nth-child(3){transition-delay:.12s}
   .fan.locked{opacity:.35;pointer-events:none;filter:grayscale(1)}
 
-  .locked-note{
+  .stage-footer,.locked-note{
     display:none;margin-top:22px;font-size:14px;color:#8FA3B0;
     background:#131A21;border-radius:14px;padding:16px 20px;max-width:420px;margin-inline:auto;
   }
-  .locked-note.show{display:block}
-  .locked-note b{font-family:'IBM Plex Mono';color:#E8EDF0;font-variant-numeric:tabular-nums}
+  .stage-footer.show,.locked-note.show{display:block}
+  .stage-footer b,.locked-note b{font-family:'IBM Plex Mono';color:#E8EDF0;font-variant-numeric:tabular-nums}
+  .tier-tab:disabled{opacity:.45;cursor:not-allowed;transform:none}
+  .wallet-actions .btn:disabled,.path .cta .btn:disabled{opacity:.45;cursor:not-allowed}
 
   .scratch-panel{
     position:absolute;left:50%;top:64px;transform:translateX(-50%) scale(.92) translateY(14px);
@@ -600,7 +604,7 @@
       <button class="card" aria-label="Pick card three"><span class="mark"><i></i></span></button>
     </div>
 
-    <div class="locked-note" id="lockedNote"></div>
+    <div class="stage-footer" id="stageFooter" aria-live="polite"></div>
     <div class="session-note" id="sessionNote"></div>
 
     <div class="scratch-panel" id="panel">
@@ -621,7 +625,7 @@
           </div>
         </div>
         <div class="sc-foot">
-          <div class="sc-timer" id="scTimer">Next ticket in <b id="nextTicket">—</b></div>
+          <div class="sc-timer" id="scTimer" hidden></div>
           <button class="again" id="againBtn" style="display:none">Demo: reset</button>
         </div>
         <p class="session-reassure" id="sessionReassure">Reveals usually land in seconds — your ticket is safe either way.</p>
@@ -783,6 +787,7 @@
 
 <canvas id="confetti"></canvas>
 
-<script type="module" src="./app.js"></script>
+<!-- Bump ?v= to the short commit hash on every site/ ship so Render/CDN cannot serve stale app.js -->
+<script type="module" src="./app.js?v=992a73a-s1"></script>
 </body>
 </html>
