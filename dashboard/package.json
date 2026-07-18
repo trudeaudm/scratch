@@ -8,7 +8,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test": "tsx --test src/utils/prizeTable.test.ts",
+    "test": "tsx --test src/utils/prizeTable.test.ts src/utils/format.test.ts",
     "copy-abis": "node scripts/copy-abis.mjs"
   },
   "engines": {

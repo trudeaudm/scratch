@@ -60,9 +60,9 @@ export const tokens: TokenConfig[] = [
   },
   {
     symbol: "USDG",
-    // Canonical 4663 address (fork suite DEFAULT_USDG / README).
+    // Canonical 4663 address (fork suite DEFAULT_USDG / README). On-chain decimals()=6.
     address: "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
-    decimals: 18,
+    decimals: 6,
     price: "usdg",
   },
   {

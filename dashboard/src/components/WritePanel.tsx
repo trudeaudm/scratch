@@ -138,12 +138,30 @@ export function WritePanel({ tickets }: { tickets: TicketSourceVitals | null }) 
     return { error: null, total: each * BigInt(addresses.length), count: addresses.length, addresses, each };
   }, [grantAddrs, grantEach]);
 
+  /** Prefer on-chain ERC-20 decimals(); fall back to addresses.ts (never hardcode 18). */
+  async function resolveTokenDecimals(token: (typeof tokens)[number]): Promise<number> {
+    if (publicClient) {
+      try {
+        const onChain = (await publicClient.readContract({
+          address: token.address,
+          abi: erc20AbiTyped,
+          functionName: "decimals",
+        })) as number | bigint;
+        const n = Number(onChain);
+        if (Number.isInteger(n) && n >= 0 && n <= 36) return n;
+      } catch {
+        /* use config */
+      }
+    }
+    return token.decimals;
+  }
+
   function clearPending() {
     setPending(null);
     setActionErr(null);
   }
 
-  function prepareFund() {
+  async function prepareFund() {
     setActionErr(null);
     const token = configuredTokens.find((t) => t.symbol === fundToken);
     if (!token) {
@@ -154,20 +172,21 @@ export function WritePanel({ tickets }: { tickets: TicketSourceVitals | null }) 
       setActionErr("PrizeVault address not set");
       return;
     }
-    const amount = parseAmount(fundAmount, token.decimals);
+    const decimals = await resolveTokenDecimals(token);
+    const amount = parseAmount(fundAmount, decimals);
     if (amount === null || amount === 0n) {
-      setActionErr("Enter a valid amount");
+      setActionErr(`Enter a valid amount (${decimals} decimals)`);
       return;
     }
     setPending({
       kind: "fund",
       token,
       amount,
-      summary: `Approve ${fundAmount.trim()} ${token.symbol} for PrizeVault (${shortAddr(contracts.prizeVault.address)}), then call fund(asset=${shortAddr(token.address)}, amount=${fundAmount.trim()} ${token.symbol}).`,
+      summary: `Approve ${fundAmount.trim()} ${token.symbol} (${decimals} dp → ${amount.toString()} raw) for PrizeVault (${shortAddr(contracts.prizeVault.address)}), then call fund(asset=${shortAddr(token.address)}, amount=${amount.toString()}).`,
     });
   }
 
-  function prepareSend() {
+  async function prepareSend() {
     setActionErr(null);
     const target = configuredTargets.find((t) => t.key === sendTargetKey);
     if (!target) {
@@ -197,9 +216,10 @@ export function WritePanel({ tickets }: { tickets: TicketSourceVitals | null }) 
       setActionErr("Unknown token");
       return;
     }
-    const amount = parseAmount(sendAmount, token.decimals);
+    const decimals = await resolveTokenDecimals(token);
+    const amount = parseAmount(sendAmount, decimals);
     if (amount === null || amount === 0n) {
-      setActionErr("Enter a valid amount");
+      setActionErr(`Enter a valid amount (${decimals} decimals)`);
       return;
     }
     setPending({
@@ -207,7 +227,7 @@ export function WritePanel({ tickets }: { tickets: TicketSourceVitals | null }) 
       token,
       to: target.address,
       amount,
-      summary: `ERC-20 transfer ${sendAmount.trim()} ${token.symbol} to ${target.label} (${shortAddr(target.address)}).`,
+      summary: `ERC-20 transfer ${sendAmount.trim()} ${token.symbol} (${decimals} dp → ${amount.toString()} raw) to ${target.label} (${shortAddr(target.address)}).`,
     });
   }
 

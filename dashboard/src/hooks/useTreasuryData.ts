@@ -170,6 +170,7 @@ async function loadHolders(
 
     for (const t of configuredTokens) {
       let amount = 0n;
+      let decimals = t.decimals;
       try {
         amount = (await pc.readContract({
           address: t.address,
@@ -180,6 +181,17 @@ async function loadHolders(
       } catch {
         amount = 0n;
       }
+      try {
+        const onChain = (await pc.readContract({
+          address: t.address,
+          abi: erc20AbiTyped,
+          functionName: "decimals",
+        })) as number | bigint;
+        const n = Number(onChain);
+        if (Number.isInteger(n) && n >= 0 && n <= 36) decimals = n;
+      } catch {
+        /* keep config decimals */
+      }
       const unit = unitPriceFor(t.address, prices);
       let priceTag: PriceTag = "none";
       if (t.price === "usdg") priceTag = "peg";
@@ -189,8 +201,8 @@ async function loadHolders(
         symbol: t.symbol,
         address: t.address,
         amount,
-        decimals: t.decimals,
-        usd: amountUsd(amount, t.decimals, unit),
+        decimals,
+        usd: amountUsd(amount, decimals, unit),
         verified: true,
         kind: t.kind ?? "crypto",
         ticker: t.ticker,
