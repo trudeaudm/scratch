@@ -1,0 +1,17 @@
+{
+  "name": "scratch-rehearsal",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "§9 mainnet rehearsal harness (buildspec)",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "rehearsal": "node run.mjs",
+    "start": "node run.mjs all"
+  },
+  "dependencies": {
+    "ethers": "^6.13.4"
+  }
+}

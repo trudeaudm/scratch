@@ -10,6 +10,18 @@ lib/
 .env
 .env.*
 !.env.example
+!.env.rehearsal.example
+
+# §9 mainnet rehearsal — burner keys and local run state (never commit)
+.env.rehearsal
+rehearsal/.env.rehearsal
+rehearsal/state.json
+rehearsal/entropy-state.json
+rehearsal/entropy-state-*.json
+rehearsal/watcher.pid
+rehearsal/watcher.log
+rehearsal/node_modules/
+rehearsal/drill-logs/
 
 # SelfEntropy operator state (contains chain secret)
 ops/entropy-operator/entropy-state.json
