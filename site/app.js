@@ -3,7 +3,7 @@
  * Wire from index.html: <script type="module" src="./app.js?v=…"></script>
  * Bump ASSET_VERSION (and the index.html ?v=) on every site/ commit.
  */
-export const ASSET_VERSION = 'share-win-1';
+export const ASSET_VERSION = 'win-share-1';
 
 import {
   createPublicClient,
@@ -1503,19 +1503,11 @@ function renderPostRevealAction() {
 
 function buildWinShareText(win) {
   const prize = win.sharePrize || '+?';
-  const lines = [
-    `scratched a free ticket on @scratch4663 and hit ${prize} 🎟️`,
-  ];
-  if (win.txHash) {
-    lines.push(`receipt: ${CONFIG.explorer}/tx/${win.txHash}`);
-  }
-  lines.push('scratch4663.xyz');
-  let text = lines.join('\n');
-  if (text.length > 270) {
-    // Drop emoji first, then shorten receipt host if somehow still long.
-    text = text.replace(' 🎟️', '');
-  }
-  return text.slice(0, 280);
+  const tier = win.tierKey === 'prem' ? 'prem' : 'std';
+  const req = encodeURIComponent(win.requestId || '');
+  const page = `https://scratch4663.xyz/win.html?req=${req}&tier=${tier}`;
+  // Exactly two lines: voice line + share page (receipt lives inside win.html).
+  return `scratched a free ticket on @scratch4663 → ${prize} 🎟️\n${page}`;
 }
 
 function shareWinOnX() {
