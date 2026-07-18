@@ -117,59 +117,69 @@ async function main() {
   console.log(`  fromBlock:       ${fromBlock}`);
 
   const processed = new Set();
+  const MAX_LOG_RANGE = 9_000; // Alchemy (and many RPCs) cap eth_getLogs span
 
   for (;;) {
     try {
       const latest = await provider.getBlockNumber();
       if (latest >= fromBlock) {
-        const logs = await contract.queryFilter(contract.filters.RandomnessRequested(), fromBlock, latest);
-        for (const log of logs) {
-          const requestId = log.args.requestId;
-          const key = requestId.toString();
-          if (processed.has(key)) continue;
+        let rangeStart = fromBlock;
+        while (rangeStart <= latest) {
+          const rangeEnd = Math.min(latest, rangeStart + MAX_LOG_RANGE - 1);
+          const logs = await contract.queryFilter(
+            contract.filters.RandomnessRequested(),
+            rangeStart,
+            rangeEnd,
+          );
+          for (const log of logs) {
+            const requestId = log.args.requestId;
+            const key = requestId.toString();
+            if (processed.has(key)) continue;
 
-          const req = await contract.requests(requestId);
-          const epoch = req.epoch;
-          const pending = req.pending;
-          if (!pending) {
-            console.log(`request ${key}: already fulfilled/orphaned — skip`);
+            const req = await contract.requests(requestId);
+            const epoch = req.epoch;
+            const pending = req.pending;
+            if (!pending) {
+              console.log(`request ${key}: already fulfilled/orphaned — skip`);
+              processed.add(key);
+              continue;
+            }
+
+            const currentEpoch = await contract.currentEpoch();
+            if (epoch !== currentEpoch) {
+              console.warn(`request ${key}: epoch ${epoch} != current ${currentEpoch} (orphaned) — skip`);
+              processed.add(key);
+              continue;
+            }
+
+            const expected = await contract.nextFulfillSeq(currentEpoch);
+            if (requestId !== expected) {
+              // Wait for in-order head; leave unprocessed so a later poll retries.
+              console.log(`request ${key}: waiting for in-order head ${expected.toString()}`);
+              continue;
+            }
+
+            if (state.nextRevealIndex < 0) {
+              throw new Error("hash chain exhausted — register a new chain and regenerate state");
+            }
+
+            const preimage = preimageAt(state.secret, state.nextRevealIndex);
+            const cursor = await contract.epochCursor(currentEpoch);
+            if (hashPacked(preimage) !== cursor) {
+              throw new Error(
+                `preimage at index ${state.nextRevealIndex} does not match on-chain cursor — state desync`,
+              );
+            }
+
+            console.log(`revealing request ${key} with chain index ${state.nextRevealIndex}`);
+            await revealWithRetries(contract, requestId, preimage, maxRetries);
+
+            state.nextRevealIndex -= 1;
+            saveState(chainFile, state);
             processed.add(key);
-            continue;
+            console.log(`  nextRevealIndex now ${state.nextRevealIndex}`);
           }
-
-          const currentEpoch = await contract.currentEpoch();
-          if (epoch !== currentEpoch) {
-            console.warn(`request ${key}: epoch ${epoch} != current ${currentEpoch} (orphaned) — skip`);
-            processed.add(key);
-            continue;
-          }
-
-          const expected = await contract.nextFulfillSeq(currentEpoch);
-          if (requestId !== expected) {
-            // Wait for in-order head; leave unprocessed so a later poll retries.
-            console.log(`request ${key}: waiting for in-order head ${expected.toString()}`);
-            continue;
-          }
-
-          if (state.nextRevealIndex < 0) {
-            throw new Error("hash chain exhausted — register a new chain and regenerate state");
-          }
-
-          const preimage = preimageAt(state.secret, state.nextRevealIndex);
-          const cursor = await contract.epochCursor(currentEpoch);
-          if (hashPacked(preimage) !== cursor) {
-            throw new Error(
-              `preimage at index ${state.nextRevealIndex} does not match on-chain cursor — state desync`
-            );
-          }
-
-          console.log(`revealing request ${key} with chain index ${state.nextRevealIndex}`);
-          await revealWithRetries(contract, requestId, preimage, maxRetries);
-
-          state.nextRevealIndex -= 1;
-          saveState(chainFile, state);
-          processed.add(key);
-          console.log(`  nextRevealIndex now ${state.nextRevealIndex}`);
+          rangeStart = rangeEnd + 1;
         }
         fromBlock = latest + 1;
       }

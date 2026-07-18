@@ -29,7 +29,7 @@ import {
   getAddress,
   formatEther,
   parseEther,
-  id,
+  id as ethId,
   ZeroAddress,
 } from "ethers";
 
@@ -324,8 +324,8 @@ async function waitUntilTickets(staking, user, minTickets, timeoutMs = 180_000) 
 async function waitForSettlement(provider, game, requestId, timeoutMs = 180_000) {
   const start = Date.now();
   const iface = new Interface(GAME_ABI);
-  const settledTopic = id("ScratchSettled(address,uint256,uint8,uint256,address,uint256)");
-  const lateTopic = id("ScratchLateFulfillment(address,uint256,uint8)");
+  const settledTopic = ethId("ScratchSettled(address,uint256,uint8,uint256,address,uint256)");
+  const lateTopic = ethId("ScratchLateFulfillment(address,uint256,uint8)");
   let fromBlock = await provider.getBlockNumber();
 
   while (Date.now() - start < timeoutMs) {
@@ -401,11 +401,14 @@ async function startWatcher(env, state) {
   if (process.env.START_BLOCK) {
     childEnv.START_BLOCK = process.env.START_BLOCK;
   } else if (state.watcherStartBlock != null) {
-    childEnv.START_BLOCK = String(state.watcherStartBlock);
+    const provider = new JsonRpcProvider(env.RPC_URL);
+    const tip = await provider.getBlockNumber();
+    // Clamp so the first eth_getLogs stays within Alchemy's 10k block limit.
+    childEnv.START_BLOCK = String(Math.max(tip - 9_000, state.watcherStartBlock));
   } else {
     const provider = new JsonRpcProvider(env.RPC_URL);
     const tip = await provider.getBlockNumber();
-    const lookback = 20_000; // ~33 min at 100ms blocks; enough for rescueDelay drills
+    const lookback = 9_000; // Alchemy eth_getLogs max range is 10k on this RPC
     childEnv.START_BLOCK = String(Math.max(0, tip - lookback));
     state.watcherStartBlock = Number(childEnv.START_BLOCK);
   }
@@ -952,7 +955,7 @@ async function drillD4(env, state) {
         address: state.addresses.game,
         fromBlock: latest - 50,
         toBlock: latest,
-        topics: [id("ScratchLateFulfillment(address,uint256,uint8)")],
+        topics: [ethId("ScratchLateFulfillment(address,uint256,uint8)")],
       });
       for (const log of logs) {
         const p = iface.parseLog(log);
