@@ -405,6 +405,24 @@ function ticketCount(raw) {
   return Number(raw / CONFIG.ticketCost);
 }
 
+/** Format ticket-wei as whole.fraction (e.g. 2.45) with whole part emphasized in HTML. */
+function formatTicketBalanceHtml(raw) {
+  const n = Number(formatUnits(raw ?? 0n, 18));
+  if (!Number.isFinite(n) || n <= 0) {
+    return '<span class="tk-whole">0</span><span class="tk-frac">.00</span>';
+  }
+  const fixed = n.toFixed(2);
+  const [whole, frac] = fixed.split('.');
+  const wholePretty = Number(whole).toLocaleString('en-US');
+  return `<span class="tk-whole">${wholePretty}</span><span class="tk-frac">.${frac}</span>`;
+}
+
+function updateStakedTicketsTip() {
+  const tip = $('stakedTicketsTipText');
+  if (!tip) return;
+  tip.textContent = `Tickets accrue continuously while you stake ${minStakePretty()}+. Whole tickets are scratchable. All staking tickets are burned if you withdraw any stake.`;
+}
+
 /** Eligible for staked-tier accrual (same rule as StakingVault). */
 function isStakeEligible(staked = state.userStaked) {
   return staked >= state.minStake && staked !== 0n;
@@ -892,6 +910,7 @@ async function refreshMinStake() {
     }
 
     fillUsdLive();
+    updateStakedTicketsTip();
     if (state.account && !stageBusy() && activeTierTickets() <= 0) {
       renderEmptyStageNote();
     }
@@ -1123,51 +1142,130 @@ function renderTier() {
     promptEl.textContent = locked ? 'No tickets left on this tier' : 'Choose your free scratch';
   }
   if (locked) renderEmptyStageNote();
-  else if (lockedNote) lockedNote.innerHTML = '';
+  else {
+    if (lockedNote) lockedNote.innerHTML = '';
+    state._stakeNextSecs = null;
+    setNextTicketTimerVisible(false);
+  }
   updateScratchButtons();
 }
 
 function renderEmptyStageNote() {
   const lockedNote = $('lockedNote');
   if (!lockedNote) return;
-  const minPretty = minStakePretty();
 
   if (state.mode === 'demo') {
     lockedNote.innerHTML =
       'Out of demo tickets on this tier. Use <b>Demo: reset</b> after a reveal, or switch tiers.';
     state._stakeNextSecs = null;
+    setNextTicketTimerVisible(false);
     return;
   }
+
+  // Spendable tickets must never show an empty-tier countdown.
+  if (activeTierTickets() > 0) {
+    state._stakeNextSecs = null;
+    lockedNote.innerHTML = '';
+    setNextTicketTimerVisible(false);
+    return;
+  }
+
+  const copy = exhaustedTierCopy();
+  if (copy.kind === 'countdown') {
+    state._stakeNextSecs = copy.sec;
+    lockedNote.innerHTML = `Out of tickets on this tier. Next ticket accrues in <b id="accrueTimer">${formatCountdown(copy.sec)}</b> — or stake more to earn faster.`;
+  } else {
+    state._stakeNextSecs = null;
+    lockedNote.textContent = copy.text;
+  }
+  setNextTicketTimerVisible(false);
+}
+
+/**
+ * Truthful per-tier exhausted copy for empty stage + post-reveal wait.
+ * @returns {{ kind: 'countdown', sec: number } | { kind: 'text', text: string }}
+ */
+function exhaustedTierCopy() {
+  const minPretty = minStakePretty();
 
   if (state.tier === 'std') {
-    state._stakeNextSecs = null;
     if (state.scratchBalance >= state.minStake) {
-      lockedNote.textContent = `Holder tickets drop daily to wallets holding ${minPretty}+ SCRATCH.`;
-    } else {
-      lockedNote.textContent = `Hold ${minPretty}+ SCRATCH to receive the daily drop.`;
+      return {
+        kind: 'text',
+        text: `Holder tickets drop daily to wallets holding ${minPretty}+ SCRATCH.`,
+      };
     }
-    return;
+    return {
+      kind: 'text',
+      text: `Hold ${minPretty}+ SCRATCH to receive the daily drop.`,
+    };
   }
 
-  // Staked tier — countdown only when the user is actually accruing.
   if (!isStakeEligible()) {
-    state._stakeNextSecs = null;
-    let msg = `Stake ${minPretty}+ SCRATCH to start earning tickets`;
+    let text = `Stake ${minPretty}+ SCRATCH to start earning tickets`;
     if (state.scratchBalance >= state.minStake) {
-      msg += " — you're holding enough — stake it to start the clock";
+      text += " — you're holding enough — stake it to start the clock";
     }
-    lockedNote.textContent = msg;
-    return;
+    return { kind: 'text', text };
   }
 
   const sec = computeStakeNextTicketSec();
-  state._stakeNextSecs = sec;
   if (sec == null) {
-    lockedNote.textContent = `Stake ${minPretty}+ SCRATCH to start earning tickets`;
+    return {
+      kind: 'text',
+      text: `Stake ${minPretty}+ SCRATCH to start earning tickets`,
+    };
+  }
+  return { kind: 'countdown', sec };
+}
+
+function setNextTicketTimerVisible(on, countdownStr) {
+  const timer = $('scTimer');
+  if (!timer) return;
+  // Never show next-ticket countdown while the wallet still has spendable tickets.
+  const show = !!on && activeTierTickets() <= 0;
+  timer.classList.toggle('show', show);
+  if (show && countdownStr != null) setText($('nextTicket'), countdownStr);
+  if (!show) setText($('nextTicket'), '—');
+}
+
+function renderPostRevealAction() {
+  const claimRow = $('claimRow');
+  const btn = $('claimBtn');
+  const wait = $('nextWaitNote');
+  if (!claimRow) return;
+
+  claimRow.classList.add('show');
+  const left = activeTierTickets();
+
+  if (left >= 1) {
+    state._stakeNextSecs = null;
+    setNextTicketTimerVisible(false);
+    if (btn) {
+      btn.hidden = false;
+      btn.disabled = false;
+      btn.textContent = `Scratch another (${left} left)`;
+    }
+    if (wait) {
+      wait.classList.remove('show');
+      wait.textContent = '';
+    }
     return;
   }
-  lockedNote.innerHTML = `Out of tickets on this tier. Next ticket accrues in <b id="accrueTimer">${formatCountdown(sec)}</b> — or stake more to earn faster.`;
-  setText($('nextTicket'), formatCountdown(sec));
+
+  if (btn) btn.hidden = true;
+  const copy = exhaustedTierCopy();
+  if (wait) {
+    wait.classList.add('show');
+    if (copy.kind === 'countdown') {
+      state._stakeNextSecs = copy.sec;
+      wait.innerHTML = `Next ticket in <b id="postRevealTimer">${formatCountdown(copy.sec)}</b>`;
+    } else {
+      state._stakeNextSecs = null;
+      wait.textContent = copy.text;
+    }
+  }
+  setNextTicketTimerVisible(false);
 }
 
 function updateStakeFormBalances() {
@@ -1445,14 +1543,17 @@ function doReveal() {
   disableTimer = setTimeout(() => {
     canvas.style.pointerEvents = 'none';
   }, 500);
-  const claimRow = $('claimRow');
-  claimRow?.classList.toggle('show', state.currentWin);
   const promptEl = $('prompt');
   if (promptEl) {
     promptEl.textContent = state.currentWin ? 'Nice.' : 'Better luck tomorrow.';
   }
   if (state.currentWin) burstConfetti();
-  if (state.mode === 'live') enterRevealedUI();
+  if (state.mode === 'live') {
+    enterRevealedUI();
+  } else {
+    const claimRow = $('claimRow');
+    claimRow?.classList.toggle('show', state.currentWin);
+  }
 }
 
 function checkReveal() {
@@ -1767,7 +1868,6 @@ async function refreshWalletPanel(opts = {}) {
     state.scratchBalance = scratchBal;
 
     const staked = user.staked ?? user[0];
-    const banked = user.banked ?? user[2];
     state.userStaked = staked;
     const now = Math.floor(Date.now() / 1000);
     const expSec = Number(expiry);
@@ -1776,10 +1876,11 @@ async function refreshWalletPanel(opts = {}) {
 
     if (panel) panel.hidden = false;
     setText($('walletStaked'), `${formatHuman(staked)} SCRATCH`);
-    setText($('walletBanked'), `${formatHuman(banked)} tickets`);
     setText($('walletStdTickets'), String(ticketCount(stdTickets)));
-    setText($('walletPremTickets'), String(ticketCount(premTickets)));
+    const premEl = $('walletPremTickets');
+    if (premEl) premEl.innerHTML = formatTicketBalanceHtml(premTickets);
     setText($('walletExpiry'), remain > 0 ? formatCountdown(remain) : '—');
+    updateStakedTicketsTip();
     updateStakeFormBalances();
 
     // Reconcile ticket balances from chain; optimistic delta cleared once pending/settled.
@@ -1789,13 +1890,22 @@ async function refreshWalletPanel(opts = {}) {
     setText($('cntStd'), String(activeTier().std));
     setText($('cntPrem'), String(activeTier().prem));
     updateScratchButtons();
+    if (state.session.phase === PHASE.REVEALED) {
+      renderPostRevealAction();
+    }
     if (!opts.skipStage && !stageBusy()) renderTier();
     else if (!opts.skipStage && stageBusy()) {
       // counts already updated above
     } else if (opts.skipStage && !stageBusy()) {
       // Keep empty-stage copy / countdown in sync after stake/withdraw without resetting stage UI.
       if (activeTierTickets() <= 0) renderEmptyStageNote();
-      else state._stakeNextSecs = isStakeEligible() ? computeStakeNextTicketSec() : null;
+      else {
+        state._stakeNextSecs = null;
+        setNextTicketTimerVisible(false);
+      }
+    } else if (opts.skipStage && activeTierTickets() > 0) {
+      state._stakeNextSecs = null;
+      setNextTicketTimerVisible(false);
     }
   } catch (e) {
     const status = $('scratchStatus');
@@ -1857,10 +1967,22 @@ function resetSessionToIdle(opts = {}) {
   panel?.classList.remove('session-pending');
   $('fan')?.classList.remove('picked');
   $('claimRow')?.classList.remove('show');
+  const wait = $('nextWaitNote');
+  if (wait) {
+    wait.classList.remove('show');
+    wait.textContent = '';
+  }
+  const claimBtn = $('claimBtn');
+  if (claimBtn) {
+    claimBtn.hidden = false;
+    claimBtn.disabled = false;
+  }
+  setNextTicketTimerVisible(false);
   $('lockedNote')?.classList.remove('show');
   setReassure(false);
   show($('pendingRescue'), false);
   show($('rescueBtn'), false);
+  revealed = false;
   if (opts.cancelNote) setSessionNote(opts.cancelNote, 'cancel');
   else if (!opts.keepNote) setSessionNote('');
   renderTier();
@@ -1980,17 +2102,31 @@ async function enterReadyUI(asset, amount) {
 
   const claimBtn = $('claimBtn');
   if (claimBtn) {
-    claimBtn.textContent = state.currentWin ? 'Already sent · done' : 'Done';
+    claimBtn.hidden = true;
     claimBtn.disabled = false;
   }
+  const wait = $('nextWaitNote');
+  if (wait) {
+    wait.classList.remove('show');
+    wait.textContent = '';
+  }
+  $('claimRow')?.classList.remove('show');
+  setNextTicketTimerVisible(false);
 
   setText($('prompt'), 'scratch to reveal');
   unlockFoilForScratch();
 }
 
-function enterRevealedUI() {
+async function enterRevealedUI() {
   state.session.phase = PHASE.REVEALED;
   $('panel')?.classList.remove('session-pending');
+  // Fresh position stats right after the reveal settles into view.
+  try {
+    await refreshWalletPanel({ skipStage: true });
+  } catch {
+    /* still render next action from cached counts */
+  }
+  renderPostRevealAction();
 }
 
 function canScratchInput() {
@@ -2005,6 +2141,12 @@ async function applySettledPrize(asset, amount) {
     state.session.phase !== PHASE.READY
   ) {
     return;
+  }
+  // Position stats (tickets / staked / balance) as soon as settlement lands.
+  try {
+    await refreshWalletPanel({ skipStage: true });
+  } catch {
+    /* continue into ready UI */
   }
   await enterReadyUI(asset, amount);
 }
@@ -2501,12 +2643,22 @@ async function refreshPublic() {
 
 function wireUi() {
   $('tabStd')?.addEventListener('click', () => {
-    if (stageBusy() && state.mode === 'live') return;
+    if (state.mode === 'live' && stageBusy()) {
+      if (state.session.phase !== PHASE.REVEALED) return;
+      state.tier = 'std';
+      resetSessionToIdle();
+      return;
+    }
     state.tier = 'std';
     renderTier();
   });
   $('tabPrem')?.addEventListener('click', () => {
-    if (stageBusy() && state.mode === 'live') return;
+    if (state.mode === 'live' && stageBusy()) {
+      if (state.session.phase !== PHASE.REVEALED) return;
+      state.tier = 'prem';
+      resetSessionToIdle();
+      return;
+    }
     state.tier = 'prem';
     renderTier();
   });
@@ -2525,6 +2677,7 @@ function wireUi() {
 
   $('claimBtn')?.addEventListener('click', function () {
     if (state.mode === 'live') {
+      // REVEALED → IDLE: return to the fan with current ticket counts.
       resetSessionToIdle();
       return;
     }
@@ -2662,7 +2815,7 @@ function wireUi() {
     });
   }
 
-  // Holder expiry + staked next-ticket countdown (per-tier empty stage).
+  // Holder expiry + staked next-ticket countdown (only when tickets are exhausted).
   setInterval(() => {
     if (state.mode === 'demo') {
       if (!state._demoSecs) state._demoSecs = 2 * 3600 + 12 * 60 + 44;
@@ -2670,6 +2823,7 @@ function wireUi() {
       const str = formatCountdown(state._demoSecs);
       setText($('nextTicket'), str);
       setText($('accrueTimer'), str);
+      setText($('postRevealTimer'), str);
       return;
     }
 
@@ -2678,6 +2832,13 @@ function wireUi() {
       const remain = Math.max(0, Number(state.userExpiry) - now);
       state.expirySec = remain;
       setText($('walletExpiry'), remain > 0 ? formatCountdown(remain) : '—');
+    }
+
+    // Never drive an empty-tier countdown while spendable tickets remain.
+    if (activeTierTickets() > 0) {
+      if (state._stakeNextSecs != null) state._stakeNextSecs = null;
+      setNextTicketTimerVisible(false);
+      return;
     }
 
     if (
@@ -2689,7 +2850,7 @@ function wireUi() {
       state._stakeNextSecs = Math.max(0, state._stakeNextSecs - 1);
       const str = formatCountdown(state._stakeNextSecs);
       setText($('accrueTimer'), str);
-      setText($('nextTicket'), str);
+      setText($('postRevealTimer'), str);
     }
   }, 1000);
 }

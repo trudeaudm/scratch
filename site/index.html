@@ -69,8 +69,29 @@
   }
   .wallet-panel h3{font-size:14px;font-weight:800;letter-spacing:-.01em;margin-bottom:10px}
   .wallet-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;font-size:13px}
-  .wallet-grid .k{color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+  .wallet-grid .k{color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;display:flex;align-items:center;gap:5px}
   .wallet-grid .v{font-weight:700;font-variant-numeric:tabular-nums;margin-top:2px}
+  .wallet-grid .v .tk-whole{font-weight:800}
+  .wallet-grid .v .tk-frac{font-weight:600;color:var(--muted);font-size:.92em}
+  .info-tip{
+    position:relative;display:inline-flex;align-items:center;justify-content:center;
+    width:15px;height:15px;border-radius:50%;border:1px solid var(--line);
+    background:var(--dim);color:var(--muted);font-size:10px;font-weight:800;line-height:1;
+    cursor:help;padding:0;font-family:inherit;flex-shrink:0;
+  }
+  .info-tip:hover,.info-tip:focus-visible{color:var(--green-dark);border-color:var(--green);outline:none}
+  .info-tip .tip{
+    display:none;position:absolute;left:50%;bottom:calc(100% + 8px);transform:translateX(-50%);
+    width:min(240px,70vw);padding:10px 12px;border-radius:10px;z-index:5;
+    background:#131A21;color:#E8EDF0;font-size:11.5px;font-weight:500;letter-spacing:0;
+    text-transform:none;line-height:1.45;box-shadow:0 10px 28px -12px rgba(0,0,0,.45);
+    text-align:left;pointer-events:none;
+  }
+  .info-tip .tip::after{
+    content:"";position:absolute;left:50%;top:100%;transform:translateX(-50%);
+    border:6px solid transparent;border-top-color:#131A21;
+  }
+  .info-tip:hover .tip,.info-tip:focus-visible .tip{display:block}
   .wallet-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
   .wallet-actions .btn{flex:1 1 140px;text-align:center;min-height:44px}
   .stake-row,.withdraw-row{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:flex-end}
@@ -343,13 +364,19 @@
     100%{transform:scale(1)}
   }
   .sc-foot{display:flex;justify-content:space-between;align-items:center;margin-top:16px;gap:10px}
-  .sc-timer{font-size:12px;color:#7E93A0}
+  .sc-timer{font-size:12px;color:#7E93A0;display:none}
+  .sc-timer.show{display:block}
   .sc-timer b{font-family:'IBM Plex Mono';font-weight:500;color:#E8EDF0;font-variant-numeric:tabular-nums}
   .claim-row{margin-top:14px;display:none}
   .claim-row.show{display:block;animation:rise .35s ease}
   @keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
   .claim-row .btn{width:100%;background:#21CE99;color:#0B1015}
   .claim-row .btn:hover{background:#1BB786}
+  .next-wait{
+    display:none;font-size:13px;line-height:1.5;color:#8FA3B0;text-align:center;padding:4px 2px;
+  }
+  .next-wait.show{display:block}
+  .next-wait b{font-family:'IBM Plex Mono';font-weight:500;color:#E8EDF0;font-variant-numeric:tabular-nums}
   .again{background:none;border:none;cursor:pointer;font-family:'Inter';font-size:12.5px;font-weight:600;color:#7E93A0;text-decoration:underline;padding:6px}
   .again:hover{color:#E8EDF0}
   .again:focus-visible{outline:3px solid #21CE99;outline-offset:2px}
@@ -510,8 +537,16 @@
       <div><div class="k">Staked</div><div class="v" id="walletStaked">—</div></div>
       <div><div class="k">Holder tickets</div><div class="v" id="walletStdTickets">—</div></div>
       <div><div class="k">Holder expiry</div><div class="v" id="walletExpiry">—</div></div>
-      <div><div class="k">Staked tickets</div><div class="v" id="walletPremTickets">—</div></div>
-      <div><div class="k">Banked (stake)</div><div class="v" id="walletBanked">—</div></div>
+      <div>
+        <div class="k">
+          Staked tickets
+          <button type="button" class="info-tip" id="stakedTicketsTip" aria-label="About staked tickets">
+            i
+            <span class="tip" id="stakedTicketsTipText">Tickets accrue continuously while you stake. Whole tickets are scratchable. All staking tickets are burned if you withdraw any stake.</span>
+          </button>
+        </div>
+        <div class="v" id="walletPremTickets">—</div>
+      </div>
     </div>
     <div class="wallet-actions">
       <button type="button" class="btn sm" id="scratchBtnStd">Scratch holder card</button>
@@ -586,12 +621,13 @@
           </div>
         </div>
         <div class="sc-foot">
-          <div class="sc-timer">Next ticket in <b id="nextTicket">—</b></div>
+          <div class="sc-timer" id="scTimer">Next ticket in <b id="nextTicket">—</b></div>
           <button class="again" id="againBtn" style="display:none">Demo: reset</button>
         </div>
         <p class="session-reassure" id="sessionReassure">Reveals usually land in seconds — your ticket is safe either way.</p>
         <div class="claim-row" id="claimRow">
-          <button class="btn" id="claimBtn">Paid to your wallet</button>
+          <button class="btn" id="claimBtn">Scratch another</button>
+          <div class="next-wait" id="nextWaitNote"></div>
         </div>
       </div>
     </div>
