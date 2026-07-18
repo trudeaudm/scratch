@@ -111,7 +111,7 @@ const ENTROPY_ABI = [
   "function registerChain(bytes32 commitment)",
   "function currentEpoch() view returns (uint64)",
   "function reveal(uint256 requestId, bytes32 preimage)",
-  "function requests(uint256 requestId) view returns (uint64 epoch, bool pending)",
+  "function requests(uint256 requestId) view returns (address requester, uint64 epoch, bool pending)",
   "error WrongEpoch()",
 ];
 

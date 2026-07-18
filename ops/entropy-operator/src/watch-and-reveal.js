@@ -30,7 +30,7 @@ const ABI = [
   "function currentEpoch() view returns (uint64)",
   "function epochCursor(uint64 epoch) view returns (bytes32)",
   "function operator() view returns (address)",
-  "function requests(uint256 requestId) view returns (uint64 epoch, bool pending)",
+  "function requests(uint256 requestId) view returns (address requester, uint64 epoch, bool pending)",
 ];
 
 function hashPacked(preimageHex) {
@@ -128,7 +128,9 @@ async function main() {
           const key = requestId.toString();
           if (processed.has(key)) continue;
 
-          const [epoch, pending] = await contract.requests(requestId);
+          const req = await contract.requests(requestId);
+          const epoch = req.epoch;
+          const pending = req.pending;
           if (!pending) {
             console.log(`request ${key}: already fulfilled/orphaned — skip`);
             processed.add(key);
