@@ -31,6 +31,8 @@ export type TokenConfig = {
   price: "scratch" | "usdg" | "eth" | "dex" | "none";
   /** Default crypto. Stocks/RWAs group under "Stocks & RWAs" in holdings. */
   kind?: TokenKind;
+  /** Display name (e.g. stock product title). */
+  name?: string;
   /** Underlying ticker for stocks (e.g. "AAPL") — shown in brokerage-style view. */
   ticker?: string;
   /** Pin a preferred DexScreener pair (tokenized stocks / thin markets). */
@@ -71,16 +73,20 @@ export const tokens: TokenConfig[] = [
     decimals: 18,
     price: "eth",
   },
-  // Example stock/RWA entries (fill address + preferredPair after listing):
-  // {
-  //   symbol: "tAAPL",
-  //   address: Z,
-  //   decimals: 18,
-  //   price: "dex",
-  //   kind: "stock",
-  //   ticker: "AAPL",
-  //   preferredPair: { chainId: "robinhood", pairAddress: Z },
-  // },
+  {
+    symbol: "SPCX",
+    address: "0x4a0e65a3eccec6dbe60ae065f2e7bb85fae35eea",
+    decimals: 18,
+    price: "dex",
+    kind: "stock",
+    ticker: "SPCX",
+    name: "SpaceX • Robinhood Token",
+    // Uniswap v4 SPCX/ETH (WETH) on DexScreener — highest-liq WETH/SPCX pair for this token.
+    preferredPair: {
+      chainId: "robinhood",
+      pairAddress: "0x7cf7a805185bce4766278dc4e4047fbc5d8e2bc8a33b3268270d43b86e10236b",
+    },
+  },
 ];
 
 /** DexScreener pairs used for SCRATCH and ETH/USD. Update chainId slug if DexScreener differs. */
