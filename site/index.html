@@ -241,14 +241,8 @@
   .alloc-bar i{display:block;height:100%}
   .alloc-legend{display:flex;flex-wrap:wrap;gap:14px;font-size:12.5px;color:var(--muted)}
   .alloc-legend span::before{content:"";display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px;vertical-align:-1px;background:var(--dot)}
-  .steps-mini{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:16px;margin-top:36px}
-  .step-mini{border:1px solid var(--line);border-radius:16px;padding:22px 20px;background:#fff}
-  .step-mini .n{font-weight:800;color:var(--green-dark);font-size:13px;letter-spacing:.08em;margin-bottom:8px}
-  .step-mini h4{font-size:15.5px;font-weight:700;letter-spacing:-.01em;margin-bottom:6px}
-  .step-mini p{font-size:13.5px;line-height:1.6;color:var(--muted)}
-  .step-mini b{color:var(--ink);font-weight:600}
   .params{display:flex;flex-wrap:wrap;gap:10px;margin-top:26px}
-  .param{font-size:13px;font-weight:700;border:1.5px solid var(--line);border-radius:100px;padding:9px 16px;color:var(--ink)}
+  .param{font-size:13px;font-weight:700;border:1.5px solid var(--line);border-radius:100px;padding:9px 16px;color:var(--ink);background:#fff}
   .param b{color:var(--green-dark)}
 
   /* game stage — period-accurate dark panel (the old app, embedded as an artifact) */
@@ -436,18 +430,29 @@
   .expiry{font-size:12px;color:var(--teal-deep);margin-top:28px;opacity:.9}
   .expiry b{color:var(--teal-deep);font-weight:700}
 
-  /* pool health */
-  .pool{background:var(--paper);border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
-  .pool-inner{max-width:1060px;margin:0 auto;padding:34px clamp(20px,5vw,64px)}
-  .pool-head{display:flex;justify-content:space-between;align-items:baseline;gap:14px;flex-wrap:wrap}
-  .pool-head h3{font-size:15px;font-weight:700;letter-spacing:-.01em}
-  .pool-head .verify{font-size:12.5px;font-weight:600;color:var(--green-dark);text-decoration:none}
-  .pool-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;margin-top:20px}
-  .pool-stat{background:#fff;border:1px solid var(--line);border-radius:14px;padding:16px 16px 14px}
-  .pool-stat .v{font-weight:800;font-size:19px;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
-  .pool-stat .v em{font-style:normal;color:var(--green)}
-  .pool-stat .v .g{color:var(--gold)}
-  .pool-stat .k{font-size:11px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);margin-top:5px}
+  .launch-verify{display:inline-block;font-size:12.5px;font-weight:600;color:var(--green-dark);text-decoration:none;margin-top:18px}
+  .launch-verify:hover{text-decoration:underline}
+
+  /* archival launch — diligence weight, not hero */
+  section.launch{
+    padding:clamp(36px,5vw,56px) clamp(20px,5vw,64px);
+  }
+  section.launch h2{font-size:clamp(18px,2.4vw,24px);max-width:520px;letter-spacing:-.02em}
+  section.launch .sec-sub{font-size:13.5px;margin-top:10px;max-width:520px}
+  section.launch .alloc-bar{height:10px;margin:14px 0 8px}
+  section.launch .alloc-legend{font-size:11.5px;gap:10px 14px}
+  section.launch .params{margin-top:16px;gap:8px}
+  section.launch .param{font-size:12px;padding:7px 12px;font-weight:600;background:#fff}
+
+  /* transparency */
+  .trust-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-top:28px}
+  .trust-item{
+    background:#fff;border:1px solid var(--line);border-radius:14px;padding:14px 16px;
+  }
+  .trust-item .k{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+  .trust-item .v{font-family:'IBM Plex Mono';font-size:12px;margin-top:6px;word-break:break-all;color:var(--ink);line-height:1.45}
+  .trust-item a{color:var(--green-dark);text-decoration:none}
+  .trust-item a:hover{text-decoration:underline}
 
   /* sections — full-bleed alternating white / mint tint; content cards stay white */
   section{
@@ -457,7 +462,8 @@
   section:nth-of-type(even){background:var(--green-tint)}
   section > *{max-width:1060px;margin-left:auto;margin-right:auto}
   section > .paths,section > .ref-grid,section > .steps-mini,section > .params,
-  section > .inv-block,section > .wins-block,section > .enter-row,section > a.btn{
+  section > .inv-block,section > .wins-block,section > .enter-row,section > a.btn,
+  section > .trust-grid,section > .alloc-bar,section > .alloc-legend,section > .fairness{
     max-width:1060px;
   }
   .sec-eyebrow{font-size:12px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--green-dark);margin-bottom:14px}
@@ -585,11 +591,12 @@
 <nav>
   <a class="logo" href="/" aria-label="$SCRATCH home"><span class="leaf"></span>$SCRATCH</a>
   <div class="nav-links">
-    <a href="#auction">Auction</a>
-    <a href="#paths">Earn tickets</a>
+    <a href="#scratch">Scratch</a>
+    <a href="#tickets">Tickets</a>
     <a href="#vault">Vault</a>
     <a href="#wins">Wins</a>
-    <a href="#lore">The lore</a>
+    <a href="#lore">Lore</a>
+    <a href="#transparency">Transparency</a>
   </div>
   <div class="nav-actions">
     <a class="btn ghost x-link" href="https://x.com/scratch4663" target="_blank" rel="noopener">@scratch4663</a>
@@ -600,7 +607,7 @@
 
 <div class="announce">$SCRATCH is live and trading — <a href="https://dexscreener.com/robinhood/0x3f66e1430c12a7a64839f43050165db6d1bf1ae5bd7df11e47a37a8e73bc00ef" target="_blank" rel="noopener">chart</a> · auction cleared 91% above floor, 100% sold · <b>game &amp; staking are live onchain</b></div>
 
-<header>
+<header id="scratch">
   <div class="hero-card">
   <div class="eyebrow">Live on Robinhood Chain · scratch now</div>
   <h1>Your free stock era is back.<br><span>Every single day.</span></h1>
@@ -726,56 +733,7 @@
   <div class="expiry">Tickets expire <b>7 days</b> after they're earned · bank up to <b>7 days'</b> accrual · any staking withdrawal burns all staking tickets</div>
 </header>
 
-<div class="pool">
-  <div class="pool-inner">
-    <div class="pool-head">
-      <h3>Where every token goes — locked before the auction</h3>
-      <a class="verify" href="https://x.com/scratch4663" target="_blank" rel="noopener">Full breakdown on X →</a>
-    </div>
-    <div class="alloc-bar">
-      <i style="width:38.9%;background:#21CE99" title="Publicly sold"></i>
-      <i style="width:31.1%;background:#0B0E0C" title="Locked LP"></i>
-      <i style="width:20%;background:#C9A227" title="Prize vault"></i>
-      <i style="width:10%;background:#B7C0B9" title="Ops"></i>
-    </div>
-    <div class="alloc-legend">
-      <span style="--dot:#21CE99"><b>38.9%</b>&nbsp;publicly sold in the auction</span>
-      <span style="--dot:#0B0E0C"><b>31.1%</b>&nbsp;liquidity, locked until July 2027</span>
-      <span style="--dot:#C9A227"><b>20%</b>&nbsp;prize vault (public address at launch)</span>
-      <span style="--dot:#B7C0B9"><b>10%</b>&nbsp;ops &amp; campaigns — the smallest number on this page</span>
-    </div>
-    <div class="pool-grid" style="margin-top:22px">
-      <div class="pool-stat"><div class="v"><em>1%</em></div><div class="k">pool fee → prize treasury</div></div>
-      <div class="pool-stat"><div class="v">1 year</div><div class="k">LP timelock, visible to bidders</div></div>
-      <div class="pool-stat"><div class="v">20%</div><div class="k">of raise → prize inventory &amp; ops</div></div>
-      <div class="pool-stat"><div class="v">Onchain odds</div><div class="k">same table the game enforces</div></div>
-    </div>
-    <div class="fairness" id="fairnessNote"></div>
-  </div>
-</div>
-
-<section id="auction">
-  <div class="sec-eyebrow">The auction</div>
-  <h2>Launched by clearing auction. Everyone paid the same path.</h2>
-  <p class="sec-sub">$SCRATCH launched by <b>continuous clearing auction</b> — Uniswap's onchain fair-launch mechanism. No snipers, no insider allocations, no dev candle. Bids settled at one uniform clearing price, then liquidity deployed automatically and trading began.</p>
-  <div class="steps-mini">
-    <div class="step-mini"><div class="n">01</div><h4>Bids in ETH</h4><p>Bids were placed at any price at or above the floor during the 12-hour window. Bids were onchain and refundable if the auction didn't clear.</p></div>
-    <div class="step-mini"><div class="n">02</div><h4>One clearing price</h4><p>At close, the auction found the single price where demand met supply. <b>Everyone above it won at exactly that price.</b> Everyone below was refunded.</p></div>
-    <div class="step-mini"><div class="n">03</div><h4>Liquidity deployed itself</h4><p>The pool launched at the clearing price with a <b>dense USDG shelf under it</b> and the LP position locked for a year — the lock was verifiable before bidding.</p></div>
-    <div class="step-mini"><div class="n">04</div><h4>Then you scratch</h4><p>Game &amp; staking are live. The prize vault is stocked by <b>the auction itself</b> — purchases published with receipts.</p></div>
-  </div>
-  <a class="btn" href="https://dexscreener.com/robinhood/0x3f66e1430c12a7a64839f43050165db6d1bf1ae5bd7df11e47a37a8e73bc00ef" target="_blank" rel="noopener" style="display:block;width:100%;text-align:center;margin-top:26px">View the chart →</a>
-  <div class="params">
-    <div class="param">Cleared <b>91% above floor</b></div>
-    <div class="param">FDV at launch <b>$14.9k</b></div>
-    <div class="param">Supply sold <b>100%</b></div>
-    <div class="param">LP locked <b>until July 2027</b></div>
-    <div class="param">Raised in <b>ETH</b></div>
-    <div class="param">Status <b>Trading live</b></div>
-  </div>
-</section>
-
-<section id="paths">
+<section id="tickets">
   <div class="sec-eyebrow">Two ways to earn</div>
   <h2>Hold for the ritual. Stake for the stocks.</h2>
   <p class="sec-sub">A fixed pool of tickets is emitted every second and split pro-rata among everyone above the minimum — <b>more held, faster earn;</b> more players, slower for everyone. The math can't break the bank. Holder tickets and staked tickets are <b>separate currencies</b> — they never convert.</p>
@@ -824,6 +782,71 @@
   </div>
 </section>
 
+<section class="lore" id="lore">
+  <div class="sec-eyebrow">The lore</div>
+  <div class="lore-mark" aria-hidden="true">
+    <span class="robin">Robin&rsquo;s</span>
+    <span class="reward">Reward</span>
+  </div>
+  <h2>Pick a card. Any card. It's probably a $5 card.</h2>
+  <p>Robinhood's referral reward was a masterpiece of suspense: three cards, one pick, a scratch, and a mystery stock. <b>Almost always five bucks</b> — but it might be Apple, and that "might" onboarded millions of first-time investors.</p>
+  <p>Then the design got labeled gamification and the ritual was sanded down into a plain claim button. <b>$SCRATCH restores it</b> — cards, scratch, suspense, and yes, on Robinhood Chain the mystery prize can literally be a stock again. The odds are printed on this page from the live game contract and the vault is onchain. <b>Check our math.</b></p>
+</section>
+
+<section id="transparency">
+  <div class="sec-eyebrow">Fairness &amp; transparency</div>
+  <h2>Same contracts that settle you.</h2>
+  <p class="sec-sub">Odds on this page come from the <b>same game contract</b> that settles your scratch. Liquidity is <b>locked until July 2027</b>.</p>
+  <div class="fairness" id="fairnessNote"></div>
+  <div class="trust-grid">
+    <div class="trust-item">
+      <div class="k">$SCRATCH</div>
+      <div class="v"><a href="https://robinhoodchain.blockscout.com/address/0xf5E5f4D3C34A14B2fDfD59584Fe555Cd5e21F196" target="_blank" rel="noopener">0xf5E5f4D3C34A14B2fDfD59584Fe555Cd5e21F196</a></div>
+    </div>
+    <div class="trust-item">
+      <div class="k">ScratchGame</div>
+      <div class="v"><a href="https://robinhoodchain.blockscout.com/address/0xBeD604b5AB226134EdF154cc31881d8C93f4C9e6" target="_blank" rel="noopener">0xBeD604b5AB226134EdF154cc31881d8C93f4C9e6</a></div>
+    </div>
+    <div class="trust-item">
+      <div class="k">PrizeVault</div>
+      <div class="v"><a href="https://robinhoodchain.blockscout.com/address/0x86Ade8b30D481bBd9D2897d20931b107e776Ba52" target="_blank" rel="noopener">0x86Ade8b30D481bBd9D2897d20931b107e776Ba52</a></div>
+    </div>
+    <div class="trust-item">
+      <div class="k">StakingVault</div>
+      <div class="v"><a href="https://robinhoodchain.blockscout.com/address/0x577Cecbe33d1B2F7f4DF7E0D8Bf03690C2b17eD6" target="_blank" rel="noopener">0x577Cecbe33d1B2F7f4DF7E0D8Bf03690C2b17eD6</a></div>
+    </div>
+    <div class="trust-item">
+      <div class="k">Pool</div>
+      <div class="v"><a href="https://dexscreener.com/robinhood/0x3f66e1430c12a7a64839f43050165db6d1bf1ae5bd7df11e47a37a8e73bc00ef" target="_blank" rel="noopener">0x3f66…00ef</a></div>
+    </div>
+  </div>
+</section>
+
+<section class="launch" id="launch">
+  <div class="sec-eyebrow">The launch</div>
+  <h2>CCA fair launch. 100% sold. 91% above floor.</h2>
+  <p class="sec-sub">Launched by <b>continuous clearing auction</b> — Uniswap's onchain fair-launch. LP locked until July 2027.</p>
+  <div class="alloc-bar">
+    <i style="width:38.9%;background:#21CE99" title="Publicly sold"></i>
+    <i style="width:31.1%;background:#0B0E0C" title="Locked LP"></i>
+    <i style="width:20%;background:#C9A227" title="Prize vault"></i>
+    <i style="width:10%;background:#B7C0B9" title="Ops"></i>
+  </div>
+  <div class="alloc-legend">
+    <span style="--dot:#21CE99"><b>38.9%</b>&nbsp;publicly sold</span>
+    <span style="--dot:#0B0E0C"><b>31.1%</b>&nbsp;LP, locked to July 2027</span>
+    <span style="--dot:#C9A227"><b>20%</b>&nbsp;prize vault</span>
+    <span style="--dot:#B7C0B9"><b>10%</b>&nbsp;ops</span>
+  </div>
+  <div class="params">
+    <div class="param">Cleared <b>91% above floor</b></div>
+    <div class="param">Supply sold <b>100%</b></div>
+    <div class="param">LP locked <b>until July 2027</b></div>
+    <div class="param">FDV at launch <b>$14.9k</b></div>
+  </div>
+  <a class="launch-verify" href="https://x.com/scratch4663" target="_blank" rel="noopener">Full breakdown on X →</a>
+</section>
+
 <section id="referral">
   <div class="sec-eyebrow">Referrals</div>
   <h2>Bring a friend, both of you scratch. <span class="status">coming soon</span></h2>
@@ -857,17 +880,6 @@
   </div>
 </section>
 
-<section class="lore" id="lore">
-  <div class="sec-eyebrow">The lore</div>
-  <div class="lore-mark" aria-hidden="true">
-    <span class="robin">Robin&rsquo;s</span>
-    <span class="reward">Reward</span>
-  </div>
-  <h2>Pick a card. Any card. It's probably a $5 card.</h2>
-  <p>Robinhood's referral reward was a masterpiece of suspense: three cards, one pick, a scratch, and a mystery stock. <b>Almost always five bucks</b> — but it might be Apple, and that "might" onboarded millions of first-time investors.</p>
-  <p>Then the design got labeled gamification and the ritual was sanded down into a plain claim button. <b>$SCRATCH restores it</b> — cards, scratch, suspense, and yes, on Robinhood Chain the mystery prize can literally be a stock again. The odds are printed on this page from the live game contract and the vault is onchain. <b>Check our math.</b></p>
-</section>
-
 <footer>
   <div class="logo" style="font-size:15px"><span class="leaf"></span>$SCRATCH</div>
   <div class="ca">CA: 0xf5E5f4D3C34A14B2fDfD59584Fe555Cd5e21F196 — the only other place this appears is the pinned post of <a href="https://x.com/scratch4663" style="color:var(--green-dark)">@scratch4663</a>. Anything else is fake. · Pool: 0x3f66e1430c12a7a64839f43050165db6d1bf1ae5bd7df11e47a37a8e73bc00ef · Game: 0xBeD604b5AB226134EdF154cc31881d8C93f4C9e6</div>
@@ -879,6 +891,6 @@
 <div class="toast-host" id="toastHost" aria-live="polite" aria-relevant="additions"></div>
 
 <!-- Bump ?v= to the short commit hash on every site/ ship so Render/CDN cannot serve stale app.js -->
-<script type="module" src="./app.js?v=mint-tokens-1"></script>
+<script type="module" src="./app.js?v=ia-1"></script>
 </body>
 </html>
