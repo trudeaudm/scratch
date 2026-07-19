@@ -7,6 +7,7 @@
   "scripts": {
     "generate": "node --use-system-ca src/generate-chain.js",
     "watch": "node --use-system-ca src/watch-and-reveal.js",
+    "catch-up": "node --use-system-ca src/watch-and-reveal.js",
     "backfill-ledger": "node --use-system-ca src/backfill-ledger.js",
     "reconcile": "node --use-system-ca src/reconcile-ledger.js",
     "prove-live-ledger": "node --use-system-ca src/prove-live-ledger.js"

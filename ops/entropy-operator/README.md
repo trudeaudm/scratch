@@ -39,18 +39,23 @@ export RPC_URL=https://…
 export OPERATOR_PRIVATE_KEY=0x…        # preferred — must be SelfEntropyProvider.operator()
 # or: export PRIVATE_KEY=0x…           # fallback if OPERATOR_PRIVATE_KEY unset
 export SELF_ENTROPY_ADDRESS=0x…        # SelfEntropyProvider
-# optional: CHAIN_FILE, POLL_MS, REVEAL_MAX_RETRIES, START_BLOCK, GAME_ADDRESS, PAYOUT_LEDGER_PATH
+# optional: CHAIN_FILE, POLL_MS, REVEAL_MAX_RETRIES, FROM_BLOCK, GAME_ADDRESS, PAYOUT_LEDGER_PATH
 
 npm run watch
+
+# one-shot drain (exits when nextFulfillSeq catches nextSeq):
+# FROM_BLOCK=13390000 CATCH_UP_ONCE=1 npm run catch-up
 ```
 
-If the wallet printed at startup does not match on-chain `operator()`, reveals revert and **no live ledger rows will be written**. Do not point `PRIVATE_KEY` at the Deploy2 deployer unless that address is also the entropy operator.
+If the wallet does not match on-chain `operator()`, the watcher **exits immediately** (reveals would revert). Prefer `OPERATOR_PRIVATE_KEY`. Do not point `PRIVATE_KEY` at the Deploy2 deployer unless that address is also the entropy operator.
+
+Lookback is gap-proof: `lastProcessedBlock` is persisted in the chain state file, and startup scans from `min(lastProcessedBlock, block of nextFulfillSeq)` in ≤2k-block chunks with no total-span clamp. `FROM_BLOCK` (alias `START_BLOCK`) forces a manual recovery start.
 
 The watcher:
 
-1. Polls `RandomnessRequested` logs
-2. Reveals strictly in `nextFulfillSeq` order for the current epoch
-3. Advances `nextRevealIndex` in the state file after each confirmed `reveal`
+1. Polls `RandomnessRequested` logs in chunked windows
+2. Reveals by reading on-chain `nextFulfillSeq` each time (never assumes event order)
+3. Advances `nextRevealIndex` + `lastProcessedBlock` in the state file after progress
 4. Retries failed txs with exponential backoff
 5. After each confirmed reveal, parses `ScratchSettled` from the fulfill receipt and appends a row to `payout-ledger.csv` (gitignored). Price failures / IO errors are logged and skipped — they never fail the reveal.
 
