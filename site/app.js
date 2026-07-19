@@ -3,7 +3,7 @@
  * Wire from index.html: <script type="module" src="./app.js?v=…"></script>
  * Bump ASSET_VERSION (and the index.html ?v=) on every site/ commit.
  */
-export const ASSET_VERSION = 'wallet-6963-1';
+export const ASSET_VERSION = 'mark-size-1';
 
 import {
   createPublicClient,
@@ -2004,12 +2004,17 @@ function paintFoil() {
     ctx.strokeRect(8, 8, r.width - 16, r.height - 16);
     ctx.setLineDash([]);
   }
-  // Same geometry as #scratch-mark (viewBox 0 0 100 140) — no text glyph.
+  // Foil-panel mark size (independent of fan-card em sizing): ~37% of foil
+  // height, centered in the band above the caption so it never collides.
+  const captionBand = Math.max(40, r.height * 0.24);
+  const markH = r.height * 0.37;
+  const markScale = markH / 140;
+  const markCy = (r.height - captionBand) / 2;
   drawScratchMark(
     ctx,
     r.width / 2,
-    r.height / 2,
-    Math.min(r.width, r.height) / 150,
+    markCy,
+    markScale,
     prem ? '#C9A227' : '#5C3F12',
   );
   ctx.fillStyle = prem ? 'rgba(201,162,39,.8)' : 'rgba(92,63,18,.9)';

@@ -298,6 +298,7 @@
     border:2px dashed rgba(255,244,214,.55);
   }
   .stage.premium .card::after{border-color:rgba(201,162,39,.55)}
+  /* Fan-card mark — em-relative; foil panel sizes its mark in paintFoil (canvas). */
   .card .mark{
     position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
     font-size:clamp(44px,9vw,64px);color:#5C3F12;pointer-events:none;
@@ -983,6 +984,6 @@
 <div class="toast-host" id="toastHost" aria-live="polite" aria-relevant="additions"></div>
 
 <!-- Bump ?v= to the short commit hash on every site/ ship so Render/CDN cannot serve stale app.js -->
-<script type="module" src="./app.js?v=wallet-6963-1"></script>
+<script type="module" src="./app.js?v=mark-size-1"></script>
 </body>
 </html>
