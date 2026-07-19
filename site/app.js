@@ -3,7 +3,7 @@
  * Wire from index.html: <script type="module" src="./app.js?v=…"></script>
  * Bump ASSET_VERSION (and the index.html ?v=) on every site/ commit.
  */
-export const ASSET_VERSION = 'multi-scratch-1';
+export const ASSET_VERSION = 'multi-scratch-2';
 
 import {
   createPublicClient,

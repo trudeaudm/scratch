@@ -323,7 +323,10 @@
     display:none;margin:0 auto 18px;max-width:420px;text-align:center;
   }
   .multi-entry.show{display:block}
-  .multi-entry > .btn{min-height:40px}
+  .multi-entry > .btn{
+    min-height:40px;color:#E8EDF0;border-color:#3A4A55;background:transparent;
+  }
+  .multi-entry > .btn:hover{color:#fff;border-color:#21CE99;background:transparent}
   .multi-picker{
     display:none;margin-top:12px;padding:14px 14px 12px;background:#131A21;border-radius:14px;
     border:1px solid #22303A;text-align:left;
@@ -1128,6 +1131,6 @@
 <div class="toast-host" id="toastHost" aria-live="polite" aria-relevant="additions"></div>
 
 <!-- Bump ?v= to the short commit hash on every site/ ship so Render/CDN cannot serve stale app.js -->
-<script type="module" src="./app.js?v=multi-scratch-1"></script>
+<script type="module" src="./app.js?v=multi-scratch-2"></script>
 </body>
 </html>
