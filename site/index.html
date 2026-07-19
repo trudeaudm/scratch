@@ -271,19 +271,13 @@
     border:2px dashed rgba(255,244,214,.55);
   }
   .stage.premium .card::after{border-color:rgba(201,162,39,.55)}
-  .card .mark{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:clamp(44px,9vw,64px);color:#5C3F12}
-  .stage.premium .card .mark{color:var(--gold)}
-  .card .mark i{display:none}
-  .card .mark::before{
-    content:"";position:absolute;left:50%;top:50%;width:.30em;height:.44em;background:currentColor;
-    clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%);
-    /* Sit high enough that the diamond tip covers Inter's rounded stem end */
-    transform:translate(-50%,.06em);z-index:1;
+  .card .mark{
+    position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    font-size:clamp(44px,9vw,64px);color:#5C3F12;pointer-events:none;
   }
-  .card .mark::after{
-    content:"?";font-weight:800;font-size:1em;line-height:1;
-    /* Box-clip Inter's period at every fan size; diamond is the only base. */
-    display:block;height:.62em;overflow:hidden;
+  .stage.premium .card .mark{color:var(--gold)}
+  .card .mark svg{
+    width:1em;height:1.4em;display:block;overflow:visible;
   }
   .card:nth-child(2){transform:translateY(-16px);box-shadow:0 18px 32px -12px rgba(0,0,0,.85)}
   .card:hover{transform:translateY(-24px) scale(1.03)}
@@ -624,6 +618,19 @@
 </head>
 <body>
 
+<!-- Shared scratch mark — geometry only (no text glyph). currentColor for fill/stroke. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="0" height="0" style="position:absolute;overflow:hidden" aria-hidden="true" focusable="false">
+  <defs>
+    <symbol id="scratch-mark" viewBox="0 0 100 140">
+      <path
+        d="M28 38 C28 22 36 18 50 18 C64 18 72 22 72 38 C72 52 58 60 50 72 L50 86"
+        fill="none" stroke="currentColor" stroke-width="16"
+        stroke-linecap="round" stroke-linejoin="round"/>
+      <polygon points="50,105.3 62.7,118 50,130.7 37.3,118" fill="currentColor"/>
+    </symbol>
+  </defs>
+</svg>
+
 <nav>
   <a class="logo" href="/" aria-label="$SCRATCH home"><span class="leaf"></span>$SCRATCH</a>
   <div class="nav-links">
@@ -724,9 +731,9 @@
     <div class="stage-prompt" id="prompt">Choose your free scratch</div>
 
     <div class="fan" id="fan">
-      <button class="card" aria-label="Pick card one"><span class="mark"><i></i></span></button>
-      <button class="card" aria-label="Pick card two"><span class="mark"><i></i></span></button>
-      <button class="card" aria-label="Pick card three"><span class="mark"><i></i></span></button>
+      <button class="card" aria-label="Pick card one"><span class="mark" aria-hidden="true"><svg viewBox="0 0 100 140"><use href="#scratch-mark"/></svg></span></button>
+      <button class="card" aria-label="Pick card two"><span class="mark" aria-hidden="true"><svg viewBox="0 0 100 140"><use href="#scratch-mark"/></svg></span></button>
+      <button class="card" aria-label="Pick card three"><span class="mark" aria-hidden="true"><svg viewBox="0 0 100 140"><use href="#scratch-mark"/></svg></span></button>
     </div>
 
     <div class="stage-footer" id="stageFooter" aria-live="polite"></div>
@@ -942,6 +949,6 @@
 <div class="toast-host" id="toastHost" aria-live="polite" aria-relevant="additions"></div>
 
 <!-- Bump ?v= to the short commit hash on every site/ ship so Render/CDN cannot serve stale app.js -->
-<script type="module" src="./app.js?v=overflow-1"></script>
+<script type="module" src="./app.js?v=svg-mark-1"></script>
 </body>
 </html>

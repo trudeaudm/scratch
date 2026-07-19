@@ -3,7 +3,7 @@
  * Wire from index.html: <script type="module" src="./app.js?v=…"></script>
  * Bump ASSET_VERSION (and the index.html ?v=) on every site/ commit.
  */
-export const ASSET_VERSION = 'overflow-1';
+export const ASSET_VERSION = 'svg-mark-1';
 
 import {
   createPublicClient,
@@ -1941,6 +1941,34 @@ let strokeDist = 0;
 let moveCount = 0;
 let disableTimer = null;
 
+/** Port of #scratch-mark (viewBox 0 0 100 140): stroked hook + diamond, no text. */
+function drawScratchMark(ctx, cx, cy, scale, color) {
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(scale, scale);
+  ctx.translate(-50, -70);
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = 16;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  ctx.moveTo(28, 38);
+  ctx.bezierCurveTo(28, 22, 36, 18, 50, 18);
+  ctx.bezierCurveTo(64, 18, 72, 22, 72, 38);
+  ctx.bezierCurveTo(72, 52, 58, 60, 50, 72);
+  ctx.lineTo(50, 86);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(50, 105.3);
+  ctx.lineTo(62.7, 118);
+  ctx.lineTo(50, 130.7);
+  ctx.lineTo(37.3, 118);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
 function paintFoil() {
   if (!canvas || !ctx) return;
   const dpr = window.devicePixelRatio || 1;
@@ -1976,25 +2004,17 @@ function paintFoil() {
     ctx.strokeRect(8, 8, r.width - 16, r.height - 16);
     ctx.setLineDash([]);
   }
-  ctx.fillStyle = prem ? '#C9A227' : '#5C3F12';
-  ctx.font = "800 56px 'Inter'";
-  ctx.textAlign = 'center';
-  ctx.fillText('?', r.width / 2, r.height / 2 + 8);
-  ctx.fillStyle = g;
-  ctx.fillRect(r.width / 2 - 22, r.height / 2 - 6, 44, 18);
-  ctx.fillStyle = prem ? '#C9A227' : '#5C3F12';
-  ctx.beginPath();
-  const dcx = r.width / 2;
-  const dcy = r.height / 2 + 4;
-  const ds = 8;
-  ctx.moveTo(dcx, dcy - ds);
-  ctx.lineTo(dcx + ds * 0.78, dcy);
-  ctx.lineTo(dcx, dcy + ds);
-  ctx.lineTo(dcx - ds * 0.78, dcy);
-  ctx.closePath();
-  ctx.fill();
+  // Same geometry as #scratch-mark (viewBox 0 0 100 140) — no text glyph.
+  drawScratchMark(
+    ctx,
+    r.width / 2,
+    r.height / 2,
+    Math.min(r.width, r.height) / 150,
+    prem ? '#C9A227' : '#5C3F12',
+  );
   ctx.fillStyle = prem ? 'rgba(201,162,39,.8)' : 'rgba(92,63,18,.9)';
   ctx.font = "700 11px 'Inter'";
+  ctx.textAlign = 'center';
   // Printing overlay owns the caption; keep canvas clear of competing copy.
   if ($('foilPrintOverlay')?.hidden !== false) {
     ctx.fillText('SCRATCH TO REVEAL', r.width / 2, r.height - 20);
