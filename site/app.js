@@ -3,7 +3,7 @@
  * Wire from index.html: <script type="module" src="./app.js?v=…"></script>
  * Bump ASSET_VERSION (and the index.html ?v=) on every site/ commit.
  */
-export const ASSET_VERSION = 'mark-size-2';
+export const ASSET_VERSION = 'mark-size-3';
 
 import {
   createPublicClient,
@@ -2004,19 +2004,23 @@ function paintFoil() {
     ctx.strokeRect(8, 8, r.width - 16, r.height - 16);
     ctx.setLineDash([]);
   }
-  // Foil-panel mark (independent of fan em sizing): small enough to clear the
-  // "ticket printing" / "SCRATCH TO REVEAL" caption with a real margin.
+  // Foil-panel mark (independent of fan em sizing). Size ~⅓ of foil height —
+  // close to the old 56px "?" on a 190px foil — then pin it in the upper band
+  // so the diamond stays clear of the caption.
   const printing = Boolean($('foilPrintOverlay') && !$('foilPrintOverlay').hidden);
-  const captionBand = printing
-    ? Math.max(56, r.height * 0.32)
-    : Math.max(44, r.height * 0.24);
-  // ~28% of foil height (old canvas "?" was ~56px on 190px ≈ 29%).
-  const markH = Math.min(r.height * 0.28, (r.height - captionBand) * 0.7);
+  const captionBand = printing ? 50 : 40;
+  const markH = r.height * 0.33;
   const markScale = markH / 140;
-  // viewBox center is y=70; diamond tip ~130.7 + stroke bleed ≈ 134.
+  // viewBox center y=70; diamond tip + stroke bleed ≈ 134.
   const belowCenter = ((134 - 70) / 140) * markH;
-  const idealCy = (r.height - captionBand) / 2;
-  const markCy = Math.min(idealCy, r.height - captionBand - belowCenter - 10);
+  const aboveCenter = ((70 - 8) / 140) * markH;
+  const areaTop = 12;
+  const areaBottom = r.height - captionBand - 12;
+  const idealCy = areaTop + (areaBottom - areaTop) * 0.46;
+  const markCy = Math.max(
+    areaTop + aboveCenter,
+    Math.min(idealCy, areaBottom - belowCenter),
+  );
   drawScratchMark(
     ctx,
     r.width / 2,
