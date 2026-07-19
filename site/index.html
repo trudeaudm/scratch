@@ -353,9 +353,27 @@
   .multi-picker-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
   .multi-picker-actions .btn{flex:1 1 120px;min-height:40px}
   .multi-fallback-note{
-    display:none;margin-top:10px;font-size:12.5px;line-height:1.45;color:#B8A46A;
+    display:none;margin-top:12px;padding:12px 14px;border-radius:12px;
+    background:#2A2414;border:1px solid #5A4A1E;
+    font-size:12.5px;line-height:1.45;color:#E8D9A0;
   }
   .multi-fallback-note.show{display:block}
+  .multi-fallback-note strong{
+    display:block;font-size:13px;font-weight:700;color:#F2E6B8;margin-bottom:4px;
+    letter-spacing:.02em;
+  }
+  .multi-entry > .btn.one-by-one{border-color:#5A4A1E;color:#E8D9A0}
+  .multi-entry > .btn.one-by-one:hover{border-color:#C9A227;color:#F2E6B8}
+  .multi-seq-banner{
+    display:none;margin:0 auto 14px;max-width:520px;padding:12px 14px;border-radius:12px;
+    background:#2A2414;border:1px solid #5A4A1E;text-align:center;
+    font-size:13px;line-height:1.45;color:#E8D9A0;font-weight:600;
+  }
+  .multi-seq-banner.show{display:block}
+  .multi-seq-banner .seq-step{
+    display:block;margin-top:4px;font-family:'IBM Plex Mono';font-size:14px;
+    font-weight:700;color:#F2E6B8;font-variant-numeric:tabular-nums;
+  }
 
   .multi-board{display:none;width:100%;margin-top:4px}
   .multi-board.show{display:block}
@@ -885,7 +903,10 @@
           <input type="number" id="multiCountInput" inputmode="numeric" min="2" max="10" value="3" aria-label="Number of tickets">
           <span class="multi-cap-note">max 10 per batch</span>
         </div>
-        <p class="multi-fallback-note" id="multiFallbackNote">Your wallet confirms each ticket individually.</p>
+        <div class="multi-fallback-note" id="multiFallbackNote" role="status">
+          <strong>One approval per ticket</strong>
+          This wallet can’t sign the batch in one step. You’ll confirm each ticket in a quick row of wallet prompts.
+        </div>
         <div class="multi-picker-actions">
           <button type="button" class="btn sm" id="multiGoBtn">Scratch</button>
           <button type="button" class="btn ghost sm" id="multiCancelBtn">Cancel</button>
@@ -900,6 +921,7 @@
     </div>
 
     <div class="multi-board" id="multiBoard">
+      <div class="multi-seq-banner" id="multiSeqBanner" role="status" aria-live="polite"></div>
       <div class="multi-progress" id="multiProgress" aria-live="polite"></div>
       <div class="multi-summary" id="multiSummary" aria-live="polite"></div>
       <div class="multi-grid" id="multiGrid"></div>
@@ -1131,6 +1153,6 @@
 <div class="toast-host" id="toastHost" aria-live="polite" aria-relevant="additions"></div>
 
 <!-- Bump ?v= to the short commit hash on every site/ ship so Render/CDN cannot serve stale app.js -->
-<script type="module" src="./app.js?v=multi-scratch-3"></script>
+<script type="module" src="./app.js?v=multi-scratch-4"></script>
 </body>
 </html>

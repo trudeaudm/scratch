@@ -3,7 +3,7 @@
  * Wire from index.html: <script type="module" src="./app.js?v=…"></script>
  * Bump ASSET_VERSION (and the index.html ?v=) on every site/ commit.
  */
-export const ASSET_VERSION = 'multi-scratch-3';
+export const ASSET_VERSION = 'multi-scratch-4';
 
 import {
   createPublicClient,
@@ -540,6 +540,8 @@ const state = {
   drawing: false,
   /** @type {{ markH: number, cx: number, cy: number }|null} */
   foilMarkLayout: null,
+  /** Cached EIP-5792 batch support for the connected wallet (null = unknown). */
+  walletSupportsBatch: null,
   pollTimer: null,
   refreshTimer: null,
   reassureTimer: null,
@@ -714,6 +716,7 @@ function dispatchDisconnect() {
   teardownMultiBoard();
   state.account = null;
   state.walletClient = null;
+  state.walletSupportsBatch = null;
   state.userStaked = 0n;
   state.scratchBalance = 0n;
   state.liveTickets = { std: 0n, prem: 0n };
@@ -738,12 +741,8 @@ async function dispatchMultiOpen() {
   const picker = $('multiPicker');
   picker?.classList.add('show');
   syncMultiPickerCap();
-  const note = $('multiFallbackNote');
-  note?.classList.remove('show');
-  if (state.account) {
-    const batchOk = await detectEip5792SendCalls();
-    if (!batchOk) note?.classList.add('show');
-  }
+  await refreshWalletBatchCapability();
+  applyMultiPickerSigningMode();
 }
 
 function dispatchMultiClosePicker() {
@@ -3381,6 +3380,46 @@ function syncMultiPickerCap() {
     btn.disabled = n > cap || cap < 2;
     btn.classList.toggle('active', input && Number(input.value) === n && n <= cap);
   });
+  applyMultiPickerSigningMode();
+}
+
+async function refreshWalletBatchCapability() {
+  if (!state.account) {
+    state.walletSupportsBatch = null;
+    return null;
+  }
+  const ok = await detectEip5792SendCalls();
+  state.walletSupportsBatch = ok;
+  return ok;
+}
+
+/** Picker + entry button copy when wallet must approve each ticket. */
+function applyMultiPickerSigningMode() {
+  const sequential = state.walletSupportsBatch === false;
+  const note = $('multiFallbackNote');
+  note?.classList.toggle('show', sequential);
+  const n = clampMultiCount($('multiCountInput')?.value || 3) || multiBatchCap();
+  const go = $('multiGoBtn');
+  if (go) {
+    if (sequential && n >= 2) {
+      go.textContent = `Scratch · ${n} wallet approvals`;
+    } else {
+      go.textContent = 'Scratch';
+    }
+  }
+  const openBtn = $('multiScratchOpen');
+  if (openBtn) {
+    openBtn.classList.toggle('one-by-one', sequential);
+    openBtn.textContent = sequential
+      ? 'Scratch multiple (one-by-one)'
+      : 'Scratch multiple';
+  }
+  const walletMulti = $('scratchBtnMulti');
+  if (walletMulti && !walletMulti.hidden) {
+    walletMulti.textContent = sequential
+      ? 'Scratch multiple (one-by-one)'
+      : 'Scratch multiple';
+  }
 }
 
 function updateMultiEntryVisibility() {
@@ -3399,6 +3438,12 @@ function updateMultiEntryVisibility() {
     $('multiFallbackNote')?.classList.remove('show');
   } else {
     syncMultiPickerCap();
+    // Refresh capability in background so the open button label stays honest.
+    if (state.walletSupportsBatch == null) {
+      void refreshWalletBatchCapability().then(() => applyMultiPickerSigningMode());
+    } else {
+      applyMultiPickerSigningMode();
+    }
   }
 }
 
@@ -3565,6 +3610,7 @@ function teardownMultiBoard() {
   $('multiDoneRow')?.classList.remove('show');
   $('multiProgress')?.classList.remove('show');
   setText($('multiProgress'), '');
+  setMultiSeqBanner(null);
   setText($('multiSummary'), '');
   $('stage')?.classList.remove('multi-active');
   if (state.session.multi?.cards) {
@@ -3584,6 +3630,27 @@ function setMultiProgress(msg) {
     el.textContent = '';
     el.classList.remove('show');
   }
+}
+
+function setMultiSeqBanner(htmlOrNull) {
+  const el = $('multiSeqBanner');
+  if (!el) return;
+  if (htmlOrNull) {
+    el.innerHTML = htmlOrNull;
+    el.classList.add('show');
+  } else {
+    el.innerHTML = '';
+    el.classList.remove('show');
+  }
+}
+
+function showSequentialSigningBanner(current, total) {
+  setMultiSeqBanner(
+    `This wallet can’t batch-sign — approve each ticket separately.` +
+      `<span class="seq-step">Confirm ticket ${current} of ${total} in your wallet</span>`,
+  );
+  setMultiProgress('');
+  setText($('prompt'), `Approve ${current} of ${total}…`);
 }
 
 function formatWonSoFar(cards) {
@@ -4173,6 +4240,7 @@ async function startMultiScratch(count) {
   try {
     await ensureChain();
     const batchOk = await detectEip5792SendCalls();
+    state.walletSupportsBatch = batchOk;
     state.session.multi.batchSupported = batchOk;
 
     if (batchOk) {
@@ -4193,6 +4261,7 @@ async function startMultiScratch(count) {
           await assignRequestToCard(state.session.multi.cards[i], ids[i]);
         }
         setMultiProgress('');
+        setMultiSeqBanner(null);
         setText($('prompt'), 'tickets printing…');
         state.session.multi.submitting = false;
         await refreshWalletPanel({ skipStage: true });
@@ -4207,19 +4276,27 @@ async function startMultiScratch(count) {
           )
         ) {
           state.session.multi.batchSupported = false;
+          state.walletSupportsBatch = false;
         } else {
           throw batchErr;
         }
       }
     }
 
-    // Sequential fallback
-    $('multiFallbackNote')?.classList.add('show');
-    setSessionNote('Your wallet confirms each ticket individually.');
+    // Sequential fallback — wallet must approve each scratch.
+    state.walletSupportsBatch = false;
+    state.session.multi.batchSupported = false;
+    applyMultiPickerSigningMode();
+    setSessionNote(
+      'One-by-one mode: this wallet can’t batch-sign, so each ticket needs its own approval.',
+    );
+    showToast(
+      `Your wallet needs ${n} separate approvals — confirm each prompt to continue.`,
+      { kind: 'warn', duration: 8000 },
+    );
     for (let i = 0; i < n; i++) {
       if (!isMultiSession()) return;
-      setMultiProgress(`Confirm ${i + 1} of ${n} in your wallet…`);
-      setText($('prompt'), `Confirm ${i + 1} of ${n}…`);
+      showSequentialSigningBanner(i + 1, n);
       try {
         const hash = await state.walletClient.writeContract({
           address: addr.game,
@@ -4250,6 +4327,7 @@ async function startMultiScratch(count) {
         if (isUserRejection(err)) {
           pruneUnsentMultiCards();
           setMultiProgress('');
+          setMultiSeqBanner(null);
           state.session.multi.submitting = false;
           if (state.session.multi.cards.length === 0) {
             resetSessionToIdle({
@@ -4274,6 +4352,7 @@ async function startMultiScratch(count) {
     }
 
     setMultiProgress('');
+    setMultiSeqBanner(null);
     setText($('prompt'), 'tickets printing…');
     state.session.multi.submitting = false;
     await refreshWalletPanel({ skipStage: true });
@@ -4282,6 +4361,7 @@ async function startMultiScratch(count) {
     const msg = err?.shortMessage || err?.message || String(err);
     if (isUserRejection(err)) {
       pruneUnsentMultiCards();
+      setMultiSeqBanner(null);
       if (!state.session.multi?.cards?.length) {
         resetSessionToIdle({ cancelNote: 'Cancelled — tickets unspent.' });
         showToast(WALLET_REJECT_TOAST, { kind: 'warn', duration: 9000 });
@@ -4294,6 +4374,7 @@ async function startMultiScratch(count) {
     }
     if (state.session.multi?.cards?.some((c) => c.requestId != null)) {
       pruneUnsentMultiCards();
+      setMultiSeqBanner(null);
       setSessionNote(`Batch interrupted: ${msg}`, 'cancel');
       state.session.multi.submitting = false;
       await pollMultiBoard();
