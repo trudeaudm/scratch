@@ -1,0 +1,11 @@
+# Local secrets (also covered by repo-root .gitignore)
+.env
+.env.*
+!.env.example
+
+# Runtime artifacts
+entropy-state.json
+payout-ledger.csv
+ledger-errors.log
+node_modules/
+catch-up-drain*.log
