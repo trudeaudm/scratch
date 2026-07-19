@@ -3,7 +3,7 @@
  * Wire from index.html: <script type="module" src="./app.js?v=…"></script>
  * Bump ASSET_VERSION (and the index.html ?v=) on every site/ commit.
  */
-export const ASSET_VERSION = 'mark-size-3';
+export const ASSET_VERSION = 'mark-size-4';
 
 import {
   createPublicClient,
@@ -2004,36 +2004,33 @@ function paintFoil() {
     ctx.strokeRect(8, 8, r.width - 16, r.height - 16);
     ctx.setLineDash([]);
   }
-  // Foil-panel mark (independent of fan em sizing). Size ~⅓ of foil height —
-  // close to the old 56px "?" on a 190px foil — then pin it in the upper band
-  // so the diamond stays clear of the caption.
+  // Printing: mark is an SVG in the overlay flex column (can't hit the caption).
+  // Ready: draw on canvas, sized to the band above "SCRATCH TO REVEAL".
   const printing = Boolean($('foilPrintOverlay') && !$('foilPrintOverlay').hidden);
-  const captionBand = printing ? 50 : 40;
-  const markH = r.height * 0.33;
-  const markScale = markH / 140;
-  // viewBox center y=70; diamond tip + stroke bleed ≈ 134.
-  const belowCenter = ((134 - 70) / 140) * markH;
-  const aboveCenter = ((70 - 8) / 140) * markH;
-  const areaTop = 12;
-  const areaBottom = r.height - captionBand - 12;
-  const idealCy = areaTop + (areaBottom - areaTop) * 0.46;
-  const markCy = Math.max(
-    areaTop + aboveCenter,
-    Math.min(idealCy, areaBottom - belowCenter),
-  );
-  drawScratchMark(
-    ctx,
-    r.width / 2,
-    markCy,
-    markScale,
-    prem ? '#C9A227' : '#5C3F12',
-  );
-  ctx.fillStyle = prem ? 'rgba(201,162,39,.8)' : 'rgba(92,63,18,.9)';
-  ctx.font = "700 11px 'Inter'";
-  ctx.textAlign = 'center';
-  // Printing overlay owns the caption; keep canvas clear of competing copy.
-  if ($('foilPrintOverlay')?.hidden !== false) {
-    ctx.fillText('SCRATCH TO REVEAL', r.width / 2, r.height - 20);
+  if (!printing) {
+    const captionBand = 44;
+    const areaTop = 14;
+    const areaBottom = r.height - captionBand;
+    const avail = Math.max(40, areaBottom - areaTop);
+    // ~38% of foil, but never taller than the free band above the caption.
+    const markH = Math.min(r.height * 0.38, avail * 0.85);
+    const markScale = markH / 140;
+    const belowCenter = ((134 - 70) / 140) * markH;
+    const markCy = Math.min(
+      areaTop + avail * 0.48,
+      areaBottom - belowCenter - 8,
+    );
+    drawScratchMark(
+      ctx,
+      r.width / 2,
+      markCy,
+      markScale,
+      prem ? '#C9A227' : '#5C3F12',
+    );
+    ctx.fillStyle = prem ? 'rgba(201,162,39,.8)' : 'rgba(92,63,18,.9)';
+    ctx.font = "700 11px 'Inter'";
+    ctx.textAlign = 'center';
+    ctx.fillText('SCRATCH TO REVEAL', r.width / 2, r.height - 18);
   }
   ctx.globalCompositeOperation = 'destination-out';
   ctx.lineWidth = 34;

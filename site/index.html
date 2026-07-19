@@ -357,11 +357,12 @@
   .foil-print-overlay{
     position:absolute;inset:0;z-index:2;border-radius:inherit;overflow:hidden;
     pointer-events:auto;cursor:not-allowed;touch-action:none;
-    display:flex;align-items:flex-end;justify-content:center;padding-bottom:18px;
+    display:flex;flex-direction:column;align-items:center;
+    justify-content:flex-end;padding:18px 16px 16px;box-sizing:border-box;
   }
   .foil-print-overlay[hidden]{display:none!important}
   .foil-sheen{
-    position:absolute;inset:-50%;
+    position:absolute;inset:-50%;z-index:3;
     background:linear-gradient(
       125deg,
       transparent 38%,
@@ -378,7 +379,7 @@
     to{transform:translate(18%,18%)}
   }
   .foil-stamp{
-    position:absolute;inset:8px;width:calc(100% - 16px);height:calc(100% - 16px);
+    position:absolute;inset:8px;z-index:0;width:calc(100% - 16px);height:calc(100% - 16px);
     pointer-events:none;overflow:visible;
   }
   .foil-stamp rect{
@@ -391,8 +392,19 @@
   @keyframes marchingAnts{
     to{stroke-dashoffset:-13}
   }
+  /* Printing mark lives in the overlay flex column — cannot overlap the caption. */
+  .foil-mark-slot{
+    position:relative;z-index:1;flex:1 1 auto;min-height:0;width:100%;
+    display:flex;align-items:center;justify-content:center;
+    pointer-events:none;color:rgba(255,244,214,.92);
+  }
+  .scratch-card.premium .foil-mark-slot{color:var(--gold)}
+  .foil-mark-slot svg{
+    display:block;width:auto;height:72px;max-height:78%;
+    aspect-ratio:100 / 140;
+  }
   .foil-print-caption{
-    position:relative;z-index:1;
+    position:relative;z-index:2;flex:0 0 auto;margin-top:10px;
     font-size:11px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;
     color:rgba(255,244,214,.92);text-shadow:0 1px 2px rgba(0,0,0,.45);
     pointer-events:none;
@@ -781,6 +793,9 @@
             <svg class="foil-stamp" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
               <rect x="1" y="1" width="98" height="98" rx="1.5" ry="1.5"></rect>
             </svg>
+            <div class="foil-mark-slot" aria-hidden="true">
+              <svg viewBox="0 0 100 140"><use href="#scratch-mark"/></svg>
+            </div>
             <div class="foil-print-caption">ticket printing<span class="ellipsis">...</span></div>
           </div>
         </div>
@@ -984,6 +999,6 @@
 <div class="toast-host" id="toastHost" aria-live="polite" aria-relevant="additions"></div>
 
 <!-- Bump ?v= to the short commit hash on every site/ ship so Render/CDN cannot serve stale app.js -->
-<script type="module" src="./app.js?v=mark-size-3"></script>
+<script type="module" src="./app.js?v=mark-size-4"></script>
 </body>
 </html>
