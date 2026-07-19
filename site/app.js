@@ -3,7 +3,7 @@
  * Wire from index.html: <script type="module" src="./app.js?v=…"></script>
  * Bump ASSET_VERSION (and the index.html ?v=) on every site/ commit.
  */
-export const ASSET_VERSION = 'ia-1';
+export const ASSET_VERSION = 'overflow-1';
 
 import {
   createPublicClient,
@@ -3312,6 +3312,28 @@ function wireUi() {
   }
 
   injectFairnessNote();
+
+  // Address copy buttons (transparency / any .addr-copy)
+  document.addEventListener('click', (ev) => {
+    const btn = ev.target?.closest?.('.addr-copy');
+    if (!btn) return;
+    const full = btn.getAttribute('data-copy') || '';
+    if (!full) return;
+    const done = () => {
+      const prev = btn.textContent;
+      btn.textContent = 'Copied';
+      btn.classList.add('ok');
+      setTimeout(() => {
+        btn.textContent = prev || 'Copy';
+        btn.classList.remove('ok');
+      }, 1600);
+    };
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(full).then(done).catch(() => {
+        /* ignore */
+      });
+    }
+  });
 
   // Referral helpers if present
   $('copyBtn')?.addEventListener('click', function () {

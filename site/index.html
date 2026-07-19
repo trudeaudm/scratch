@@ -166,16 +166,18 @@
     display:none;font-size:12px;color:#8FA3B0;margin-top:8px;line-height:1.45;text-align:center;
   }
   .session-reassure.show{display:block}
-  .inv-block,.wins-block{margin-top:22px}
+  .inv-block,.wins-block{margin-top:22px;width:100%;min-width:0;overflow-x:clip}
   .inv-block h4,.wins-block h4{font-size:13px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin-bottom:10px}
   .inv-row,.win-row{
-    display:flex;justify-content:space-between;gap:12px;align-items:baseline;
-    padding:10px 0;border-bottom:1px solid var(--line);font-size:14px;
+    display:flex;justify-content:space-between;gap:10px;align-items:baseline;
+    padding:10px 0;border-bottom:1px solid var(--line);font-size:14px;min-width:0;
   }
-  .inv-row .sym{font-weight:700}
+  .inv-row .sym{font-weight:700;flex:0 1 auto;min-width:0}
+  .inv-row .inv-bal,.inv-row span:last-child{flex:1 1 auto;min-width:0;text-align:right;overflow-wrap:anywhere}
   .inv-sub{font-size:12px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--gold);margin:14px 0 6px}
-  .win-row .who{font-family:'IBM Plex Mono';font-size:12.5px;color:var(--muted)}
-  .win-row .age{font-family:'IBM Plex Mono';font-size:12px;color:var(--muted);white-space:nowrap}
+  .win-row .who{font-family:'IBM Plex Mono';font-size:12.5px;color:var(--muted);flex:0 0 auto}
+  .win-row .win-prize{flex:1 1 auto;min-width:0;overflow-wrap:anywhere;word-break:break-word;text-align:right}
+  .win-row .age{font-family:'IBM Plex Mono';font-size:12px;color:var(--muted);white-space:nowrap;flex:0 0 auto}
   .win-row.win-enter{animation:rise .4s ease}
   .fairness{
     margin-top:18px;padding:14px 16px;border-radius:12px;background:#fff;
@@ -444,15 +446,35 @@
   section.launch .params{margin-top:16px;gap:8px}
   section.launch .param{font-size:12px;padding:7px 12px;font-weight:600;background:#fff}
 
-  /* transparency */
-  .trust-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-top:28px}
+  /* transparency + address rows */
+  .trust-grid{
+    display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr));
+    gap:12px;margin-top:28px;width:100%;min-width:0;
+  }
   .trust-item{
-    background:#fff;border:1px solid var(--line);border-radius:14px;padding:14px 16px;
+    background:#fff;border:1px solid var(--line);border-radius:14px;padding:14px 16px;min-width:0;
   }
   .trust-item .k{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
-  .trust-item .v{font-family:'IBM Plex Mono';font-size:12px;margin-top:6px;word-break:break-all;color:var(--ink);line-height:1.45}
-  .trust-item a{color:var(--green-dark);text-decoration:none}
-  .trust-item a:hover{text-decoration:underline}
+  .addr-row{display:flex;align-items:center;gap:8px;margin-top:6px;min-width:0}
+  .addr{
+    font-family:'IBM Plex Mono';font-size:12.5px;color:var(--green-dark);text-decoration:none;
+    min-width:0;flex:1 1 auto;overflow-wrap:anywhere;word-break:break-all;line-height:1.45;
+  }
+  .addr:hover{text-decoration:underline}
+  .addr-full{display:inline}
+  .addr-short{display:none}
+  .addr-copy{
+    flex:0 0 auto;font-family:'Inter';font-size:11.5px;font-weight:700;cursor:pointer;
+    border:1.5px solid var(--line);background:var(--dim);color:var(--ink);
+    border-radius:100px;padding:6px 12px;min-height:36px;
+  }
+  .addr-copy:hover{border-color:var(--ink)}
+  .addr-copy.ok{border-color:var(--green);color:var(--green-dark);background:var(--green-tint)}
+  #transparency{overflow-x:clip}
+  .hex,.mono-break{
+    font-family:'IBM Plex Mono',monospace;
+    overflow-wrap:anywhere;word-break:break-all;
+  }
 
   /* sections — full-bleed alternating white / mint tint; content cards stay white */
   section{
@@ -460,7 +482,7 @@
     padding:clamp(56px,7vw,88px) clamp(20px,5vw,64px);background:var(--paper);
   }
   section:nth-of-type(even){background:var(--green-tint)}
-  section > *{max-width:1060px;margin-left:auto;margin-right:auto}
+  section > *{max-width:1060px;margin-left:auto;margin-right:auto;min-width:0}
   section > .paths,section > .ref-grid,section > .steps-mini,section > .params,
   section > .inv-block,section > .wins-block,section > .enter-row,section > a.btn,
   section > .trust-grid,section > .alloc-bar,section > .alloc-legend,section > .fairness{
@@ -485,13 +507,14 @@
   .path .rate{font-size:13px;color:var(--muted);margin-top:6px}
   .path .rate b{color:var(--ink);font-weight:600}
   .prize-list{margin-top:20px;border-top:1px solid var(--line)}
-  .prize-row{display:flex;justify-content:space-between;gap:12px;align-items:baseline;padding:11px 0;border-bottom:1px solid var(--line);font-size:14px}
-  .prize-row .p{font-weight:600}
+  .prize-list,.path{min-width:0}
+  .prize-row{display:flex;justify-content:space-between;gap:10px;align-items:baseline;padding:11px 0;border-bottom:1px solid var(--line);font-size:14px;min-width:0}
+  .prize-row .p{font-weight:600;min-width:0;overflow-wrap:anywhere;word-break:break-word}
   .prize-row .p .tk{
     display:inline-block;font-size:10.5px;font-weight:700;letter-spacing:.05em;
     background:var(--dim);border:1px solid var(--line);border-radius:6px;padding:2px 7px;margin-right:8px;vertical-align:1px;
   }
-  .prize-row .o{font-family:'IBM Plex Mono';font-size:12.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+  .prize-row .o{font-family:'IBM Plex Mono';font-size:12.5px;color:var(--muted);font-variant-numeric:tabular-nums;flex:0 0 auto;white-space:nowrap}
   .path .cta{margin-top:22px}
   .path .cta .btn{width:100%;text-align:center}
   .stake-mini{display:flex;gap:10px;margin-top:22px}
@@ -511,6 +534,7 @@
     flex:1;font-family:'IBM Plex Mono';font-size:15px;letter-spacing:.06em;
     background:var(--dim);border:1.5px dashed var(--line);border-radius:12px;
     padding:13px 16px;color:var(--ink);text-align:center;min-width:0;
+    overflow-wrap:anywhere;word-break:break-all;
   }
   .copy-btn{white-space:nowrap}
   .ref-stat{font-size:12.5px;color:var(--muted);margin-top:14px}
@@ -560,15 +584,17 @@
   footer{
     background:var(--green);border-top:none;padding:34px clamp(20px,5vw,64px);
     display:flex;justify-content:space-between;gap:18px;flex-wrap:wrap;align-items:center;
+    overflow-x:clip;max-width:100%;
   }
   footer .logo{color:var(--teal-deep)}
   footer .ca{
     font-family:'IBM Plex Mono';font-size:12px;color:var(--teal-deep);
     background:rgba(255,255,255,.35);border:1px solid rgba(9,74,55,.2);
-    padding:9px 14px;border-radius:8px;
+    padding:9px 14px;border-radius:8px;min-width:0;max-width:100%;
+    overflow-wrap:anywhere;word-break:break-all;line-height:1.55;
   }
   footer .ca a{color:var(--teal-deep)!important;font-weight:700}
-  footer .fine{font-size:11.5px;color:var(--teal-deep);max-width:440px;line-height:1.55;opacity:.85}
+  footer .fine{font-size:11.5px;color:var(--teal-deep);max-width:440px;line-height:1.55;opacity:.85;min-width:0}
   .socials{display:flex;gap:10px;align-items:center;font-size:13px;font-weight:600}
   .socials a{color:var(--teal-deep);text-decoration:none}
   .socials a:hover{text-decoration:underline}
@@ -577,12 +603,22 @@
   @media(max-width:840px){
     .nav-links{display:none}
     .paths,.ref-grid{grid-template-columns:1fr}
+    .paths,.path,.ref-grid,.ref-card{min-width:0}
+  }
+  @media(max-width:600px){
+    .addr-full{display:none}
+    .addr-short{display:inline}
+    .announce{overflow-wrap:anywhere;padding-left:12px;padding-right:12px}
+    .sc-head{flex-wrap:wrap}
   }
   @media(max-width:480px){
     nav .btn.ghost.x-link{font-size:0;padding:12px 16px;min-width:44px;text-align:center}
     nav .btn.ghost.x-link::before{content:"𝕏";font-size:16px;font-weight:700}
     .nav-actions{gap:6px}
     .nav-actions .btn{padding:11px 14px;font-size:13px}
+    .win-row{flex-wrap:wrap;gap:4px 10px}
+    .win-row .win-prize{order:3;flex:1 1 100%;text-align:left}
+    .win-row .age{margin-left:auto}
   }
 </style>
 </head>
@@ -798,26 +834,41 @@
   <h2>Same contracts that settle you.</h2>
   <p class="sec-sub">Odds on this page come from the <b>same game contract</b> that settles your scratch. Liquidity is <b>locked until July 2027</b>.</p>
   <div class="fairness" id="fairnessNote"></div>
-  <div class="trust-grid">
+  <div class="trust-grid" id="trustGrid">
     <div class="trust-item">
       <div class="k">$SCRATCH</div>
-      <div class="v"><a href="https://robinhoodchain.blockscout.com/address/0xf5E5f4D3C34A14B2fDfD59584Fe555Cd5e21F196" target="_blank" rel="noopener">0xf5E5f4D3C34A14B2fDfD59584Fe555Cd5e21F196</a></div>
+      <div class="addr-row">
+        <a class="addr" href="https://robinhoodchain.blockscout.com/address/0xf5E5f4D3C34A14B2fDfD59584Fe555Cd5e21F196" target="_blank" rel="noopener" title="0xf5E5f4D3C34A14B2fDfD59584Fe555Cd5e21F196"><span class="addr-full">0xf5E5f4D3C34A14B2fDfD59584Fe555Cd5e21F196</span><span class="addr-short">0xf5E5…F196</span></a>
+        <button type="button" class="addr-copy" data-copy="0xf5E5f4D3C34A14B2fDfD59584Fe555Cd5e21F196" aria-label="Copy $SCRATCH address">Copy</button>
+      </div>
     </div>
     <div class="trust-item">
       <div class="k">ScratchGame</div>
-      <div class="v"><a href="https://robinhoodchain.blockscout.com/address/0xBeD604b5AB226134EdF154cc31881d8C93f4C9e6" target="_blank" rel="noopener">0xBeD604b5AB226134EdF154cc31881d8C93f4C9e6</a></div>
+      <div class="addr-row">
+        <a class="addr" href="https://robinhoodchain.blockscout.com/address/0xBeD604b5AB226134EdF154cc31881d8C93f4C9e6" target="_blank" rel="noopener" title="0xBeD604b5AB226134EdF154cc31881d8C93f4C9e6"><span class="addr-full">0xBeD604b5AB226134EdF154cc31881d8C93f4C9e6</span><span class="addr-short">0xBeD6…C9e6</span></a>
+        <button type="button" class="addr-copy" data-copy="0xBeD604b5AB226134EdF154cc31881d8C93f4C9e6" aria-label="Copy ScratchGame address">Copy</button>
+      </div>
     </div>
     <div class="trust-item">
       <div class="k">PrizeVault</div>
-      <div class="v"><a href="https://robinhoodchain.blockscout.com/address/0x86Ade8b30D481bBd9D2897d20931b107e776Ba52" target="_blank" rel="noopener">0x86Ade8b30D481bBd9D2897d20931b107e776Ba52</a></div>
+      <div class="addr-row">
+        <a class="addr" href="https://robinhoodchain.blockscout.com/address/0x86Ade8b30D481bBd9D2897d20931b107e776Ba52" target="_blank" rel="noopener" title="0x86Ade8b30D481bBd9D2897d20931b107e776Ba52"><span class="addr-full">0x86Ade8b30D481bBd9D2897d20931b107e776Ba52</span><span class="addr-short">0x86Ad…Ba52</span></a>
+        <button type="button" class="addr-copy" data-copy="0x86Ade8b30D481bBd9D2897d20931b107e776Ba52" aria-label="Copy PrizeVault address">Copy</button>
+      </div>
     </div>
     <div class="trust-item">
       <div class="k">StakingVault</div>
-      <div class="v"><a href="https://robinhoodchain.blockscout.com/address/0x577Cecbe33d1B2F7f4DF7E0D8Bf03690C2b17eD6" target="_blank" rel="noopener">0x577Cecbe33d1B2F7f4DF7E0D8Bf03690C2b17eD6</a></div>
+      <div class="addr-row">
+        <a class="addr" href="https://robinhoodchain.blockscout.com/address/0x577Cecbe33d1B2F7f4DF7E0D8Bf03690C2b17eD6" target="_blank" rel="noopener" title="0x577Cecbe33d1B2F7f4DF7E0D8Bf03690C2b17eD6"><span class="addr-full">0x577Cecbe33d1B2F7f4DF7E0D8Bf03690C2b17eD6</span><span class="addr-short">0x577C…7eD6</span></a>
+        <button type="button" class="addr-copy" data-copy="0x577Cecbe33d1B2F7f4DF7E0D8Bf03690C2b17eD6" aria-label="Copy StakingVault address">Copy</button>
+      </div>
     </div>
     <div class="trust-item">
       <div class="k">Pool</div>
-      <div class="v"><a href="https://dexscreener.com/robinhood/0x3f66e1430c12a7a64839f43050165db6d1bf1ae5bd7df11e47a37a8e73bc00ef" target="_blank" rel="noopener">0x3f66…00ef</a></div>
+      <div class="addr-row">
+        <a class="addr" href="https://dexscreener.com/robinhood/0x3f66e1430c12a7a64839f43050165db6d1bf1ae5bd7df11e47a37a8e73bc00ef" target="_blank" rel="noopener" title="0x3f66e1430c12a7a64839f43050165db6d1bf1ae5bd7df11e47a37a8e73bc00ef"><span class="addr-full">0x3f66e1430c12a7a64839f43050165db6d1bf1ae5bd7df11e47a37a8e73bc00ef</span><span class="addr-short">0x3f66…00ef</span></a>
+        <button type="button" class="addr-copy" data-copy="0x3f66e1430c12a7a64839f43050165db6d1bf1ae5bd7df11e47a37a8e73bc00ef" aria-label="Copy pool id">Copy</button>
+      </div>
     </div>
   </div>
 </section>
@@ -882,7 +933,7 @@
 
 <footer>
   <div class="logo" style="font-size:15px"><span class="leaf"></span>$SCRATCH</div>
-  <div class="ca">CA: 0xf5E5f4D3C34A14B2fDfD59584Fe555Cd5e21F196 — the only other place this appears is the pinned post of <a href="https://x.com/scratch4663" style="color:var(--green-dark)">@scratch4663</a>. Anything else is fake. · Pool: 0x3f66e1430c12a7a64839f43050165db6d1bf1ae5bd7df11e47a37a8e73bc00ef · Game: 0xBeD604b5AB226134EdF154cc31881d8C93f4C9e6</div>
+  <div class="ca">CA: <a class="hex" href="https://robinhoodchain.blockscout.com/address/0xf5E5f4D3C34A14B2fDfD59584Fe555Cd5e21F196" target="_blank" rel="noopener" title="0xf5E5f4D3C34A14B2fDfD59584Fe555Cd5e21F196"><span class="addr-full">0xf5E5f4D3C34A14B2fDfD59584Fe555Cd5e21F196</span><span class="addr-short">0xf5E5…F196</span></a> — the only other place this appears is the pinned post of <a href="https://x.com/scratch4663">@scratch4663</a>. Anything else is fake. · Pool: <a class="hex" href="https://dexscreener.com/robinhood/0x3f66e1430c12a7a64839f43050165db6d1bf1ae5bd7df11e47a37a8e73bc00ef" target="_blank" rel="noopener" title="0x3f66e1430c12a7a64839f43050165db6d1bf1ae5bd7df11e47a37a8e73bc00ef"><span class="addr-full">0x3f66e1430c12a7a64839f43050165db6d1bf1ae5bd7df11e47a37a8e73bc00ef</span><span class="addr-short">0x3f66…00ef</span></a> · Game: <a class="hex" href="https://robinhoodchain.blockscout.com/address/0xBeD604b5AB226134EdF154cc31881d8C93f4C9e6" target="_blank" rel="noopener" title="0xBeD604b5AB226134EdF154cc31881d8C93f4C9e6"><span class="addr-full">0xBeD604b5AB226134EdF154cc31881d8C93f4C9e6</span><span class="addr-short">0xBeD6…C9e6</span></a></div>
   <div class="socials"><a href="https://x.com/scratch4663" target="_blank" rel="noopener">X / Twitter</a><span>·</span><a href="https://dexscreener.com/robinhood/0x3f66e1430c12a7a64839f43050165db6d1bf1ae5bd7df11e47a37a8e73bc00ef" target="_blank" rel="noopener">Chart</a><span>·</span><a href="https://robinhoodchain.blockscout.com/address/0xBeD604b5AB226134EdF154cc31881d8C93f4C9e6" target="_blank" rel="noopener">Explorer</a></div>
   <div class="fine">Fan fiction with a claim button. Not affiliated with, endorsed by, or gamified by Robinhood Markets, Inc. Memecoins are gambling; scratch responsibly. There is no official Telegram. Anyone claiming otherwise is trying to scam you.</div>
 </footer>
@@ -891,6 +942,6 @@
 <div class="toast-host" id="toastHost" aria-live="polite" aria-relevant="additions"></div>
 
 <!-- Bump ?v= to the short commit hash on every site/ ship so Render/CDN cannot serve stale app.js -->
-<script type="module" src="./app.js?v=ia-1"></script>
+<script type="module" src="./app.js?v=overflow-1"></script>
 </body>
 </html>
