@@ -4,37 +4,51 @@
  *
  * Env:
  *   RPC_URL                 HTTP(S) JSON-RPC
+ *   WSS_URL                 optional WebSocket RPC (preferred for low latency)
  *   OPERATOR_PRIVATE_KEY    operator key (must match on-chain operator) — preferred
  *   PRIVATE_KEY             fallback if OPERATOR_PRIVATE_KEY unset
  *   SELF_ENTROPY_ADDRESS    SelfEntropyProvider address
  *   CHAIN_FILE              path to state from generate-chain.js (default ../entropy-state.json)
- *   POLL_MS                 log poll interval (default 4000)
+ *   POLL_MS                 HTTP poll interval when not on ws (default 2500)
+ *   HEAD_CHECK_MS           independent nextFulfillSeq lag check (default 60000)
  *   REVEAL_MAX_RETRIES      tx retries (default 8)
  *   FROM_BLOCK              manual recovery override — scan start (alias: START_BLOCK)
  *   CATCH_UP_ONCE           if "1", drain pending then exit (no perpetual poll)
  *   GAME_ADDRESS            ScratchGame (for ScratchSettled ledger parse)
  *   PAYOUT_LEDGER_PATH      CSV path (default ../payout-ledger.csv)
  *
- * Startup lookback never clamps away unfulfilled requests: scans from
- *   min(lastProcessedBlock, block of on-chain nextFulfillSeq request)
- * to latest in ≤2k-block chunks, regardless of total span.
- *
- * Reveal loop always reads nextFulfillSeq on-chain and reveals that id only.
+ * Reveal targeting always reads on-chain nextFulfillSeq (never event order).
+ * getLogs / websocket only accelerate discovery + latency metrics.
  *
  * Usage:
  *   node src/watch-and-reveal.js
  *   FROM_BLOCK=13390000 CATCH_UP_ONCE=1 node src/watch-and-reveal.js
+ *
+ * Loads ops/entropy-operator/.env via dotenv (override: false — existing
+ * process.env wins over the file).
  */
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Contract, JsonRpcProvider, Wallet, keccak256, solidityPacked } from "ethers";
+import dotenv from "dotenv";
+import {
+  Contract,
+  JsonRpcProvider,
+  WebSocketProvider,
+  Wallet,
+  keccak256,
+  solidityPacked,
+} from "ethers";
 import { defaultLedgerPath, logLedgerError, recordRevealSettlements } from "./payout-ledger.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const ENV_FILE = resolve(__dirname, "..", ".env");
+dotenv.config({ path: ENV_FILE, override: false });
 const DEFAULT_FILE = resolve(__dirname, "..", "entropy-state.json");
 /** eth_getLogs chunk size — stay under Alchemy's 10k cap with margin. */
 const LOG_CHUNK = 2_000;
+/** Max blocks to walk when locating a single request for latency / resync. */
+const HEAD_FIND_MAX = 50_000;
 
 const ABI = [
   "event RandomnessRequested(uint256 indexed requestId, address indexed requester)",
@@ -73,6 +87,25 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+/** Derive wss:// from common Alchemy https:// URLs when WSS_URL unset. */
+function inferWssUrl(httpUrl) {
+  if (!httpUrl) return null;
+  try {
+    const u = new URL(httpUrl);
+    if (u.protocol === "https:" && u.hostname.includes("alchemy.com")) {
+      u.protocol = "wss:";
+      return u.toString();
+    }
+    if (u.protocol === "http:" && u.hostname.includes("alchemy.com")) {
+      u.protocol = "ws:";
+      return u.toString();
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
 async function revealWithRetries(contract, requestId, preimage, maxRetries) {
   let lastErr;
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -85,7 +118,6 @@ async function revealWithRetries(contract, requestId, preimage, maxRetries) {
     } catch (err) {
       lastErr = err;
       const msg = err.shortMessage || err.message || String(err);
-      // Wrong key / hard reverts: fail fast — do not hammer the sequencer.
       if (/NotOperator|bad address checksum|insufficient funds/i.test(msg + (err.data || ""))) {
         throw err;
       }
@@ -98,22 +130,22 @@ async function revealWithRetries(contract, requestId, preimage, maxRetries) {
 }
 
 /**
- * Locate the block of RandomnessRequested(requestId) via indexed topic scans.
- * Returns null if not found in [scanFrom, latest].
+ * Locate RandomnessRequested(requestId) scanning backward from `latest` at most
+ * HEAD_FIND_MAX blocks (never a multi-million-block walk on the hot path).
  */
-async function findRequestBlock(contract, requestId, scanFrom, latest) {
+async function findRequestBlockNearTip(contract, requestId, latest, maxSpan = HEAD_FIND_MAX) {
   const filter = contract.filters.RandomnessRequested(requestId);
-  for (let start = scanFrom; start <= latest; start += LOG_CHUNK) {
-    const end = Math.min(latest, start + LOG_CHUNK - 1);
+  const floor = Math.max(0, latest - maxSpan);
+  for (let end = latest; end >= floor; end -= LOG_CHUNK) {
+    const start = Math.max(floor, end - LOG_CHUNK + 1);
     const logs = await contract.queryFilter(filter, start, end);
-    if (logs.length) return Number(logs[0].blockNumber);
+    if (logs.length) return Number(logs[logs.length - 1].blockNumber);
   }
   return null;
 }
 
 /**
- * Resolve inclusive scan start. Never clamps a gap that still has unfulfilled head.
- * Priority: FROM_BLOCK / START_BLOCK override → min(lastProcessed, headRequestBlock) → head → last → tip-1.
+ * Startup / forced resync start block. Never clamps away an unfulfilled head.
  */
 async function resolveFromBlock(contract, state, latest) {
   const override = process.env.FROM_BLOCK ?? process.env.START_BLOCK;
@@ -132,22 +164,20 @@ async function resolveFromBlock(contract, state, latest) {
       ? Number(state.lastProcessedBlock)
       : null;
 
-  // Search far enough back that a long restart gap cannot hide the head request.
-  const searchFloor = Math.min(
-    lastProcessed ?? latest,
-    Math.max(0, latest - 2_000_000),
-  );
   let headBlock = null;
   if (headSeq < nextSeq) {
-    // There is at least one unfulfilled (or in-flight) id at/after head.
-    headBlock = await findRequestBlock(contract, headSeq, searchFloor, latest);
+    headBlock = await findRequestBlockNearTip(contract, headSeq, latest, 2_000_000);
     if (headBlock == null) {
-      // Wider emergency scan from an explicit low floor used in ops recovery.
       const emergencyFloor = Number(process.env.REQUEST_SCAN_FLOOR || 13_000_000);
       console.warn(
-        `  head request ${headSeq.toString()} not found from ${searchFloor}; scanning from ${emergencyFloor}`,
+        `  head request ${headSeq.toString()} not near tip; scanning from ${emergencyFloor}`,
       );
-      headBlock = await findRequestBlock(contract, headSeq, emergencyFloor, latest);
+      headBlock = await findRequestBlockNearTip(
+        contract,
+        headSeq,
+        latest,
+        Math.max(0, latest - emergencyFloor),
+      );
     }
   }
 
@@ -157,6 +187,7 @@ async function resolveFromBlock(contract, state, latest) {
   } else if (headBlock != null) {
     fromBlock = headBlock;
   } else if (lastProcessed != null) {
+    // Resume from last successful scan tip (inclusive re-scan of that block).
     fromBlock = lastProcessed;
   } else {
     fromBlock = Math.max(0, latest - 1);
@@ -170,67 +201,8 @@ async function resolveFromBlock(contract, state, latest) {
   return fromBlock;
 }
 
-/**
- * Reveal strictly the on-chain head (`nextFulfillSeq`) until the queue is drained
- * or the head is not yet pending. Event order is never trusted for targeting.
- * @returns {Promise<number>} number of reveals confirmed this call
- */
-async function drainHeadReveals(contract, provider, state, chainFile, maxRetries) {
-  let drained = 0;
-  for (;;) {
-    const currentEpoch = await contract.currentEpoch();
-    const requestId = await contract.nextFulfillSeq(currentEpoch);
-    const req = await contract.requests(requestId);
-
-    const pending = Boolean(req.pending);
-    const reqEpoch = BigInt(req.epoch ?? 0);
-    if (!pending) {
-      // Head id is not pending — caught up (typically requestId == nextSeq with empty slot).
-      break;
-    }
-    if (reqEpoch !== BigInt(currentEpoch)) {
-      console.warn(
-        `head ${requestId.toString()}: epoch ${reqEpoch} != current ${currentEpoch} (orphaned) — stop`,
-      );
-      break;
-    }
-
-    if (state.nextRevealIndex < 0) {
-      throw new Error("hash chain exhausted — register a new chain and regenerate state");
-    }
-
-    const preimage = preimageAt(state.secret, state.nextRevealIndex);
-    const cursor = await contract.epochCursor(currentEpoch);
-    if (hashPacked(preimage) !== cursor) {
-      throw new Error(
-        `preimage at index ${state.nextRevealIndex} does not match on-chain cursor — state desync`,
-      );
-    }
-
-    const key = requestId.toString();
-    console.log(`revealing request ${key} with chain index ${state.nextRevealIndex}`);
-    const receipt = await revealWithRetries(contract, requestId, preimage, maxRetries);
-
-    state.nextRevealIndex -= 1;
-    saveState(chainFile, state);
-    drained += 1;
-    console.log(`  nextRevealIndex now ${state.nextRevealIndex}`);
-
-    // Ledger must never block or fail a reveal — isolated try/catch + ledger-errors.log.
-    try {
-      await recordRevealSettlements(provider, receipt, { requestId });
-    } catch (ledgerErr) {
-      try {
-        logLedgerError(`reveal hook threw req=${key}`, ledgerErr);
-      } catch (logErr) {
-        console.error(`LEDGER ERROR: secondary log failure req=${key}:`, logErr);
-      }
-    }
-  }
-  return drained;
-}
-
 async function scanRequestedLogs(contract, fromBlock, toBlock, intoMap) {
+  if (fromBlock > toBlock) return;
   let rangeStart = fromBlock;
   while (rangeStart <= toBlock) {
     const rangeEnd = Math.min(toBlock, rangeStart + LOG_CHUNK - 1);
@@ -251,6 +223,134 @@ async function scanRequestedLogs(contract, fromBlock, toBlock, intoMap) {
   }
 }
 
+/**
+ * Reveal strictly the on-chain head until drained.
+ * @returns {Promise<number>} confirms this call
+ */
+async function drainHeadReveals(ctx) {
+  const { contract, httpProvider, state, chainFile, maxRetries, requestMeta } = ctx;
+  let drained = 0;
+  for (;;) {
+    const currentEpoch = await contract.currentEpoch();
+    const requestId = await contract.nextFulfillSeq(currentEpoch);
+    const req = await contract.requests(requestId);
+
+    const pending = Boolean(req.pending);
+    const reqEpoch = BigInt(req.epoch ?? 0);
+    if (!pending) break;
+    if (reqEpoch !== BigInt(currentEpoch)) {
+      console.warn(
+        `head ${requestId.toString()}: epoch ${reqEpoch} != current ${currentEpoch} (orphaned) — stop`,
+      );
+      break;
+    }
+
+    if (state.nextRevealIndex < 0) {
+      throw new Error("hash chain exhausted — register a new chain and regenerate state");
+    }
+
+    const preimage = preimageAt(state.secret, state.nextRevealIndex);
+    const cursor = await contract.epochCursor(currentEpoch);
+    if (hashPacked(preimage) !== cursor) {
+      throw new Error(
+        `preimage at index ${state.nextRevealIndex} does not match on-chain cursor — state desync`,
+      );
+    }
+
+    const key = requestId.toString();
+    const noticedAt = Date.now();
+    let reqBlockTs = null;
+    let reqBlockNumber = requestMeta.get(key)?.blockNumber ?? null;
+    if (reqBlockNumber == null) {
+      const tip = await httpProvider.getBlockNumber();
+      reqBlockNumber = await findRequestBlockNearTip(contract, requestId, tip);
+      if (reqBlockNumber != null) {
+        requestMeta.set(key, { requestId, blockNumber: reqBlockNumber });
+      }
+    }
+    if (reqBlockNumber != null) {
+      try {
+        const blk = await httpProvider.getBlock(reqBlockNumber);
+        reqBlockTs = Number(blk.timestamp) * 1000;
+      } catch {
+        /* latency log best-effort */
+      }
+    }
+
+    console.log(`revealing request ${key} with chain index ${state.nextRevealIndex}`);
+    const receipt = await revealWithRetries(contract, requestId, preimage, maxRetries);
+
+    const confirmedAt = Date.now();
+    if (reqBlockTs != null) {
+      const latencySec = ((confirmedAt - reqBlockTs) / 1000).toFixed(2);
+      console.log(
+        `  reveal latency: ${latencySec}s (request block ${reqBlockNumber} → confirm ${receipt.blockNumber})`,
+      );
+    } else {
+      const sinceNotice = ((confirmedAt - noticedAt) / 1000).toFixed(2);
+      console.log(`  reveal latency: ${sinceNotice}s since drain noticed head (request block unknown)`);
+    }
+
+    state.nextRevealIndex -= 1;
+    saveState(chainFile, state);
+    drained += 1;
+    console.log(`  nextRevealIndex now ${state.nextRevealIndex}`);
+
+    try {
+      await recordRevealSettlements(httpProvider, receipt, { requestId });
+    } catch (ledgerErr) {
+      try {
+        logLedgerError(`reveal hook threw req=${key}`, ledgerErr);
+      } catch (logErr) {
+        console.error(`LEDGER ERROR: secondary log failure req=${key}:`, logErr);
+      }
+    }
+  }
+  return drained;
+}
+
+/**
+ * If nextFulfillSeq lags nextSeq, force fromBlock back to the head request
+ * (bounded search) so the next scan cannot skip it.
+ */
+async function headLagResync(contract, httpProvider, fromBlockRef, requestMeta) {
+  const epoch = await contract.currentEpoch();
+  const head = await contract.nextFulfillSeq(epoch);
+  const nextSeq = await contract.nextSeq();
+  if (head >= nextSeq) return { lagged: false, head, nextSeq };
+
+  const headReq = await contract.requests(head);
+  if (!headReq.pending) return { lagged: false, head, nextSeq };
+
+  console.error(
+    `HEAD LAG: nextFulfillSeq=${head.toString()} < nextSeq=${nextSeq.toString()} — forcing head resync`,
+  );
+  const tip = await httpProvider.getBlockNumber();
+  let headBlock = requestMeta.get(head.toString())?.blockNumber ?? null;
+  if (headBlock == null) {
+    headBlock = await findRequestBlockNearTip(contract, head, tip, 500_000);
+  }
+  if (headBlock != null && headBlock < fromBlockRef.value) {
+    console.warn(`  resync fromBlock ${fromBlockRef.value} → ${headBlock}`);
+    fromBlockRef.value = headBlock;
+  } else if (headBlock != null) {
+    // Re-scan a small window ending at tip so the head log is seen again.
+    fromBlockRef.value = Math.min(fromBlockRef.value, headBlock);
+  } else {
+    // Unknown block — re-scan a recent window rather than advancing past the tip.
+    fromBlockRef.value = Math.max(0, tip - HEAD_FIND_MAX);
+    console.warn(`  head block unknown; resync scan from ${fromBlockRef.value}`);
+  }
+  return { lagged: true, head, nextSeq, headBlock };
+}
+
+async function connectWs(wssUrl) {
+  const ws = new WebSocketProvider(wssUrl);
+  // Force a round-trip so we fail fast on bad URLs.
+  await ws.getBlockNumber();
+  return ws;
+}
+
 async function main() {
   const rpcUrl = process.env.RPC_URL;
   const pk = process.env.OPERATOR_PRIVATE_KEY || process.env.PRIVATE_KEY;
@@ -262,9 +362,11 @@ async function main() {
   }
 
   const chainFile = resolve(process.env.CHAIN_FILE || DEFAULT_FILE);
-  const pollMs = Number(process.env.POLL_MS || 4000);
+  const pollMs = Number(process.env.POLL_MS || 2500);
+  const headCheckMs = Number(process.env.HEAD_CHECK_MS || 60_000);
   const maxRetries = Number(process.env.REVEAL_MAX_RETRIES || 8);
   const catchUpOnce = process.env.CATCH_UP_ONCE === "1" || process.env.CATCH_UP_ONCE === "true";
+  const wssUrl = process.env.WSS_URL || inferWssUrl(rpcUrl);
 
   if (!existsSync(chainFile)) {
     throw new Error(`chain state file not found: ${chainFile}`);
@@ -274,8 +376,9 @@ async function main() {
     throw new Error(`invalid chain state at ${chainFile}`);
   }
 
-  const provider = new JsonRpcProvider(rpcUrl);
-  const wallet = new Wallet(pk, provider);
+  const httpProvider = new JsonRpcProvider(rpcUrl);
+  const wallet = new Wallet(pk, httpProvider);
+  // Writes always go over HTTP (more reliable than ws for txs).
   const contract = new Contract(address, ABI, wallet);
 
   const onChainOp = await contract.operator();
@@ -285,8 +388,8 @@ async function main() {
     );
   }
 
-  const latest0 = await provider.getBlockNumber();
-  let fromBlock = await resolveFromBlock(contract, state, latest0);
+  const latest0 = await httpProvider.getBlockNumber();
+  const fromBlockRef = { value: await resolveFromBlock(contract, state, latest0) };
 
   const ledgerPath = defaultLedgerPath();
   console.log(`watching RandomnessRequested on ${address}`);
@@ -294,45 +397,173 @@ async function main() {
   console.log(`  chain file:      ${chainFile}`);
   console.log(`  nextRevealIndex: ${state.nextRevealIndex}`);
   console.log(`  payout ledger:   ${ledgerPath} (live append after each reveal)`);
+  console.log(`  pollMs:          ${pollMs}`);
+  console.log(`  headCheckMs:     ${headCheckMs}`);
   console.log(`  mode:            ${catchUpOnce ? "catch-up-once" : "poll"}`);
 
-  const seen = new Map();
+  const requestMeta = new Map();
+  const drainCtx = {
+    contract,
+    httpProvider,
+    state,
+    chainFile,
+    maxRetries,
+    requestMeta,
+  };
+
   let totalDrained = 0;
+  let revealInFlight = false;
+  let lastHeadCheck = 0;
+  let useWs = false;
+  let wsProvider = null;
+  let wsContract = null;
+  let wakePoll = null; // resolve to interrupt sleep on ws event
+  let wsBackoffMs = 1000;
+
+  const bumpWake = () => {
+    if (wakePoll) {
+      const r = wakePoll;
+      wakePoll = null;
+      r();
+    }
+  };
+
+  async function attachWs() {
+    if (!wssUrl || catchUpOnce) return;
+    try {
+      if (wsProvider) {
+        try {
+          await wsProvider.destroy();
+        } catch {
+          /* ignore */
+        }
+        wsProvider = null;
+        wsContract = null;
+      }
+      wsProvider = await connectWs(wssUrl);
+      wsContract = new Contract(address, ABI, wsProvider);
+      useWs = true;
+      wsBackoffMs = 1000;
+      console.log(`  transport:       websocket ${wssUrl.replace(/\/v2\/.+$/, "/v2/***")}`);
+      wsContract.on(wsContract.filters.RandomnessRequested(), (requestId, requester, event) => {
+        try {
+          const key = requestId.toString();
+          const blockNumber = Number(event.log?.blockNumber ?? event.blockNumber ?? 0);
+          requestMeta.set(key, { requestId, blockNumber, requester });
+          console.log(`ws: RandomnessRequested ${key} block=${blockNumber || "?"}`);
+          bumpWake();
+        } catch (err) {
+          console.error(`ws event handler error: ${err?.message || err}`);
+        }
+      });
+      wsProvider.websocket?.addEventListener?.("close", () => {
+        console.warn("ws: disconnected — falling back to HTTP poll, will retry ws");
+        useWs = false;
+        bumpWake();
+        scheduleWsReconnect();
+      });
+      // ethers v6 WebsocketProvider
+      if (typeof wsProvider.websocket?.on === "function") {
+        wsProvider.websocket.on("close", () => {
+          console.warn("ws: disconnected — falling back to HTTP poll, will retry ws");
+          useWs = false;
+          bumpWake();
+          scheduleWsReconnect();
+        });
+      }
+    } catch (err) {
+      useWs = false;
+      console.warn(`ws: unavailable (${err?.shortMessage || err?.message || err}) — HTTP poll @ ${pollMs}ms`);
+      scheduleWsReconnect();
+    }
+  }
+
+  let wsReconnectTimer = null;
+  function scheduleWsReconnect() {
+    if (catchUpOnce || !wssUrl) return;
+    if (wsReconnectTimer) return;
+    const delay = wsBackoffMs;
+    wsBackoffMs = Math.min(60_000, wsBackoffMs * 2);
+    wsReconnectTimer = setTimeout(async () => {
+      wsReconnectTimer = null;
+      if (!useWs) await attachWs();
+    }, delay);
+  }
+
+  await attachWs();
+  if (!useWs) {
+    console.log(`  transport:       HTTP poll every ${pollMs}ms`);
+  }
+
+  // Startup drain (same as steady-state drain — no million-block pre-walk).
+  try {
+    revealInFlight = true;
+    const drained = await drainHeadReveals(drainCtx);
+    totalDrained += drained;
+    if (drained > 0) {
+      console.log(`  startup drained ${drained} request(s)`);
+    }
+  } finally {
+    revealInFlight = false;
+  }
 
   for (;;) {
     try {
-      const latest = await provider.getBlockNumber();
+      const latest = await httpProvider.getBlockNumber();
 
-      // Re-anchor if on-chain head is older than our cursor (gap after crash / wrong tip).
-      const epoch = await contract.currentEpoch();
-      const headSeq = await contract.nextFulfillSeq(epoch);
-      const headReq = await contract.requests(headSeq);
-      if (headReq.pending) {
-        const headBlock = await findRequestBlock(
-          contract,
-          headSeq,
-          Math.min(fromBlock, Math.max(0, latest - 2_000_000)),
-          latest,
-        );
-        if (headBlock != null && headBlock < fromBlock) {
-          console.warn(
-            `  re-anchoring fromBlock ${fromBlock} → ${headBlock} (unfulfilled head ${headSeq.toString()})`,
-          );
-          fromBlock = headBlock;
+      // Independent lag safety net (~60s): does not depend on getLogs success.
+      const now = Date.now();
+      if (now - lastHeadCheck >= headCheckMs) {
+        lastHeadCheck = now;
+        if (!revealInFlight) {
+          const lag = await headLagResync(contract, httpProvider, fromBlockRef, requestMeta);
+          if (lag.lagged) {
+            // Immediate drain attempt after resync.
+            revealInFlight = true;
+            try {
+              const drained = await drainHeadReveals(drainCtx);
+              totalDrained += drained;
+              if (drained > 0) {
+                console.log(
+                  `  resync drained ${drained} request(s) (session total ${totalDrained})`,
+                );
+              } else {
+                console.error(
+                  `HEAD LAG persists after resync: head=${lag.head.toString()} nextSeq=${lag.nextSeq.toString()}`,
+                );
+              }
+            } finally {
+              revealInFlight = false;
+            }
+          }
         }
       }
 
-      if (latest >= fromBlock) {
-        await scanRequestedLogs(contract, fromBlock, latest, seen);
-        fromBlock = latest + 1;
-        state.lastProcessedBlock = latest;
-        saveState(chainFile, state);
+      // Scan only a small forward window. lastProcessed advances ONLY after success.
+      if (latest >= fromBlockRef.value) {
+        try {
+          await scanRequestedLogs(contract, fromBlockRef.value, latest, requestMeta);
+          fromBlockRef.value = latest + 1;
+          state.lastProcessedBlock = latest;
+          saveState(chainFile, state);
+        } catch (scanErr) {
+          console.error(
+            `scan error (lastProcessed NOT advanced): ${scanErr.shortMessage || scanErr.message}`,
+          );
+          // Do not bump fromBlock / lastProcessed — retry same window next iteration.
+        }
       }
 
-      const drained = await drainHeadReveals(contract, provider, state, chainFile, maxRetries);
-      totalDrained += drained;
-      if (drained > 0) {
-        console.log(`  drained ${drained} request(s) this pass (session total ${totalDrained})`);
+      // Always attempt drain — on-chain head is authoritative (events are optional).
+      revealInFlight = true;
+      try {
+        const drained = await drainHeadReveals(drainCtx);
+        totalDrained += drained;
+        if (drained > 0) {
+          console.log(`  drained ${drained} request(s) this pass (session total ${totalDrained})`);
+        }
+      } finally {
+        revealInFlight = false;
       }
 
       if (catchUpOnce) {
@@ -346,24 +577,34 @@ async function main() {
           );
           return;
         }
-        // Head still pending but we didn't drain — likely transient; one more loop then exit on persistent fail.
-        if (drained === 0) {
+        if (totalDrained === 0) {
           throw new Error(
             `catch-up stalled: head ${head.toString()} still pending but reveal did not proceed`,
           );
         }
       }
     } catch (err) {
-      console.error(`poll error: ${err.shortMessage || err.message}`);
+      console.error(`poll error: ${err.shortMessage || err.message || err}`);
+      if (err?.stack) console.error(err.stack);
       if (catchUpOnce) throw err;
-      // Wrong operator / desync: do not spin forever.
       const msg = err.shortMessage || err.message || "";
       if (/!= on-chain operator|refusing to run|state desync|hash chain exhausted/i.test(msg)) {
         throw err;
       }
     }
+
     if (catchUpOnce) continue;
-    await sleep(pollMs);
+
+    // Sleep, but wake early on websocket RandomnessRequested.
+    await new Promise((resolveSleep) => {
+      wakePoll = resolveSleep;
+      const t = setTimeout(() => {
+        if (wakePoll === resolveSleep) wakePoll = null;
+        resolveSleep();
+      }, useWs ? Math.min(pollMs, 5000) : pollMs);
+      // stash timer unused — fine for ops process
+      void t;
+    });
   }
 }
 

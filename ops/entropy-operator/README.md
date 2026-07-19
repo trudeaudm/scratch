@@ -35,11 +35,8 @@ export ENTROPY_COMMITMENT=0x…   # from generate output
 After `SelfEntropyProvider` is deployed and wired as ScratchGame's randomness:
 
 ```bash
-export RPC_URL=https://…
-export OPERATOR_PRIVATE_KEY=0x…        # preferred — must be SelfEntropyProvider.operator()
-# or: export PRIVATE_KEY=0x…           # fallback if OPERATOR_PRIVATE_KEY unset
-export SELF_ENTROPY_ADDRESS=0x…        # SelfEntropyProvider
-# optional: CHAIN_FILE, POLL_MS, REVEAL_MAX_RETRIES, FROM_BLOCK, GAME_ADDRESS, PAYOUT_LEDGER_PATH
+cp .env.example .env   # fill OPERATOR_PRIVATE_KEY + RPC_URL
+# or export the same vars in the shell (shell wins over .env)
 
 npm run watch
 
@@ -47,16 +44,18 @@ npm run watch
 # FROM_BLOCK=13390000 CATCH_UP_ONCE=1 npm run catch-up
 ```
 
-If the wallet does not match on-chain `operator()`, the watcher **exits immediately** (reveals would revert). Prefer `OPERATOR_PRIVATE_KEY`. Do not point `PRIVATE_KEY` at the Deploy2 deployer unless that address is also the entropy operator.
+`OPERATOR_PRIVATE_KEY` must match on-chain `SelfEntropyProvider.operator()` — mismatch hard-exits at startup. Optional: `WSS_URL`, `FROM_BLOCK`, `CHAIN_FILE`, `POLL_MS` (default 2500), `HEAD_CHECK_MS` (default 60000), `REVEAL_MAX_RETRIES`, `GAME_ADDRESS`, `PAYOUT_LEDGER_PATH`. `PRIVATE_KEY` remains a fallback if `OPERATOR_PRIVATE_KEY` is unset.
 
-Lookback is gap-proof: `lastProcessedBlock` is persisted in the chain state file, and startup scans from `min(lastProcessedBlock, block of nextFulfillSeq)` in ≤2k-block chunks with no total-span clamp. `FROM_BLOCK` (alias `START_BLOCK`) forces a manual recovery start.
+If the wallet does not match on-chain `operator()`, the watcher **exits immediately** (reveals would revert). Prefer `OPERATOR_PRIVATE_KEY`.
+
+Lookback is gap-proof: `lastProcessedBlock` advances only after a successful scan; startup/resync uses `min(lastProcessed, head-request block)`. Prefer websocket (`WSS_URL`, or inferred from Alchemy HTTPS `RPC_URL`) for low latency; HTTP poll is the automatic fallback.
 
 The watcher:
 
-1. Polls `RandomnessRequested` logs in chunked windows
+1. Subscribes to `RandomnessRequested` over websocket when available; otherwise polls getLogs every `POLL_MS`
 2. Reveals by reading on-chain `nextFulfillSeq` each time (never assumes event order)
-3. Advances `nextRevealIndex` + `lastProcessedBlock` in the state file after progress
-4. Retries failed txs with exponential backoff
+3. Every ~`HEAD_CHECK_MS`, checks fulfill lag independently and force-resyncs a stuck head
+4. Logs request-block→confirm latency per reveal; retries failed txs with backoff
 5. After each confirmed reveal, parses `ScratchSettled` from the fulfill receipt and appends a row to `payout-ledger.csv` (gitignored). Price failures / IO errors are logged and skipped — they never fail the reveal.
 
 ## Payout ledger
