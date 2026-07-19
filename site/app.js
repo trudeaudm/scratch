@@ -2781,8 +2781,11 @@ async function connectWallet() {
     await refreshWalletPanel({ skipStage: true });
     updateScratchButtons();
     watchScratchTransfers();
+    state.walletSupportsBatch = null;
+    void refreshWalletBatchCapability().then(() => applyMultiPickerSigningMode());
     await rehydratePendingSession();
     if (!stageBusy()) renderTier();
+    else applySessionView();
   } catch (err) {
     if (btn) btn.textContent = 'Connect';
     toastWalletError(err, 'Wallet connection failed');

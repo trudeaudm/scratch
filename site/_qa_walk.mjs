@@ -35,13 +35,15 @@ assert(src.includes('PHASE.MULTI'), 'MULTI phase');
 assert(src.includes('wallet_sendCalls'), 'EIP-5792 sendCalls');
 assert(src.includes('wallet_getCapabilities'), 'EIP-5792 getCapabilities');
 assert(src.includes('max 10 per batch') || src.includes('MULTI_MAX_BATCH'), 'batch cap');
-assert(src.includes('confirm') && src.includes('of') && /confirm \$\{|Confirm \$\{/.test(src) || src.includes('Confirm ${'), 'sequential progress copy');
+assert(src.includes('Confirm ticket') || src.includes('showSequentialSigningBanner'), 'sequential progress copy');
+assert(src.includes('one-by-one') || src.includes('One approval per ticket'), 'sequential mode copy');
 assert(src.includes('function startMultiScratch'), 'startMultiScratch');
 assert(src.includes('function pollMultiBoard'), 'pollMultiBoard');
 
 const html = fs.readFileSync(new URL('./index.html', import.meta.url), 'utf8');
 assert(html.includes('id="multiBoard"'), 'multiBoard element');
 assert(html.includes('id="multiEntry"'), 'multiEntry element');
+assert(html.includes('id="multiSeqBanner"'), 'multiSeqBanner element');
 assert(html.includes('max 10 per batch'), 'cap explained inline');
 assert(/app\.js\?v=/.test(html), 'cache-busted app.js reference');
 assert(html.includes('id="stageFooter"'), 'stageFooter element');
