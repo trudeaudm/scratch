@@ -3,7 +3,7 @@
  * Wire from index.html: <script type="module" src="./app.js?v=…"></script>
  * Bump ASSET_VERSION (and the index.html ?v=) on every site/ commit.
  */
-export const ASSET_VERSION = 'win-share-1';
+export const ASSET_VERSION = 'wins-inc-1';
 
 import {
   createPublicClient,
@@ -507,6 +507,15 @@ const state = {
   liveTickets: { std: 0n, prem: 0n },
   demoTickets: loadDemoTickets(),
   prizeTables: { 0: [], 1: [] },
+  /** Incremental recent-wins feed — never cleared wholesale on refresh. */
+  winsFeed: {
+    /** @type {Map<string, { user: string, asset: string, amount: bigint, blockNumber: bigint, requestId: bigint, ageSec: number, prizeLabel?: string }>} */
+    byId: new Map(),
+    /** @type {bigint|null} */
+    lastSeenBlock: null,
+    bootstrapped: false,
+    inFlight: false,
+  },
   drawing: false,
   pollTimer: null,
   refreshTimer: null,
@@ -962,6 +971,7 @@ async function loadPrizeTable(tier) {
       cumOdds: Number(row.cumOdds),
     });
   }
+  // Assign only after a full successful read — never wipe prior tables mid-refresh.
   state.prizeTables[tier] = rows;
   return rows;
 }
@@ -979,73 +989,85 @@ async function renderPrizeList(tier, containerId) {
   if (!el) return;
   const rows = state.prizeTables[tier] || [];
   if (!rows.length) {
-    el.innerHTML = '<div class="prize-row"><span class="p">Loading prize table…</span></div>';
+    // Loading placeholder only before the first successful paint.
+    if (!el.dataset.filled) {
+      el.innerHTML = '<div class="prize-row"><span class="p">Loading prize table…</span></div>';
+    }
     return;
   }
 
-  const parts = [];
-  let prev = 0;
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i];
-    const delta = row.cumOdds - prev;
-    prev = row.cumOdds;
-    const isNoWin =
-      row.asset.toLowerCase() === zeroAddress.toLowerCase() ||
-      (row.amountOrBps === 0n && !row.isBpsOfPool);
+  try {
+    const parts = [];
+    let prev = 0;
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const delta = row.cumOdds - prev;
+      prev = row.cumOdds;
+      const isNoWin =
+        row.asset.toLowerCase() === zeroAddress.toLowerCase() ||
+        (row.amountOrBps === 0n && !row.isBpsOfPool);
 
-    if (isNoWin && i === rows.length - 1) {
+      if (isNoWin && i === rows.length - 1) {
+        const n = oneInN(delta);
+        parts.push(
+          `<div class="prize-row"><span class="p">No win</span><span class="o">${
+            n != null ? `1 in ${n}` : '—'
+          }</span></div>`,
+        );
+        continue;
+      }
+      if (isNoWin) continue;
+
+      const meta = await tokenMeta(row.asset);
+      let amountLabel;
+      let usdHint = '';
+
+      if (row.isBpsOfPool) {
+        let bal = 0n;
+        try {
+          bal = await publicClient.readContract({
+            address: addr.prizeVault,
+            abi: ABI_PRIZE_VAULT,
+            functionName: 'balanceOf',
+            args: [getAddress(row.asset)],
+          });
+        } catch {
+          bal = 0n;
+        }
+        const live = (bal * row.amountOrBps) / 10000n;
+        amountLabel = `+${formatHuman(live, meta.decimals)} ${meta.symbol}`;
+        const px = (await ensureTokenPrice(row.asset)) ?? unitUsd(row.asset);
+        if (px != null) {
+          const human = Number(formatUnits(live, meta.decimals));
+          usdHint = ` ${formatApproxUsd(human * px)}`;
+        }
+      } else {
+        amountLabel = `+${formatHuman(row.amountOrBps, meta.decimals)} ${meta.symbol}`;
+        const px = (await ensureTokenPrice(row.asset)) ?? unitUsd(row.asset);
+        if (px != null) {
+          const human = Number(formatUnits(row.amountOrBps, meta.decimals));
+          usdHint = ` ${formatApproxUsd(human * px)}`;
+        }
+      }
+
       const n = oneInN(delta);
+      const stockBadge =
+        meta.kind === 'stock' ? '<span class="tk">STOCK</span>' : '';
       parts.push(
-        `<div class="prize-row"><span class="p">No win</span><span class="o">${
+        `<div class="prize-row"><span class="p">${stockBadge}${amountLabel}${usdHint}</span><span class="o">${
           n != null ? `1 in ${n}` : '—'
         }</span></div>`,
       );
-      continue;
     }
-    if (isNoWin) continue;
-
-    const meta = await tokenMeta(row.asset);
-    let amountLabel;
-    let usdHint = '';
-
-    if (row.isBpsOfPool) {
-      let bal = 0n;
-      try {
-        bal = await publicClient.readContract({
-          address: addr.prizeVault,
-          abi: ABI_PRIZE_VAULT,
-          functionName: 'balanceOf',
-          args: [getAddress(row.asset)],
-        });
-      } catch {
-        bal = 0n;
-      }
-      const live = (bal * row.amountOrBps) / 10000n;
-      amountLabel = `+${formatHuman(live, meta.decimals)} ${meta.symbol}`;
-      const px = (await ensureTokenPrice(row.asset)) ?? unitUsd(row.asset);
-      if (px != null) {
-        const human = Number(formatUnits(live, meta.decimals));
-        usdHint = ` ${formatApproxUsd(human * px)}`;
-      }
-    } else {
-      amountLabel = `+${formatHuman(row.amountOrBps, meta.decimals)} ${meta.symbol}`;
-      const px = (await ensureTokenPrice(row.asset)) ?? unitUsd(row.asset);
-      if (px != null) {
-        const human = Number(formatUnits(row.amountOrBps, meta.decimals));
-        usdHint = ` ${formatApproxUsd(human * px)}`;
-      }
+    el.innerHTML = parts.join('') || '<div class="prize-row"><span class="p">No prizes listed</span></div>';
+    el.dataset.filled = '1';
+  } catch (err) {
+    // Keep last good paint — stale odds beat a blank/loading panel.
+    if (!el.dataset.filled) {
+      el.innerHTML = `<div class="prize-row"><span class="p">Prize table unavailable</span></div>`;
     }
-
-    const n = oneInN(delta);
-    const stockBadge =
-      meta.kind === 'stock' ? '<span class="tk">STOCK</span>' : '';
-    parts.push(
-      `<div class="prize-row"><span class="p">${stockBadge}${amountLabel}${usdHint}</span><span class="o">${
-        n != null ? `1 in ${n}` : '—'
-      }</span></div>`,
-    );
+    console.warn('prize list', tier, err);
   }
-  el.innerHTML = parts.join('') || '<div class="prize-row"><span class="p">No prizes listed</span></div>';
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1087,10 +1109,15 @@ async function renderVaultInventory() {
       html += `<div class="inv-sub">Stocks</div>${stocks.join('')}`;
     }
     el.innerHTML = html;
+    el.dataset.filled = '1';
   } catch (err) {
-    el.innerHTML = `<div class="inv-row muted">Inventory unavailable: ${escapeHtml(
-      err?.shortMessage || err?.message || String(err),
-    )}</div>`;
+    // Keep last good inventory — never blank the panel on a failed refresh.
+    if (!el.dataset.filled) {
+      el.innerHTML = `<div class="inv-row muted">Inventory unavailable: ${escapeHtml(
+        err?.shortMessage || err?.message || String(err),
+      )}</div>`;
+    }
+    console.warn('vault inventory', err);
   }
 }
 
@@ -1147,38 +1174,72 @@ async function refreshMinStake() {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Recent wins                                                                 */
+/* Recent wins — incremental keep-and-merge (keyed by requestId)               */
 /* -------------------------------------------------------------------------- */
 
-async function loadRecentWins() {
-  const el = $('recentWins');
-  if (!el) return;
+function winsLookbackBlocks() {
+  // ~0.1s blocks → ~864_000 blocks / 24h; clamp lookback
+  return BigInt(Math.min(Math.ceil(CONFIG.winsLookbackSec / 0.1), 1_000_000));
+}
 
-  try {
-    const latest = await publicClient.getBlockNumber();
-    // ~0.1s blocks → ~864_000 blocks / 24h; clamp lookback
-    const lookbackBlocks = BigInt(
-      Math.min(Math.ceil(CONFIG.winsLookbackSec / 0.1), 1_000_000),
-    );
-    const fromBlock =
-      latest > lookbackBlocks ? latest - lookbackBlocks : 0n;
-
-    const chunks = [];
-    for (let start = fromBlock; start <= latest; start += CONFIG.logChunkBlocks) {
-      const end =
-        start + CONFIG.logChunkBlocks - 1n > latest
-          ? latest
-          : start + CONFIG.logChunkBlocks - 1n;
-      chunks.push({ fromBlock: start, toBlock: end });
+function pruneWinsOutsideWindow(windowStartBlock) {
+  for (const [id, w] of state.winsFeed.byId) {
+    if (w.blockNumber < windowStartBlock || w.ageSec > CONFIG.winsLookbackSec) {
+      state.winsFeed.byId.delete(id);
     }
+  }
+}
 
-    el.innerHTML = '<div class="win-row muted">Loading recent wins…</div>';
+function refreshWinAges(latestBlock) {
+  for (const w of state.winsFeed.byId.values()) {
+    w.ageSec = Number(latestBlock - w.blockNumber) * 0.1;
+  }
+}
 
-    const wins = [];
-    const concurrency = 8;
-    let cursor = 0;
+function mergeSettledLog(log, newIds) {
+  const asset = log.args.asset;
+  if (!asset || asset.toLowerCase() === zeroAddress.toLowerCase()) return;
+  if (!log.args.amount || log.args.amount === 0n) return;
+  const requestId = log.args.requestId;
+  if (requestId == null) return;
+  const id = requestId.toString();
+  const prev = state.winsFeed.byId.get(id);
+  if (!prev) newIds.add(id);
+  state.winsFeed.byId.set(id, {
+    user: log.args.user,
+    asset,
+    amount: log.args.amount,
+    blockNumber: log.blockNumber,
+    requestId,
+    ageSec: prev?.ageSec ?? 0,
+    prizeLabel: prev?.prizeLabel,
+  });
+}
 
-    async function worker() {
+/**
+ * Fetch ScratchSettled logs in [fromBlock, toBlock], merge into winsFeed.byId.
+ * Bootstrap tolerates per-chunk failures; incremental fails closed so lastSeen is not advanced.
+ * @returns {Promise<Set<string>>} requestIds newly inserted this call
+ */
+async function fetchWinsRange(fromBlock, toBlock) {
+  const newIds = new Set();
+  if (fromBlock > toBlock) return newIds;
+
+  const chunks = [];
+  for (let start = fromBlock; start <= toBlock; start += CONFIG.logChunkBlocks) {
+    const end =
+      start + CONFIG.logChunkBlocks - 1n > toBlock
+        ? toBlock
+        : start + CONFIG.logChunkBlocks - 1n;
+    chunks.push({ fromBlock: start, toBlock: end });
+  }
+
+  const concurrency = 8;
+  let cursor = 0;
+  const bootstrap = !state.winsFeed.bootstrapped;
+
+  await Promise.all(
+    Array.from({ length: concurrency }, async () => {
       while (cursor < chunks.length) {
         const i = cursor++;
         const { fromBlock: fb, toBlock: tb } = chunks[i];
@@ -1189,77 +1250,142 @@ async function loadRecentWins() {
             fromBlock: fb,
             toBlock: tb,
           });
-          for (const log of logs) {
-            const asset = log.args.asset;
-            if (!asset || asset.toLowerCase() === zeroAddress.toLowerCase()) continue;
-            if (!log.args.amount || log.args.amount === 0n) continue;
-            wins.push({
-              user: log.args.user,
-              asset,
-              amount: log.args.amount,
-              blockNumber: log.blockNumber,
-              requestId: log.args.requestId,
-            });
+          for (const log of logs) mergeSettledLog(log, newIds);
+          if (bootstrap && state.winsFeed.byId.size) {
+            refreshWinAges(tb);
+            await paintRecentWins({ animateNew: false, newIds: new Set() });
           }
-          // Progressive render
-          if (wins.length && el) {
-            renderWinsPartial(el, wins);
-          }
-        } catch {
-          /* skip chunk */
+        } catch (err) {
+          if (bootstrap) continue;
+          throw err;
         }
       }
+    }),
+  );
+  return newIds;
+}
+
+async function loadRecentWins() {
+  const el = $('recentWins');
+  if (!el) return;
+  if (state.winsFeed.inFlight) return;
+  state.winsFeed.inFlight = true;
+
+  const hadRows = state.winsFeed.byId.size > 0;
+  // Loading placeholder may only appear on the very first load when the list is empty.
+  if (!hadRows && !state.winsFeed.bootstrapped && !el.querySelector('[data-request-id]')) {
+    el.innerHTML = '<div class="win-row muted">Loading recent wins…</div>';
+  }
+
+  try {
+    const latest = await publicClient.getBlockNumber();
+    const lookback = winsLookbackBlocks();
+    const windowStart = latest > lookback ? latest - lookback : 0n;
+
+    const incremental =
+      state.winsFeed.bootstrapped && state.winsFeed.lastSeenBlock != null;
+    let fromBlock = incremental ? state.winsFeed.lastSeenBlock + 1n : windowStart;
+
+    let newIds = new Set();
+    if (fromBlock <= latest) {
+      newIds = await fetchWinsRange(fromBlock, latest);
     }
 
-    await Promise.all(Array.from({ length: concurrency }, () => worker()));
+    refreshWinAges(latest);
+    pruneWinsOutsideWindow(windowStart);
+    state.winsFeed.lastSeenBlock = latest;
+    state.winsFeed.bootstrapped = true;
 
-    // Attach ages via latest block timestamp approximation
-    const tip = await publicClient.getBlock({ blockNumber: latest });
-    const tipTs = Number(tip.timestamp);
-    for (const w of wins) {
-      const ageBlocks = Number(latest - w.blockNumber);
-      w.ageSec = ageBlocks * 0.1;
-      w.ts = tipTs - w.ageSec;
-    }
-    wins.sort((a, b) => Number(b.blockNumber - a.blockNumber));
-    await renderWinsFinal(el, wins.slice(0, 40));
+    await paintRecentWins({
+      animateNew: incremental,
+      newIds,
+    });
   } catch (err) {
-    el.innerHTML = `<div class="win-row muted">Could not load wins: ${escapeHtml(
-      err?.shortMessage || err?.message || String(err),
-    )}</div>`;
+    // Failed refresh: leave existing list untouched; retry next cycle.
+    if (!hadRows && state.winsFeed.byId.size === 0) {
+      el.innerHTML = `<div class="win-row muted">Could not load wins: ${escapeHtml(
+        err?.shortMessage || err?.message || String(err),
+      )}</div>`;
+    }
+    console.warn('recent wins', err);
+  } finally {
+    state.winsFeed.inFlight = false;
   }
 }
 
-function renderWinsPartial(el, wins) {
-  const sorted = [...wins].sort((a, b) => Number(b.blockNumber - a.blockNumber)).slice(0, 20);
-  el.innerHTML = sorted
-    .map(
-      (w) =>
-        `<div class="win-row"><span class="win-who">${shortAddr(
-          w.user,
-        )}</span><span class="win-prize">…</span><span class="win-age">…</span></div>`,
-    )
-    .join('');
-}
+/**
+ * Sync DOM to winsFeed.byId without clearing the list first.
+ * New rows (by requestId) are prepended with a short entrance animation.
+ */
+async function paintRecentWins({ animateNew = false, newIds = new Set() } = {}) {
+  const el = $('recentWins');
+  if (!el) return;
 
-async function renderWinsFinal(el, wins) {
+  const wins = [...state.winsFeed.byId.values()]
+    .sort((a, b) => {
+      const bd = Number(b.blockNumber - a.blockNumber);
+      if (bd) return bd;
+      return Number(b.requestId - a.requestId);
+    })
+    .slice(0, 40);
+
   if (!wins.length) {
-    el.innerHTML = '<div class="win-row muted">No wins in the last 24h yet.</div>';
+    if (state.winsFeed.bootstrapped) {
+      el.innerHTML = '<div class="win-row muted">No wins in the last 24h yet.</div>';
+    }
     return;
   }
-  const parts = [];
-  for (const w of wins) {
-    const meta = await tokenMeta(w.asset);
-    const label = `+${formatHuman(w.amount, meta.decimals)} ${meta.symbol}`;
-    parts.push(
-      `<div class="win-row"><span class="win-who">${shortAddr(
-        w.user,
-      )}</span><span class="win-prize">${escapeHtml(label)}</span><span class="win-age">${ageLabel(
-        w.ageSec,
-      )}</span></div>`,
-    );
+
+  // Drop loading / empty placeholders — never wipe real win rows wholesale.
+  for (const child of [...el.children]) {
+    if (!(child instanceof HTMLElement)) continue;
+    if (!child.dataset.requestId) child.remove();
   }
-  el.innerHTML = parts.join('');
+
+  for (const w of wins) {
+    if (!w.prizeLabel) {
+      const meta = await tokenMeta(w.asset);
+      w.prizeLabel = `+${formatHuman(w.amount, meta.decimals)} ${meta.symbol}`;
+    }
+  }
+
+  const byDom = new Map();
+  for (const node of el.querySelectorAll('[data-request-id]')) {
+    byDom.set(node.dataset.requestId, node);
+  }
+
+  const keepIds = new Set(wins.map((w) => w.requestId.toString()));
+  for (const [id, node] of byDom) {
+    if (!keepIds.has(id)) {
+      node.remove();
+      byDom.delete(id);
+    }
+  }
+
+  for (let i = 0; i < wins.length; i++) {
+    const w = wins[i];
+    const id = w.requestId.toString();
+    let node = byDom.get(id);
+    if (!node) {
+      node = document.createElement('div');
+      node.className =
+        animateNew && newIds.has(id) ? 'win-row win-enter' : 'win-row';
+      node.dataset.requestId = id;
+      node.innerHTML = `<span class="who">${shortAddr(
+        w.user,
+      )}</span><span class="win-prize">${escapeHtml(
+        w.prizeLabel,
+      )}</span><span class="age">${ageLabel(w.ageSec)}</span>`;
+      byDom.set(id, node);
+    } else {
+      const ageEl = node.querySelector('.age');
+      if (ageEl) ageEl.textContent = ageLabel(w.ageSec);
+      const prizeEl = node.querySelector('.win-prize');
+      if (prizeEl && w.prizeLabel) prizeEl.textContent = w.prizeLabel;
+    }
+    const ref = el.children[i] || null;
+    if (ref !== node) el.insertBefore(node, ref);
+  }
 }
 
 /* -------------------------------------------------------------------------- */
