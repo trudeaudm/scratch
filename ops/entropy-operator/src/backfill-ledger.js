@@ -80,8 +80,9 @@ async function main() {
           rowIndex: log.args.rowIndex.toString(),
           asset: log.args.asset,
           amount: log.args.amount,
+          txHash: log.transactionHash || "",
         },
-        { retro: true, timestampIso: iso },
+        { retro: true, timestampIso: iso, txHash: log.transactionHash || "" },
       );
       if (ok) {
         existing.add(requestId);

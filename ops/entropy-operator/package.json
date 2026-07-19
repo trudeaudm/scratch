@@ -5,9 +5,11 @@
   "type": "module",
   "description": "SelfEntropyProvider chain generator + reveal operator",
   "scripts": {
-    "generate": "node src/generate-chain.js",
-    "watch": "node src/watch-and-reveal.js",
-    "backfill-ledger": "node src/backfill-ledger.js"
+    "generate": "node --use-system-ca src/generate-chain.js",
+    "watch": "node --use-system-ca src/watch-and-reveal.js",
+    "backfill-ledger": "node --use-system-ca src/backfill-ledger.js",
+    "reconcile": "node --use-system-ca src/reconcile-ledger.js",
+    "prove-live-ledger": "node --use-system-ca src/prove-live-ledger.js"
   },
   "engines": {
     "node": ">=18"

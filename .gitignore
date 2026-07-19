@@ -26,4 +26,5 @@ rehearsal/drill-logs/
 # SelfEntropy operator state (contains chain secret)
 ops/entropy-operator/entropy-state.json
 ops/entropy-operator/payout-ledger.csv
+ops/entropy-operator/ledger-errors.log
 ops/entropy-operator/node_modules/

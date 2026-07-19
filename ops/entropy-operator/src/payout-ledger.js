@@ -1,25 +1,35 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { Interface, formatUnits } from "ethers";
+import { Contract, Interface, formatUnits, id } from "ethers";
 import { priceUsd } from "./prices.js";
 import { resolveToken, ZERO } from "./token-map.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export const LEDGER_HEADER =
-  "timestamp,requestId,user,tier,rowIndex,asset,symbol,raw_amount,human_amount,price_usd,usd_value,retro";
+  "timestamp,requestId,user,tier,rowIndex,asset,symbol,raw_amount,human_amount,price_usd,usd_value,retro,tx_hash";
 
 export const SCRATCH_SETTLED_ABI = [
   "event ScratchSettled(address indexed user, uint256 indexed requestId, uint8 tier, uint256 rowIndex, address asset, uint256 amount)",
 ];
 
 const settledIface = new Interface(SCRATCH_SETTLED_ABI);
+const SETTLED_TOPIC = id(
+  "ScratchSettled(address,uint256,uint8,uint256,address,uint256)",
+);
 
 export function defaultLedgerPath() {
   return (
     process.env.PAYOUT_LEDGER_PATH ||
     path.join(__dirname, "..", "payout-ledger.csv")
+  );
+}
+
+export function defaultErrorsPath() {
+  return (
+    process.env.LEDGER_ERRORS_PATH ||
+    path.join(__dirname, "..", "ledger-errors.log")
   );
 }
 
@@ -29,6 +39,20 @@ export function defaultGameAddress() {
     process.env.SCRATCH_GAME ||
     "0xBeD604b5AB226134EdF154cc31881d8C93f4C9e6"
   );
+}
+
+/** Loud console + ledger-errors.log — never throws. */
+export function logLedgerError(message, detail) {
+  const line = `[${new Date().toISOString()}] ${message}${
+    detail ? ` | ${typeof detail === "string" ? detail : detail?.stack || detail?.message || String(detail)}` : ""
+  }`;
+  console.error(`LEDGER ERROR: ${message}`);
+  if (detail) console.error(detail);
+  try {
+    fs.appendFileSync(defaultErrorsPath(), line + "\n", "utf8");
+  } catch (e) {
+    console.error(`LEDGER ERROR: could not write ledger-errors.log: ${e?.message || e}`);
+  }
 }
 
 function csvEscape(v) {
@@ -46,20 +70,34 @@ function ensureHeader(filePath) {
   const existing = fs.readFileSync(filePath, "utf8");
   if (!existing.trim()) {
     fs.writeFileSync(filePath, LEDGER_HEADER + "\n", "utf8");
+    return;
   }
+  const lines = existing.split(/\r?\n/);
+  if (lines[0] && lines[0].startsWith("timestamp") && !lines[0].includes("tx_hash")) {
+    lines[0] = LEDGER_HEADER;
+    fs.writeFileSync(filePath, lines.join("\n").replace(/\n*$/, "\n"), "utf8");
+  }
+}
+
+function logAddress(log) {
+  return (log.address || log.emitter || "").toLowerCase();
 }
 
 /**
  * Parse ScratchSettled logs from a reveal/fulfill receipt.
- * @returns {Array<{user:string,requestId:string,tier:number,rowIndex:string,asset:string,amount:bigint}>}
  */
 export function parseScratchSettledFromReceipt(receipt, gameAddress) {
   const game = (gameAddress || defaultGameAddress()).toLowerCase();
   const out = [];
   for (const log of receipt?.logs || []) {
-    if ((log.address || "").toLowerCase() !== game) continue;
+    if (logAddress(log) !== game) continue;
+    const topics = log.topics || [];
+    if (topics[0] && topics[0].toLowerCase() !== SETTLED_TOPIC.toLowerCase()) continue;
     try {
-      const parsed = settledIface.parseLog(log);
+      const parsed = settledIface.parseLog({
+        topics: [...topics],
+        data: log.data,
+      });
       if (!parsed || parsed.name !== "ScratchSettled") continue;
       out.push({
         user: parsed.args.user,
@@ -68,17 +106,43 @@ export function parseScratchSettledFromReceipt(receipt, gameAddress) {
         rowIndex: parsed.args.rowIndex.toString(),
         asset: parsed.args.asset,
         amount: parsed.args.amount,
+        txHash: receipt.hash || receipt.transactionHash || log.transactionHash || "",
       });
-    } catch {
-      /* not this event */
+    } catch (e) {
+      logLedgerError("parseLog ScratchSettled failed on receipt log", e);
     }
   }
   return out;
 }
 
 /**
- * Load requestIds already present in the ledger (for backfill skip).
+ * Fallback: query ScratchSettled for requestId around the receipt block.
  */
+export async function fetchSettledByRequest(provider, requestId, opts = {}) {
+  const game = opts.gameAddress || defaultGameAddress();
+  const contract = new Contract(game, SCRATCH_SETTLED_ABI, provider);
+  const tip = await provider.getBlockNumber();
+  const fromBlock = Math.max(0, Number(opts.fromBlock ?? tip - 50_000));
+  const logs = await contract.queryFilter(
+    contract.filters.ScratchSettled(null, requestId),
+    fromBlock,
+    tip,
+  );
+  if (!logs.length) return [];
+  const log = logs[logs.length - 1];
+  return [
+    {
+      user: log.args.user,
+      requestId: log.args.requestId.toString(),
+      tier: Number(log.args.tier),
+      rowIndex: log.args.rowIndex.toString(),
+      asset: log.args.asset,
+      amount: log.args.amount,
+      txHash: log.transactionHash || "",
+    },
+  ];
+}
+
 export function loadLedgerRequestIds(filePath = defaultLedgerPath()) {
   const ids = new Set();
   if (!fs.existsSync(filePath)) return ids;
@@ -91,7 +155,7 @@ export function loadLedgerRequestIds(filePath = defaultLedgerPath()) {
   return ids;
 }
 
-function splitCsvLine(line) {
+export function splitCsvLine(line) {
   const cols = [];
   let cur = "";
   let inQ = false;
@@ -114,12 +178,23 @@ function splitCsvLine(line) {
 }
 
 /**
- * Append one ledger row. Never throws to caller — logs and returns false.
+ * Append one ledger row. Never throws to caller — logs loudly and returns false.
  */
-export async function appendLedgerRow(provider, event, { retro = false, timestampIso } = {}) {
+export async function appendLedgerRow(
+  provider,
+  event,
+  { retro = false, timestampIso, txHash } = {},
+) {
   const filePath = defaultLedgerPath();
   try {
     ensureHeader(filePath);
+
+    // Strictly additive: never rewrite an existing requestId.
+    const existing = loadLedgerRequestIds(filePath);
+    if (existing.has(String(event.requestId))) {
+      console.log(`ledger: skip existing requestId=${event.requestId}`);
+      return false;
+    }
 
     let iso = timestampIso;
     if (!iso) {
@@ -155,9 +230,10 @@ export async function appendLedgerRow(provider, event, { retro = false, timestam
         usdValue = "0";
       }
     } catch (e) {
-      console.warn(`ledger price: ${e?.message || e}`);
+      logLedgerError(`price fetch failed req=${event.requestId}`, e);
     }
 
+    const hash = txHash || event.txHash || "";
     const row = [
       iso,
       event.requestId,
@@ -171,17 +247,18 @@ export async function appendLedgerRow(provider, event, { retro = false, timestam
       price,
       usdValue,
       retro ? "true" : "false",
+      hash,
     ]
       .map(csvEscape)
       .join(",");
 
     fs.appendFileSync(filePath, row + "\n", "utf8");
     console.log(
-      `ledger: + ${tok.symbol} ${human || "0"} req=${event.requestId}${retro ? " (retro)" : ""}`,
+      `ledger: + ${tok.symbol} ${human || "0"} req=${event.requestId} retro=${retro} file=${filePath}`,
     );
     return true;
   } catch (e) {
-    console.warn(`ledger append failed: ${e?.message || e}`);
+    logLedgerError(`append failed req=${event?.requestId}`, e);
     return false;
   }
 }
@@ -191,11 +268,54 @@ export async function appendLedgerRow(provider, event, { retro = false, timestam
  */
 export async function recordRevealSettlements(provider, receipt, opts = {}) {
   try {
-    if (!receipt) return;
+    if (!receipt) {
+      logLedgerError("recordRevealSettlements called with empty receipt");
+      return;
+    }
     const game = opts.gameAddress || defaultGameAddress();
-    const events = parseScratchSettledFromReceipt(receipt, game);
+    const txHash = receipt.hash || receipt.transactionHash || "";
+    console.log(
+      `ledger: recording reveal tx=${txHash || "?"} block=${receipt.blockNumber} game=${game}`,
+    );
+
+    let events = parseScratchSettledFromReceipt(receipt, game);
+
+    // Re-fetch receipt if provider stripped internal logs.
+    if (events.length === 0 && txHash) {
+      try {
+        const full = await provider.getTransactionReceipt(txHash);
+        events = parseScratchSettledFromReceipt(full || receipt, game);
+        if (events.length) console.log("ledger: recovered ScratchSettled via getTransactionReceipt");
+      } catch (e) {
+        logLedgerError("getTransactionReceipt fallback failed", e);
+      }
+    }
+
+    // Query by requestId if still missing (indexed log scan near tip).
+    if (events.length === 0 && opts.requestId != null) {
+      try {
+        const fromBlock =
+          receipt.blockNumber != null
+            ? Math.max(0, Number(receipt.blockNumber) - 5)
+            : undefined;
+        events = await fetchSettledByRequest(provider, opts.requestId, {
+          gameAddress: game,
+          fromBlock,
+        });
+        if (events.length) {
+          console.log(
+            `ledger: recovered ScratchSettled via getLogs requestId=${opts.requestId}`,
+          );
+        }
+      } catch (e) {
+        logLedgerError(`getLogs fallback failed req=${opts.requestId}`, e);
+      }
+    }
+
     if (events.length === 0) {
-      console.warn("ledger: no ScratchSettled in reveal receipt");
+      logLedgerError(
+        `no ScratchSettled after reveal tx=${txHash} req=${opts.requestId ?? "?"} logs=${receipt.logs?.length ?? 0}`,
+      );
       return;
     }
 
@@ -205,14 +325,18 @@ export async function recordRevealSettlements(provider, receipt, opts = {}) {
       if (block?.timestamp != null) {
         iso = new Date(Number(block.timestamp) * 1000).toISOString();
       }
-    } catch {
-      /* use append default */
+    } catch (e) {
+      logLedgerError("getBlock for ledger timestamp failed", e);
     }
 
     for (const ev of events) {
-      await appendLedgerRow(provider, ev, { retro: false, timestampIso: iso });
+      await appendLedgerRow(provider, ev, {
+        retro: false,
+        timestampIso: iso,
+        txHash: ev.txHash || txHash,
+      });
     }
   } catch (e) {
-    console.warn(`ledger recordRevealSettlements: ${e?.message || e}`);
+    logLedgerError("recordRevealSettlements fatal", e);
   }
 }

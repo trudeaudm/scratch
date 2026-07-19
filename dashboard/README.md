@@ -65,6 +65,8 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000). Connect the treasury wallet via the injected connector (MetaMask / Rabby / etc. on chain 4663).
 
+`npm run dev` / `build` / `start` pass Node `--use-system-ca` so server routes (e.g. `/api/payouts`) can reach Alchemy/RPC on Windows machines with a corporate or custom trust store. Without that flag, Node’s built-in fetch often fails with `unable to verify the first certificate` while the browser-side Read panel still works.
+
 ## Panels
 
 ### Read (auto-refresh 30s)
@@ -101,7 +103,7 @@ Every action shows a plain-English summary **before** the wallet popup (`Review`
 
 Per-asset prize totals and win / no-win counts from on-chain `ScratchSettled` logs (always complete). USD totals and the last-20 table join `ops/entropy-operator/payout-ledger.csv` via `GET /api/payouts` when that file is present locally (`PAYOUT_LEDGER_PATH` override).
 
-**VPS note:** The entropy operator appends the ledger on the machine running the bot. Quantity view keeps working without the CSV; pull the CSV (or set `PAYOUT_LEDGER_PATH`) onto the dashboard host to sync USD / recent rows.
+**VPS note:** The entropy operator appends the ledger on the machine running the bot. Quantity view keeps working without the CSV; pull the CSV (or set `PAYOUT_LEDGER_PATH`) onto the dashboard host to sync USD / recent rows. The panel shows a red **Ledger is behind** banner when the newest CSV row lags the newest on-chain `ScratchSettled` by more than 5 minutes.
 
 ### Prize Tables
 

@@ -20,7 +20,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Contract, JsonRpcProvider, Wallet, keccak256, solidityPacked } from "ethers";
-import { recordRevealSettlements } from "./payout-ledger.js";
+import { defaultLedgerPath, logLedgerError, recordRevealSettlements } from "./payout-ledger.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_FILE = resolve(__dirname, "..", "entropy-state.json");
@@ -82,10 +82,12 @@ async function revealWithRetries(contract, requestId, preimage, maxRetries) {
 
 async function main() {
   const rpcUrl = process.env.RPC_URL;
-  const pk = process.env.PRIVATE_KEY;
+  const pk = process.env.OPERATOR_PRIVATE_KEY || process.env.PRIVATE_KEY;
   const address = process.env.SELF_ENTROPY_ADDRESS;
   if (!rpcUrl || !pk || !address) {
-    throw new Error("RPC_URL, PRIVATE_KEY, and SELF_ENTROPY_ADDRESS are required");
+    throw new Error(
+      "RPC_URL, SELF_ENTROPY_ADDRESS, and OPERATOR_PRIVATE_KEY (or PRIVATE_KEY) are required",
+    );
   }
 
   const chainFile = resolve(process.env.CHAIN_FILE || DEFAULT_FILE);
@@ -113,11 +115,13 @@ async function main() {
       ? Number(process.env.START_BLOCK)
       : Math.max(0, (await provider.getBlockNumber()) - 1);
 
+  const ledgerPath = defaultLedgerPath();
   console.log(`watching RandomnessRequested on ${address}`);
   console.log(`  operator wallet: ${wallet.address}`);
   console.log(`  chain file:      ${chainFile}`);
   console.log(`  nextRevealIndex: ${state.nextRevealIndex}`);
   console.log(`  fromBlock:       ${fromBlock}`);
+  console.log(`  payout ledger:   ${ledgerPath} (live append after each reveal)`);
 
   const processed = new Set();
   const MAX_LOG_RANGE = 9_000; // Alchemy (and many RPCs) cap eth_getLogs span
@@ -182,11 +186,11 @@ async function main() {
             processed.add(key);
             console.log(`  nextRevealIndex now ${state.nextRevealIndex}`);
 
-            // Ledger must never block or fail a reveal — errors are logged inside.
+            // Ledger must never block or fail a reveal — errors log loudly + ledger-errors.log.
             try {
-              await recordRevealSettlements(provider, receipt);
+              await recordRevealSettlements(provider, receipt, { requestId });
             } catch (ledgerErr) {
-              console.warn(`ledger: ${ledgerErr?.message || ledgerErr}`);
+              logLedgerError(`reveal hook threw req=${key}`, ledgerErr);
             }
           }
           rangeStart = rangeEnd + 1;

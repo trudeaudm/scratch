@@ -36,12 +36,15 @@ After `SelfEntropyProvider` is deployed and wired as ScratchGame's randomness:
 
 ```bash
 export RPC_URL=https://…
-export PRIVATE_KEY=0x…                 # must be OPERATOR
+export OPERATOR_PRIVATE_KEY=0x…        # preferred — must be SelfEntropyProvider.operator()
+# or: export PRIVATE_KEY=0x…           # fallback if OPERATOR_PRIVATE_KEY unset
 export SELF_ENTROPY_ADDRESS=0x…        # SelfEntropyProvider
-# optional: CHAIN_FILE, POLL_MS, REVEAL_MAX_RETRIES, START_BLOCK
+# optional: CHAIN_FILE, POLL_MS, REVEAL_MAX_RETRIES, START_BLOCK, GAME_ADDRESS, PAYOUT_LEDGER_PATH
 
 npm run watch
 ```
+
+If the wallet printed at startup does not match on-chain `operator()`, reveals revert and **no live ledger rows will be written**. Do not point `PRIVATE_KEY` at the Deploy2 deployer unless that address is also the entropy operator.
 
 The watcher:
 
@@ -64,7 +67,15 @@ export RPC_URL=https://…
 npm run backfill-ledger
 ```
 
-Backfill prices at *current* market and sets `retro=true` so those rows are distinguishable.
+Backfill prices at *current* market and sets `retro=true` so those rows are distinguishable. Backfill is **strictly additive** (skips requestIds already in the CSV; never rewrites rows).
+
+Reconcile chain vs CSV:
+
+```bash
+npm run reconcile
+```
+
+Live-append failures log to console as `LEDGER ERROR:` and append to `ledger-errors.log` (gitignored) without failing the reveal. **Restart `npm run watch` after pulling ledger code** — a watcher started before the hook will keep revealing without writing the CSV.
 
 **VPS note:** When the operator moves to a VPS, the ledger file lives with the bot. The treasury dashboard’s quantity totals come from chain `ScratchSettled` logs and keep working without the CSV; the USD view syncs whenever you pull `payout-ledger.csv` onto the machine running the dashboard (`PAYOUT_LEDGER_PATH`).
 

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 export const LEDGER_HEADER =
-  "timestamp,requestId,user,tier,rowIndex,asset,symbol,raw_amount,human_amount,price_usd,usd_value,retro";
+  "timestamp,requestId,user,tier,rowIndex,asset,symbol,raw_amount,human_amount,price_usd,usd_value,retro,tx_hash";
 
 export type LedgerRow = {
   timestamp: string;
@@ -17,6 +17,7 @@ export type LedgerRow = {
   priceUsd: string;
   usdValue: string;
   retro: boolean;
+  txHash: string;
 };
 
 export function defaultLedgerPath(): string {
@@ -69,6 +70,7 @@ export function parseLedgerCsv(text: string): LedgerRow[] {
       priceUsd: c[9],
       usdValue: c[10],
       retro: c[11]?.toLowerCase() === "true",
+      txHash: c[12] || "",
     });
   }
   return rows;
