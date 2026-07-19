@@ -3,7 +3,7 @@
  * Wire from index.html: <script type="module" src="./app.js?v=…"></script>
  * Bump ASSET_VERSION (and the index.html ?v=) on every site/ commit.
  */
-export const ASSET_VERSION = 'multi-scratch-2';
+export const ASSET_VERSION = 'multi-scratch-3';
 
 import {
   createPublicClient,
@@ -3590,7 +3590,8 @@ function formatWonSoFar(cards) {
   let scratch = 0n;
   const extras = [];
   for (const c of cards) {
-    if (!c.isWin || c.amount == null || !c.asset) continue;
+    // Only count prizes the user has physically revealed — ready/settled must stay hidden under foil.
+    if (c.phase !== PHASE.REVEALED || !c.isWin || c.amount == null || !c.asset) continue;
     if (c.asset.toLowerCase() === addr.scratch.toLowerCase()) {
       scratch += c.amount;
     } else if (c.win?.sharePrize) {
