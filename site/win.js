@@ -2,7 +2,7 @@
  * Public win share page — loads ScratchSettled for ?req=&tier= and renders the card.
  * Bump ASSET_VERSION in sync with win.html ?v=.
  */
-export const ASSET_VERSION = 'win-share-1';
+export const ASSET_VERSION = 'mint-tokens-1';
 
 import {
   createPublicClient,
@@ -25,13 +25,35 @@ const CONFIG = {
   game: '0xBeD604b5AB226134EdF154cc31881d8C93f4C9e6',
   deployBlock: 13_138_508n,
   logChunkBlocks: 9_000n,
+  /** Seeded fallbacks; overwritten by `./tokens.json` at boot. */
   tokens: {
-    '0xf5e5f4d3c34a14b2fdfd59584fe555cd5e21f196': { symbol: 'SCRATCH', decimals: 18, kind: 'scratch' },
-    '0x5fc5360d0400a0fd4f2af552add042d716f1d168': { symbol: 'USDG', decimals: 6, kind: 'usdg' },
-    '0x0bd7d308f8e1639fab988df18a8011f41eacad73': { symbol: 'WETH', decimals: 18, kind: 'eth' },
+    '0xf5e5f4d3c34a14b2fdfd59584fe555cd5e21f196': { symbol: 'SCRATCH', decimals: 18, kind: 'crypto' },
+    '0x5fc5360d0400a0fd4f2af552add042d716f1d168': { symbol: 'USDG', decimals: 6, kind: 'crypto' },
+    '0x0bd7d308f8e1639fab988df18a8011f41eacad73': { symbol: 'WETH', decimals: 18, kind: 'crypto' },
     '0x4a0e65a3eccec6dbe60ae065f2e7bb85fae35eea': { symbol: 'SPCX', decimals: 18, kind: 'stock' },
   },
 };
+
+async function loadTokenConfig() {
+  try {
+    const res = await fetch(`./tokens.json?v=${ASSET_VERSION}`);
+    if (!res.ok) return;
+    const list = await res.json();
+    if (!Array.isArray(list)) return;
+    const next = {};
+    for (const t of list) {
+      if (!t?.address || !t?.symbol) continue;
+      next[String(t.address).toLowerCase()] = {
+        symbol: String(t.symbol),
+        decimals: Number(t.decimals ?? 18),
+        kind: t.kind === 'stock' ? 'stock' : t.kind || 'crypto',
+      };
+    }
+    CONFIG.tokens = next;
+  } catch {
+    /* keep seeded map */
+  }
+}
 
 const EVENT_SCRATCH_SETTLED = parseAbiItem(
   'event ScratchSettled(address indexed user, uint256 indexed requestId, uint8 tier, uint256 rowIndex, address asset, uint256 amount)',
@@ -221,6 +243,7 @@ async function renderWin(log, tierHint) {
 }
 
 async function main() {
+  await loadTokenConfig();
   const { requestId, tierHint } = parseQuery();
   if (tierHint != null) applyTierUi(tierHint);
 

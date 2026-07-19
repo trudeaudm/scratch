@@ -1,13 +1,15 @@
 import { type Address, zeroAddress } from "viem";
-import tokensJson from "./tokens.json";
+/** Shared with the public site — see `site/tokens.json` (repo root). */
+import tokensJson from "../../../site/tokens.json";
 
 /**
  * Single source of truth for dashboard addresses and priced pairs.
  * Production Deploy2 + DeployOpsVesting (chain 4663).
  *
- * Verified tokens live in `tokens.json` (committed state — review diffs before pushing).
- * This module imports that list into a mutable `tokens` array so promote/remove can
- * hot-update fund/send dropdowns without a full reload.
+ * Verified tokens live in `../site/tokens.json` (committed state — review diffs
+ * before pushing). Same file the public site fetches at load. This module imports
+ * that list into a mutable `tokens` array so promote/remove can hot-update
+ * fund/send dropdowns without a full reload.
  *
  * On-chain holdings also auto-discover via Blockscout — discovered-only tokens
  * render with an "unverified" badge and never enter write dropdowns.

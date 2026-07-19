@@ -2,8 +2,9 @@ import { promises as fs } from "fs";
 import path from "path";
 import type { TokenConfig } from "@/config/addresses";
 
+/** Shared token metadata — `site/tokens.json` at repo root (cwd is `dashboard/`). */
 export function tokensJsonPath(): string {
-  return path.join(process.cwd(), "src", "config", "tokens.json");
+  return path.join(process.cwd(), "..", "site", "tokens.json");
 }
 
 export async function readTokensFile(): Promise<TokenConfig[]> {

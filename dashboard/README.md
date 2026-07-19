@@ -26,9 +26,9 @@ Edit `src/config/addresses.ts` after Deploy2 (+ ops VestingWallet deploy):
 - Contract addresses: `prizeVault`, `stakingVault`, `standardTicketSource`, `scratchGame`, `vestingWallet`, `treasury`
 - DexScreener pairs: `dexPairs.scratch` and `dexPairs.weth` (`chainId` slug + `pairAddress`) for USD pricing
 
-Verified tokens live in **`src/config/tokens.json`** (imported by `addresses.ts`). Same shape as before (`symbol`, `address`, `decimals`, `price`, optional `kind` / `ticker` / `name` / `preferredPair`).
+Verified tokens live in **`../site/tokens.json`** (repo-root `site/tokens.json`) — shared with the public site. `addresses.ts` imports it; the localhost promote/remove API writes the same path. Same shape as before (`symbol`, `address`, `decimals`, `price`, optional `kind` / `ticker` / `name` / `preferredPair`).
 
-**`tokens.json` is committed state — review diffs before pushing.** Prefer the Read-panel **Verify & add** / **Remove from verified** flow (writes via a localhost-only API route); do not hand-edit production-looking symbols without checking the on-chain + Blockscout facts in the modal.
+**`site/tokens.json` is committed state — review diffs before pushing.** Prefer the Read-panel **Verify & add** / **Remove from verified** flow (writes via a localhost-only API route); do not hand-edit production-looking symbols without checking the on-chain + Blockscout facts in the modal. Add a token once there and both the dashboard and the live site pick it up.
 
 Zero addresses (`0x000…000`) skip on-chain reads for that row until filled.
 
@@ -75,7 +75,7 @@ Balances for PrizeVault, StakingVault, StandardTicketSource, ops VestingWallet, 
 
 - Config ERC-20s + **Blockscout-discovered** tokens (nonzero only) + native ETH
 - Config tokens: curated symbol + pair/peg pricing
-- Discovered tokens: Blockscout symbol/decimals + **unverified** badge + **Verify & add** (modal reads on-chain metadata, Blockscout facts, DexScreener pairs; typed symbol confirm writes `tokens.json`)
+- Discovered tokens: Blockscout symbol/decimals + **unverified** badge + **Verify & add** (modal reads on-chain metadata, Blockscout facts, DexScreener pairs; typed symbol confirm writes `../site/tokens.json`)
 - Verified rows: **Remove from verified** (typed confirm)
 - **Stocks & RWAs** subsection for config tokens with `kind: "stock"` (shows underlying `ticker`) — screenshot source for “today’s vault” posts
 - USD: SCRATCH and ETH from DexScreener pairs; USDG pegged at $1; stocks via `preferredPair` or best Dex pair

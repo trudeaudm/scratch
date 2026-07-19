@@ -11,10 +11,26 @@ import type { DexPair, TokenConfig, TokenKind } from "@/config/addresses";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/** EOA-style pair address (20 bytes) or Uniswap v4 pool id (32-byte hex). */
+function isPairId(v: string): boolean {
+  if (isAddress(v)) return true;
+  return /^0x[0-9a-fA-F]{64}$/.test(v);
+}
+
+function normalizePairId(v: string): `0x${string}` {
+  if (isAddress(v)) return getAddress(v) as `0x${string}`;
+  return (`0x${v.slice(2).toLowerCase()}`) as `0x${string}`;
+}
+
 function isDexPair(v: unknown): v is DexPair {
   if (!v || typeof v !== "object") return false;
   const o = v as Record<string, unknown>;
-  return typeof o.chainId === "string" && typeof o.pairAddress === "string" && isAddress(o.pairAddress);
+  return (
+    typeof o.chainId === "string" &&
+    o.chainId.length > 0 &&
+    typeof o.pairAddress === "string" &&
+    isPairId(o.pairAddress)
+  );
 }
 
 function parseTokenBody(body: unknown): { token?: TokenConfig; error?: string } {
@@ -50,7 +66,7 @@ function parseTokenBody(body: unknown): { token?: TokenConfig; error?: string } 
     if (!isDexPair(o.preferredPair)) return { error: "preferredPair invalid" };
     token.preferredPair = {
       chainId: o.preferredPair.chainId,
-      pairAddress: getAddress(o.preferredPair.pairAddress) as `0x${string}`,
+      pairAddress: normalizePairId(o.preferredPair.pairAddress),
     };
   }
   if (token.kind === "stock" && !token.ticker) {

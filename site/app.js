@@ -3,7 +3,7 @@
  * Wire from index.html: <script type="module" src="./app.js?v=…"></script>
  * Bump ASSET_VERSION (and the index.html ?v=) on every site/ commit.
  */
-export const ASSET_VERSION = 'wins-inc-1';
+export const ASSET_VERSION = 'mint-tokens-1';
 
 import {
   createPublicClient,
@@ -35,8 +35,8 @@ export const CONFIG = {
     PRIZE_VAULT: '0x86Ade8b30D481bBd9D2897d20931b107e776Ba52',
     STANDARD_SOURCE: '0xC94894Cd3986E2D0f85616a0Dc59914f1057f003',
     SCRATCH: '0xf5E5f4D3C34A14B2fDfD59584Fe555Cd5e21F196',
-    USDG: '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168', // from dashboard tokens.json
-    SPCX: '0x4a0e65a3eccec6dbe60ae065f2e7bb85fae35eea', // from dashboard tokens.json
+    USDG: '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168', // seeded; overwritten by tokens.json
+    SPCX: '0x4a0e65a3eccec6dbe60ae065f2e7bb85fae35eea', // seeded; overwritten by tokens.json
   },
   dex: {
     chainId: 'robinhood',
@@ -278,33 +278,11 @@ const PHASE = {
 };
 
 const DEMO_STORAGE_KEY = 'scratch_demo_tickets_v1';
-const SPCX_PAIR = {
-  chainId: 'robinhood',
-  pairAddress: '0x7cf7a805185bce4766278dc4e4047fbc5d8e2bc8a33b3268270d43b86e10236b',
-};
 
-const KNOWN_TOKENS = {
-  [CONFIG.addresses.SCRATCH.toLowerCase()]: {
-    symbol: 'SCRATCH',
-    decimals: 18,
-    kind: 'scratch',
-  },
-  [CONFIG.addresses.USDG.toLowerCase()]: {
-    symbol: 'USDG',
-    decimals: 6,
-    kind: 'usdg',
-  },
-  ['0x0bd7d308f8e1639fab988df18a8011f41eacad73']: {
-    symbol: 'WETH',
-    decimals: 18,
-    kind: 'eth',
-  },
-  [CONFIG.addresses.SPCX.toLowerCase()]: {
-    symbol: 'SPCX',
-    decimals: 18,
-    kind: 'stock',
-  },
-};
+/** Populated from `./tokens.json` at boot — shared with dashboard. */
+let TOKEN_LIST = [];
+/** address(lowercase) → { symbol, decimals, kind, ticker?, preferredPair?, price?, name? } */
+let KNOWN_TOKENS = {};
 
 const robinhoodChain = defineChain({
   id: CONFIG.chainId,
@@ -332,6 +310,44 @@ const addr = {
   usdg: getAddress(CONFIG.addresses.USDG),
   spcx: getAddress(CONFIG.addresses.SPCX),
 };
+
+/* -------------------------------------------------------------------------- */
+/* Shared token config (site/tokens.json)                                      */
+/* -------------------------------------------------------------------------- */
+
+async function loadTokenConfig() {
+  const res = await fetch(`./tokens.json?v=${ASSET_VERSION}`);
+  if (!res.ok) throw new Error(`tokens.json ${res.status}`);
+  const list = await res.json();
+  if (!Array.isArray(list)) throw new Error('tokens.json must be an array');
+
+  TOKEN_LIST = list;
+  const next = {};
+  for (const t of list) {
+    if (!t?.address || !t?.symbol) continue;
+    const key = String(t.address).toLowerCase();
+    next[key] = {
+      symbol: String(t.symbol),
+      decimals: Number(t.decimals ?? 18),
+      kind: t.kind === 'stock' ? 'stock' : t.kind || 'crypto',
+      ticker: t.ticker,
+      name: t.name,
+      price: t.price,
+      preferredPair: t.preferredPair || null,
+    };
+    const sym = String(t.symbol).toUpperCase();
+    if (sym === 'SCRATCH') CONFIG.addresses.SCRATCH = getAddress(t.address);
+    if (sym === 'USDG') CONFIG.addresses.USDG = getAddress(t.address);
+    if (sym === 'SPCX') CONFIG.addresses.SPCX = getAddress(t.address);
+    if (sym === 'WETH') {
+      /* priced via preferredPair / DexScreener; no CONFIG slot required */
+    }
+  }
+  KNOWN_TOKENS = next;
+  addr.scratch = getAddress(CONFIG.addresses.SCRATCH);
+  addr.usdg = getAddress(CONFIG.addresses.USDG);
+  addr.spcx = getAddress(CONFIG.addresses.SPCX);
+}
 
 /* -------------------------------------------------------------------------- */
 /* DOM                                                                         */
@@ -862,23 +878,32 @@ async function fetchTokenUsd(tokenAddress) {
 }
 
 async function refreshPrices() {
-  const [scratchUsd, spcxPair, ethUsd] = await Promise.all([
-    fetchPairUsd(CONFIG.dex.chainId, CONFIG.dex.pairAddress),
-    fetchPairUsd(SPCX_PAIR.chainId, SPCX_PAIR.pairAddress),
-    fetchTokenUsd('0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73'),
-  ]);
-  let spcxUsd = spcxPair;
-  if (spcxUsd == null) spcxUsd = await fetchTokenUsd(CONFIG.addresses.SPCX);
-
+  const byToken = { ...state.prices.byToken };
+  const scratchUsd = await fetchPairUsd(CONFIG.dex.chainId, CONFIG.dex.pairAddress);
   state.prices.scratchUsd = scratchUsd;
-  state.prices.ethUsd = ethUsd;
-  state.prices.spcxUsd = spcxUsd;
-  state.prices.byToken = {
-    [CONFIG.addresses.SCRATCH.toLowerCase()]: scratchUsd,
-    [CONFIG.addresses.USDG.toLowerCase()]: 1,
-    [CONFIG.addresses.SPCX.toLowerCase()]: spcxUsd,
-    ['0x0bd7d308f8e1639fab988df18a8011f41eacad73']: ethUsd,
-  };
+  byToken[CONFIG.addresses.SCRATCH.toLowerCase()] = scratchUsd;
+
+  for (const t of TOKEN_LIST) {
+    const key = String(t.address).toLowerCase();
+    if (t.price === 'usdg') {
+      byToken[key] = 1;
+      continue;
+    }
+    if (t.price === 'scratch') {
+      byToken[key] = scratchUsd;
+      continue;
+    }
+    let px = null;
+    if (t.preferredPair?.chainId && t.preferredPair?.pairAddress) {
+      px = await fetchPairUsd(t.preferredPair.chainId, t.preferredPair.pairAddress);
+    }
+    if (px == null) px = await fetchTokenUsd(t.address);
+    if (px != null) byToken[key] = px;
+    if (String(t.symbol).toUpperCase() === 'SPCX') state.prices.spcxUsd = px;
+    if (t.price === 'eth') state.prices.ethUsd = px;
+  }
+
+  state.prices.byToken = byToken;
   fillUsdLive();
 }
 
@@ -936,9 +961,20 @@ async function tokenMeta(asset) {
 async function ensureTokenPrice(asset) {
   const key = asset.toLowerCase();
   if (state.prices.byToken[key] != null) return state.prices.byToken[key];
-  if (key === CONFIG.addresses.USDG.toLowerCase()) {
+  const known = KNOWN_TOKENS[key];
+  if (known?.price === 'usdg') {
     state.prices.byToken[key] = 1;
     return 1;
+  }
+  if (known?.preferredPair?.chainId && known?.preferredPair?.pairAddress) {
+    const pinned = await fetchPairUsd(
+      known.preferredPair.chainId,
+      known.preferredPair.pairAddress,
+    );
+    if (pinned != null) {
+      state.prices.byToken[key] = pinned;
+      return pinned;
+    }
   }
   const px = await fetchTokenUsd(asset);
   if (px != null) state.prices.byToken[key] = px;
@@ -1098,7 +1134,7 @@ async function renderVaultInventory() {
         bal,
         meta.decimals,
       )} ${usd}</span></div>`;
-      if (meta.kind === 'stock' || asset.toLowerCase() === CONFIG.addresses.SPCX.toLowerCase()) {
+      if (meta.kind === 'stock') {
         stocks.push(line);
       } else {
         items.push(line);
@@ -3358,7 +3394,12 @@ function wireUi() {
   }, 1000);
 }
 
-function init() {
+async function init() {
+  try {
+    await loadTokenConfig();
+  } catch (err) {
+    console.warn('tokens.json load failed — using seeded addresses', err);
+  }
   wireCanvas();
   wireUi();
   setMode('live');
@@ -3371,7 +3412,9 @@ function init() {
 }
 
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', init);
+  document.addEventListener('DOMContentLoaded', () => {
+    void init();
+  });
 } else {
-  init();
+  void init();
 }
