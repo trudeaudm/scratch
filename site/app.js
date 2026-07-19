@@ -3,7 +3,7 @@
  * Wire from index.html: <script type="module" src="./app.js?v=…"></script>
  * Bump ASSET_VERSION (and the index.html ?v=) on every site/ commit.
  */
-export const ASSET_VERSION = 'multi-scratch-4';
+export const ASSET_VERSION = 'multi-scratch-5';
 
 import {
   createPublicClient,
@@ -3681,7 +3681,7 @@ function updateMultiSummary() {
   if (!multi || !el) return;
   const cards = multi.cards;
   let revealedN = 0;
-  let printingN = 0;
+    let printingN = 0;
   let readyN = 0;
   for (const c of cards) {
     if (c.phase === PHASE.REVEALED) revealedN++;
@@ -3689,7 +3689,8 @@ function updateMultiSummary() {
     else if (
       c.phase === PHASE.PICKED ||
       c.phase === PHASE.PENDING ||
-      c.phase === 'submitting'
+      c.phase === 'submitting' ||
+      c.phase === 'submitted'
     ) {
       printingN++;
     }
@@ -3909,7 +3910,12 @@ function wireMultiCardInput(card) {
   canvas.addEventListener('pointerdown', (e) => {
     if (canvas.style.pointerEvents === 'none') return;
     if (card.phase !== PHASE.READY || card.revealed) {
-      if (card.phase === PHASE.PICKED || card.phase === PHASE.PENDING) {
+      if (
+        card.phase === PHASE.PICKED ||
+        card.phase === PHASE.PENDING ||
+        card.phase === 'submitted' ||
+        card.phase === 'submitting'
+      ) {
         shakeMultiFrame(card);
       }
       return;
@@ -3925,7 +3931,14 @@ function wireMultiCardInput(card) {
 
   const { overlay, shareBtn, saveBtn } = multiCardEls(card);
   overlay?.addEventListener('pointerdown', (e) => {
-    if (card.phase !== PHASE.PICKED && card.phase !== PHASE.PENDING) return;
+    if (
+      card.phase !== PHASE.PICKED &&
+      card.phase !== PHASE.PENDING &&
+      card.phase !== 'submitted' &&
+      card.phase !== 'submitting'
+    ) {
+      return;
+    }
     e.preventDefault();
     shakeMultiFrame(card);
   });
@@ -4012,6 +4025,7 @@ function enterMultiBoardUI(tier, tierKey, count) {
       index: i,
       phase: PHASE.PICKED,
       requestId: null,
+      txHash: null,
       requestedAt: 0n,
       asset: null,
       amount: null,
@@ -4206,13 +4220,175 @@ async function pollMultiBoard() {
 function pruneUnsentMultiCards() {
   const multi = state.session.multi;
   if (!multi) return;
-  const kept = multi.cards.filter((c) => c.requestId != null);
+  const kept = multi.cards.filter((c) => c.requestId != null || c.txHash != null);
   for (const c of multi.cards) {
-    if (c.requestId == null) c.el?.remove();
+    if (c.requestId == null && c.txHash == null) c.el?.remove();
   }
   multi.cards = kept;
   multi.count = kept.length;
   updateMultiSummary();
+}
+
+function isWalletPendingOverlapError(err) {
+  const code = err?.code;
+  const msg = `${err?.shortMessage || ''} ${err?.message || ''} ${code ?? ''}`.toLowerCase();
+  return (
+    code === -32002 ||
+    code === 'RESOURCE_UNAVAILABLE' ||
+    /already pending|request already|resource.?unavailable|transaction is being created|please wait|previous.*(request|transaction).*pending|only one|in progress|wallet.*busy|already processing/i.test(
+      msg,
+    )
+  );
+}
+
+/** Wait for a submitted scratch tx, then bind its requestId to the card (printing). */
+async function settleMultiCardFromHash(card, hash) {
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  if (!isMultiSession()) return null;
+  if (card.requestId != null) return card.requestId;
+
+  let requestId = extractRequestId(receipt);
+  if (requestId == null) {
+    try {
+      const logs = await publicClient.getLogs({
+        address: addr.game,
+        event: EVENT_SCRATCH_REQUESTED,
+        args: { user: state.account },
+        fromBlock: receipt.blockNumber,
+        toBlock: receipt.blockNumber,
+      });
+      if (logs.length) requestId = logs[logs.length - 1].args.requestId;
+    } catch {
+      /* fall through */
+    }
+  }
+  if (requestId == null) {
+    console.warn('[scratch] multi: no ScratchRequested in receipt', hash);
+    const { lbl } = multiCardEls(card);
+    if (lbl) lbl.textContent = 'Confirmation issue — check wallet activity';
+    return null;
+  }
+  await assignRequestToCard(card, requestId);
+  return requestId;
+}
+
+/**
+ * Sequential approvals with pipelining: request scratch i+1 as soon as scratch i
+ * returns a tx hash. Receipts resolve asynchronously onto the board.
+ * If the wallet errors on overlapping sends, fall back to await-receipt for the rest of the session.
+ */
+async function runSequentialMultiApprovals(tier, n) {
+  state.walletSupportsBatch = false;
+  state.session.multi.batchSupported = false;
+  applyMultiPickerSigningMode();
+  setSessionNote(
+    'One-by-one mode: this wallet can’t batch-sign, so each ticket needs its own approval.',
+  );
+  showToast(
+    `Your wallet needs ${n} separate approvals — confirm each prompt to continue.`,
+    { kind: 'warn', duration: 8000 },
+  );
+
+  // Settlements can land while later prompts are still open.
+  void pollMultiBoard();
+
+  let awaitReceiptBetween = false;
+  let notedOverlapFallback = false;
+  /** @type {Promise<unknown>[]} */
+  const receiptJobs = [];
+
+  const trackReceipt = (card, hash) => {
+    const job = settleMultiCardFromHash(card, hash).catch((e) => {
+      console.warn('[scratch] multi receipt track failed', hash, e);
+    });
+    receiptJobs.push(job);
+    return job;
+  };
+
+  const markSubmitted = (card, hash) => {
+    card.txHash = hash;
+    card.phase = 'submitted';
+    const { ticketNo, lbl } = multiCardEls(card);
+    if (ticketNo) ticketNo.textContent = 'Submitted…';
+    if (lbl) lbl.textContent = 'Waiting for confirmation';
+    lockMultiFoil(card);
+    updateMultiSummary();
+  };
+
+  const sendScratchTx = async () =>
+    state.walletClient.writeContract({
+      address: addr.game,
+      abi: ABI_GAME,
+      functionName: 'scratch',
+      args: [tier],
+      account: state.account,
+      chain: robinhoodChain,
+    });
+
+  for (let i = 0; i < n; i++) {
+    if (!isMultiSession()) return;
+    const card = state.session.multi.cards[i];
+    if (!card || card.txHash != null || card.requestId != null) continue;
+
+    showSequentialSigningBanner(i + 1, n);
+
+    try {
+      const hash = await sendScratchTx();
+      bumpOptimistic(1);
+      markSubmitted(card, hash);
+      const job = trackReceipt(card, hash);
+      if (awaitReceiptBetween) await job;
+    } catch (err) {
+      if (isUserRejection(err)) {
+        pruneUnsentMultiCards();
+        setMultiProgress('');
+        setMultiSeqBanner(null);
+        state.session.multi.submitting = false;
+        if (state.session.multi.cards.length === 0) {
+          resetSessionToIdle({
+            cancelNote: 'Cancelled — tickets unspent.',
+          });
+          showToast(WALLET_REJECT_TOAST, { kind: 'warn', duration: 9000 });
+          return;
+        }
+        setSessionNote(
+          `Stopped at ${i + 1} of ${n} — sent scratches continue; remaining cancelled.`,
+          'cancel',
+        );
+        showToast('Batch stopped — unsent tickets were not spent.', {
+          kind: 'warn',
+        });
+        await refreshWalletPanel({ skipStage: true });
+        void pollMultiBoard();
+        return;
+      }
+
+      if (!awaitReceiptBetween && isWalletPendingOverlapError(err)) {
+        if (!notedOverlapFallback) {
+          console.warn(
+            '[scratch] wallet errored on overlapping eth_sendTransaction while a tx was pending; falling back to await-receipt between prompts for this session',
+          );
+          notedOverlapFallback = true;
+        }
+        awaitReceiptBetween = true;
+        await Promise.allSettled(receiptJobs);
+        if (!isMultiSession()) return;
+        // Retry this index under await-receipt mode.
+        i -= 1;
+        continue;
+      }
+
+      throw err;
+    }
+  }
+
+  if (!isMultiSession()) return;
+  setMultiProgress('');
+  setMultiSeqBanner(null);
+  setText($('prompt'), 'tickets printing…');
+  state.session.multi.submitting = false;
+  await refreshWalletPanel({ skipStage: true });
+  void pollMultiBoard();
 }
 
 async function startMultiScratch(count) {
@@ -4286,80 +4462,8 @@ async function startMultiScratch(count) {
       }
     }
 
-    // Sequential fallback — wallet must approve each scratch.
-    state.walletSupportsBatch = false;
-    state.session.multi.batchSupported = false;
-    applyMultiPickerSigningMode();
-    setSessionNote(
-      'One-by-one mode: this wallet can’t batch-sign, so each ticket needs its own approval.',
-    );
-    showToast(
-      `Your wallet needs ${n} separate approvals — confirm each prompt to continue.`,
-      { kind: 'warn', duration: 8000 },
-    );
-    for (let i = 0; i < n; i++) {
-      if (!isMultiSession()) return;
-      showSequentialSigningBanner(i + 1, n);
-      try {
-        const hash = await state.walletClient.writeContract({
-          address: addr.game,
-          abi: ABI_GAME,
-          functionName: 'scratch',
-          args: [tier],
-          account: state.account,
-          chain: robinhoodChain,
-        });
-        const receipt = await publicClient.waitForTransactionReceipt({ hash });
-        let requestId = extractRequestId(receipt);
-        if (requestId == null) {
-          const logs = await publicClient.getLogs({
-            address: addr.game,
-            event: EVENT_SCRATCH_REQUESTED,
-            args: { user: state.account },
-            fromBlock: receipt.blockNumber,
-            toBlock: receipt.blockNumber,
-          });
-          if (logs.length) requestId = logs[logs.length - 1].args.requestId;
-        }
-        if (requestId == null) {
-          throw new Error('Could not find request id in receipt');
-        }
-        bumpOptimistic(1);
-        await assignRequestToCard(state.session.multi.cards[i], requestId);
-      } catch (err) {
-        if (isUserRejection(err)) {
-          pruneUnsentMultiCards();
-          setMultiProgress('');
-          setMultiSeqBanner(null);
-          state.session.multi.submitting = false;
-          if (state.session.multi.cards.length === 0) {
-            resetSessionToIdle({
-              cancelNote: 'Cancelled — tickets unspent.',
-            });
-            showToast(WALLET_REJECT_TOAST, { kind: 'warn', duration: 9000 });
-            return;
-          }
-          setSessionNote(
-            `Stopped at ${i + 1} of ${n} — sent scratches continue; remaining cancelled.`,
-            'cancel',
-          );
-          showToast('Batch stopped — unsent tickets were not spent.', {
-            kind: 'warn',
-          });
-          await refreshWalletPanel({ skipStage: true });
-          await pollMultiBoard();
-          return;
-        }
-        throw err;
-      }
-    }
-
-    setMultiProgress('');
-    setMultiSeqBanner(null);
-    setText($('prompt'), 'tickets printing…');
-    state.session.multi.submitting = false;
-    await refreshWalletPanel({ skipStage: true });
-    await pollMultiBoard();
+    // Sequential fallback — pipelined approvals (next prompt on hash, receipts async).
+    await runSequentialMultiApprovals(tier, n);
   } catch (err) {
     const msg = err?.shortMessage || err?.message || String(err);
     if (isUserRejection(err)) {
@@ -4372,15 +4476,15 @@ async function startMultiScratch(count) {
       }
       setSessionNote('Cancelled remaining — sent scratches continue.', 'cancel');
       state.session.multi.submitting = false;
-      await pollMultiBoard();
+      void pollMultiBoard();
       return;
     }
-    if (state.session.multi?.cards?.some((c) => c.requestId != null)) {
+    if (state.session.multi?.cards?.some((c) => c.requestId != null || c.txHash != null)) {
       pruneUnsentMultiCards();
       setMultiSeqBanner(null);
       setSessionNote(`Batch interrupted: ${msg}`, 'cancel');
       state.session.multi.submitting = false;
-      await pollMultiBoard();
+      void pollMultiBoard();
       showToast(`Multi-scratch interrupted: ${msg}`, { kind: 'error' });
       return;
     }
