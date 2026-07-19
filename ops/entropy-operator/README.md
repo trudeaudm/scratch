@@ -44,7 +44,9 @@ npm run watch
 # FROM_BLOCK=13390000 CATCH_UP_ONCE=1 npm run catch-up
 ```
 
-`OPERATOR_PRIVATE_KEY` must match on-chain `SelfEntropyProvider.operator()` — mismatch hard-exits at startup. Optional: `WSS_URL`, `FROM_BLOCK`, `CHAIN_FILE`, `POLL_MS` (default 2500), `HEAD_CHECK_MS` (default 60000), `REVEAL_MAX_RETRIES`, `GAME_ADDRESS`, `PAYOUT_LEDGER_PATH`. `PRIVATE_KEY` remains a fallback if `OPERATOR_PRIVATE_KEY` is unset.
+`OPERATOR_PRIVATE_KEY` must match on-chain `SelfEntropyProvider.operator()` — mismatch hard-exits at startup. Optional: `WSS_URL`, `FROM_BLOCK`, `CHAIN_FILE`, `POLL_MS` (default 2500), `HEAD_CHECK_MS` (default 60000), `REVEAL_MAX_RETRIES`, `GAME_ADDRESS`, `LEDGER_FILE` (alias `PAYOUT_LEDGER_PATH`). `PRIVATE_KEY` remains a fallback if `OPERATOR_PRIVATE_KEY` is unset.
+
+**Render:** see [`../DEPLOY-RENDER.md`](../DEPLOY-RENDER.md) for the background-worker migration (`CHAIN_FILE=/data/entropy-state.json`, `LEDGER_FILE=/data/payout-ledger.csv`).
 
 If the wallet does not match on-chain `operator()`, the watcher **exits immediately** (reveals would revert). Prefer `OPERATOR_PRIVATE_KEY`.
 
@@ -67,11 +69,11 @@ CSV columns: `timestamp,requestId,user,tier,rowIndex,asset,symbol,raw_amount,hum
 
 ```bash
 export RPC_URL=https://…
-# optional: GAME_ADDRESS, GAME_DEPLOY_BLOCK (default 13138508), PAYOUT_LEDGER_PATH
+# optional: GAME_ADDRESS, GAME_DEPLOY_BLOCK (default 13138508), LEDGER_FILE
 npm run backfill-ledger
 ```
 
-Backfill prices at *current* market and sets `retro=true` so those rows are distinguishable. Backfill is **strictly additive** (skips requestIds already in the CSV; never rewrites rows).
+`backfill-ledger` and `reconcile` load `.env` via dotenv (same as `watch`). Backfill prices at *current* market and sets `retro=true` so those rows are distinguishable. Backfill is **strictly additive** (skips requestIds already in the CSV; never rewrites rows).
 
 Reconcile chain vs CSV:
 

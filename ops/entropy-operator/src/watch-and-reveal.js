@@ -15,7 +15,7 @@
  *   FROM_BLOCK              manual recovery override — scan start (alias: START_BLOCK)
  *   CATCH_UP_ONCE           if "1", drain pending then exit (no perpetual poll)
  *   GAME_ADDRESS            ScratchGame (for ScratchSettled ledger parse)
- *   PAYOUT_LEDGER_PATH      CSV path (default ../payout-ledger.csv)
+ *   LEDGER_FILE             CSV path (alias: PAYOUT_LEDGER_PATH; default ../payout-ledger.csv)
  *
  * Reveal targeting always reads on-chain nextFulfillSeq (never event order).
  * getLogs / websocket only accelerate discovery + latency metrics.

@@ -24,7 +24,15 @@ rehearsal/node_modules/
 rehearsal/drill-logs/
 
 # SelfEntropy operator state (contains chain secret)
+ops/entropy-operator/.env
 ops/entropy-operator/entropy-state.json
 ops/entropy-operator/payout-ledger.csv
 ops/entropy-operator/ledger-errors.log
 ops/entropy-operator/node_modules/
+ops/entropy-operator/catch-up-drain*.log
+
+# Win-cards OG service (local cache / secrets)
+ops/win-cards/.env
+ops/win-cards/cache/
+ops/win-cards/node_modules/
+

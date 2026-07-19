@@ -2,9 +2,14 @@
 /**
  * Compare on-chain ScratchSettled (since GAME_DEPLOY_BLOCK) to payout-ledger.csv.
  *
- * Env: RPC_URL, GAME_ADDRESS, GAME_DEPLOY_BLOCK, PAYOUT_LEDGER_PATH, LOG_CHUNK
+ * Env: RPC_URL, GAME_ADDRESS, GAME_DEPLOY_BLOCK, LEDGER_FILE (or PAYOUT_LEDGER_PATH), LOG_CHUNK
+ *
+ * Loads ops/entropy-operator/.env via dotenv (override: false — process.env wins).
  */
 import { Contract, JsonRpcProvider, formatUnits } from "ethers";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import dotenv from "dotenv";
 import {
   SCRATCH_SETTLED_ABI,
   defaultGameAddress,
@@ -14,6 +19,9 @@ import {
 } from "./payout-ledger.js";
 import fs from "node:fs";
 import { resolveToken, ZERO } from "./token-map.js";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+dotenv.config({ path: resolve(__dirname, "..", ".env"), override: false });
 
 const DEFAULT_DEPLOY_BLOCK = 13_138_508;
 

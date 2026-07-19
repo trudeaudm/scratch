@@ -3,7 +3,7 @@
  * Wire from index.html: <script type="module" src="./app.js?v=…"></script>
  * Bump ASSET_VERSION (and the index.html ?v=) on every site/ commit.
  */
-export const ASSET_VERSION = 'multi-scratch-5';
+export const ASSET_VERSION = 'share-og-1';
 
 import {
   createPublicClient,
@@ -1771,10 +1771,9 @@ function renderPostRevealAction() {
 
 function buildWinShareText(win) {
   const prize = win.sharePrize || '+?';
-  const tier = win.tierKey === 'prem' ? 'prem' : 'std';
   const req = encodeURIComponent(win.requestId || '');
-  const page = `https://scratch4663.xyz/win.html?req=${req}&tier=${tier}`;
-  // Exactly two lines: voice line + share page (receipt lives inside win.html).
+  const page = `https://share.scratch4663.xyz/win/${req}`;
+  // Exactly two lines: voice line + OG share URL (humans land on win.html via redirect).
   return `scratched a free ticket on @scratch4663 → ${prize} 🎟️\n${page}`;
 }
 

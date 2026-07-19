@@ -8,10 +8,15 @@
  *   RPC_URL              required
  *   GAME_ADDRESS         ScratchGame (default production)
  *   GAME_DEPLOY_BLOCK    start block (default 13138508)
- *   PAYOUT_LEDGER_PATH   CSV path
+ *   LEDGER_FILE          CSV path (alias: PAYOUT_LEDGER_PATH)
  *   LOG_CHUNK            eth_getLogs span (default 9000)
+ *
+ * Loads ops/entropy-operator/.env via dotenv (override: false — process.env wins).
  */
 import { Contract, JsonRpcProvider } from "ethers";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import dotenv from "dotenv";
 import {
   SCRATCH_SETTLED_ABI,
   appendLedgerRow,
@@ -19,6 +24,9 @@ import {
   defaultLedgerPath,
   loadLedgerRequestIds,
 } from "./payout-ledger.js";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+dotenv.config({ path: resolve(__dirname, "..", ".env"), override: false });
 
 const DEFAULT_DEPLOY_BLOCK = 13_138_508;
 

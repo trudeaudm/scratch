@@ -1,5 +1,8 @@
 # Static site for scratch4663.xyz — publish directory is `site/`.
 #
+# Ops services (entropy operator + win-cards) are NOT listed here — adding them
+# would fight this Blueprint. Create them from the dashboard per ops/DEPLOY-RENDER.md.
+#
 # Important: do NOT add a catch-all SPA rewrite (/* → /index.html).
 # /win.html?req=N&tier=T must be served as the real win.html file so
 # browsers and X/OG crawlers get the branded share page (query strings preserved).

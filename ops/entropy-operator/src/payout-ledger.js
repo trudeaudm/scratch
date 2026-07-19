@@ -21,6 +21,7 @@ const SETTLED_TOPIC = id(
 
 export function defaultLedgerPath() {
   return (
+    process.env.LEDGER_FILE ||
     process.env.PAYOUT_LEDGER_PATH ||
     path.join(__dirname, "..", "payout-ledger.csv")
   );
