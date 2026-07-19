@@ -3,7 +3,7 @@
  * Wire from index.html: <script type="module" src="./app.js?v=…"></script>
  * Bump ASSET_VERSION (and the index.html ?v=) on every site/ commit.
  */
-export const ASSET_VERSION = 'mark-size-5';
+export const ASSET_VERSION = 'mark-size-6';
 
 import {
   createPublicClient,
@@ -533,6 +533,8 @@ const state = {
     inFlight: false,
   },
   drawing: false,
+  /** @type {{ markH: number, cx: number, cy: number }|null} */
+  foilMarkLayout: null,
   pollTimer: null,
   refreshTimer: null,
   reassureTimer: null,
@@ -2004,27 +2006,16 @@ function paintFoil() {
     ctx.strokeRect(8, 8, r.width - 16, r.height - 16);
     ctx.setLineDash([]);
   }
-  // Printing: mark is an SVG in the overlay flex column (can't hit the caption).
-  // Ready: draw on canvas, sized to the band above "SCRATCH TO REVEAL".
+  // Printing: SVG mark in the overlay (source of truth for size/position).
+  // Ready: paint that same layout onto the canvas so the mark does not jump.
   const printing = Boolean($('foilPrintOverlay') && !$('foilPrintOverlay').hidden);
   if (!printing) {
-    const captionBand = 44;
-    const areaTop = 14;
-    const areaBottom = r.height - captionBand;
-    const avail = Math.max(40, areaBottom - areaTop);
-    // ~38% of foil, but never taller than the free band above the caption.
-    const markH = Math.min(r.height * 0.38, avail * 0.85);
-    const markScale = markH / 140;
-    const belowCenter = ((134 - 70) / 140) * markH;
-    const markCy = Math.min(
-      areaTop + avail * 0.48,
-      areaBottom - belowCenter - 8,
-    );
+    const layout = state.foilMarkLayout || computeFoilMarkLayout(r.width, r.height);
     drawScratchMark(
       ctx,
-      r.width / 2,
-      markCy,
-      markScale,
+      layout.cx,
+      layout.cy,
+      layout.markH / 140,
       prem ? '#C9A227' : '#5C3F12',
     );
     ctx.fillStyle = prem ? 'rgba(201,162,39,.8)' : 'rgba(92,63,18,.9)';
@@ -2053,6 +2044,47 @@ function resetScratch() {
   paintFoil();
 }
 
+/**
+ * Mirror `.foil-print-overlay` / `.foil-mark-slot` CSS when we can't measure
+ * (e.g. demo path that never shows the printing overlay).
+ */
+function computeFoilMarkLayout(foilW, foilH) {
+  const padTop = 18;
+  const padBottom = 16;
+  const captionBlock = 19; // margin-top 6 + ~13px line
+  const slotPadTop = 10;
+  const slotPadBottom = 2;
+  const slotH = foilH - padTop - padBottom - captionBlock;
+  const contentH = Math.max(1, slotH - slotPadTop - slotPadBottom);
+  const markH = Math.min(96, contentH * 0.86);
+  return {
+    markH,
+    cx: foilW / 2,
+    cy: padTop + slotPadTop + contentH / 2,
+  };
+}
+
+/** Read the live printing SVG mark box (overlay must be visible). */
+function captureFoilMarkLayout() {
+  const frame = $('scratchFrame');
+  const svg = document.querySelector('#foilPrintOverlay .foil-mark-slot svg');
+  const ov = $('foilPrintOverlay');
+  if (!frame || !svg || !ov || ov.hidden) return null;
+  const fr = frame.getBoundingClientRect();
+  const sr = svg.getBoundingClientRect();
+  if (sr.width < 1 || sr.height < 1) return null;
+  return {
+    markH: sr.height,
+    cx: sr.left + sr.width / 2 - fr.left,
+    cy: sr.top + sr.height / 2 - fr.top,
+  };
+}
+
+function rememberFoilMarkLayout() {
+  const layout = captureFoilMarkLayout();
+  if (layout) state.foilMarkLayout = layout;
+}
+
 function showPrintingOverlay() {
   const ov = $('foilPrintOverlay');
   if (ov) {
@@ -2065,6 +2097,10 @@ function showPrintingOverlay() {
     canvas.style.cursor = 'not-allowed';
   }
   $('scratchCardEl')?.classList.remove('ready-pop');
+  // Measure after layout so ready-state canvas can match exactly.
+  requestAnimationFrame(() => {
+    rememberFoilMarkLayout();
+  });
 }
 
 function hidePrintingOverlay() {
@@ -2092,6 +2128,8 @@ function lockFoilWaiting() {
 
 function unlockFoilForScratch() {
   if (!canvas) return;
+  // Capture while overlay is still visible, then paint canvas to match.
+  rememberFoilMarkLayout();
   hidePrintingOverlay();
   canvas.style.pointerEvents = 'auto';
   canvas.style.opacity = '1';
