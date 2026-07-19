@@ -3,7 +3,7 @@
  * Wire from index.html: <script type="module" src="./app.js?v=…"></script>
  * Bump ASSET_VERSION (and the index.html ?v=) on every site/ commit.
  */
-export const ASSET_VERSION = 'mark-size-6';
+export const ASSET_VERSION = 'multi-scratch-1';
 
 import {
   createPublicClient,
@@ -18,6 +18,7 @@ import {
   zeroAddress,
   defineChain,
   decodeEventLog,
+  encodeFunctionData,
 } from 'https://esm.sh/viem@2.21.54';
 
 /** Live chain + contract config (Robinhood Chain mainnet). */
@@ -275,7 +276,11 @@ const PHASE = {
   PENDING: 'pending',
   READY: 'ready',
   REVEALED: 'revealed',
+  /** Multi-card board — per-card phases live on state.session.multi.cards */
+  MULTI: 'multi',
 };
+
+const MULTI_MAX_BATCH = 10;
 
 const DEMO_STORAGE_KEY = 'scratch_demo_tickets_v1';
 
@@ -553,6 +558,35 @@ const state = {
     /** Ticket-wei balance snapshot at pick — used to know when chain reflects the spend. */
     ticketsAtPick: null,
     requestedAt: 0n,
+    /**
+     * Multi-scratch board (null when single / idle).
+     * @type {{
+     *   count: number,
+     *   cards: Array<{
+     *     index: number,
+     *     phase: string,
+     *     requestId: bigint|null,
+     *     requestedAt: bigint,
+     *     asset: string|null,
+     *     amount: bigint|null,
+     *     isWin: boolean,
+     *     win: object|null,
+     *     revealed: boolean,
+     *     el: HTMLElement|null,
+     *     canvas: HTMLCanvasElement|null,
+     *     ctx: CanvasRenderingContext2D|null,
+     *     drawing: boolean,
+     *     last: {x:number,y:number}|null,
+     *     strokeDist: number,
+     *     moveCount: number,
+     *     foilLayout: object|null,
+     *     disableTimer: any,
+     *   }>,
+     *   batchSupported: boolean|null,
+     *   submitting: boolean,
+     * }|null}
+     */
+    multi: null,
   },
 };
 
@@ -567,7 +601,16 @@ function sessionPhase() {
 /** Active scratch in flight (not idle, not post-reveal). */
 function sessionInFlight() {
   const p = sessionPhase();
-  return p === PHASE.PICKED || p === PHASE.PENDING || p === PHASE.READY;
+  return (
+    p === PHASE.PICKED ||
+    p === PHASE.PENDING ||
+    p === PHASE.READY ||
+    p === PHASE.MULTI
+  );
+}
+
+function isMultiSession() {
+  return sessionPhase() === PHASE.MULTI && state.session.multi != null;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -580,6 +623,10 @@ const ACTION = {
   PICK_CARD: 'PICK_CARD',
   SCRATCH_ANOTHER: 'SCRATCH_ANOTHER',
   DISCONNECT: 'DISCONNECT',
+  MULTI_OPEN: 'MULTI_OPEN',
+  MULTI_CLOSE_PICKER: 'MULTI_CLOSE_PICKER',
+  MULTI_START: 'MULTI_START',
+  MULTI_DONE: 'MULTI_DONE',
 };
 
 /**
@@ -602,6 +649,18 @@ async function sessionDispatch(action, payload = {}) {
       break;
     case ACTION.DISCONNECT:
       dispatchDisconnect();
+      break;
+    case ACTION.MULTI_OPEN:
+      await dispatchMultiOpen();
+      break;
+    case ACTION.MULTI_CLOSE_PICKER:
+      dispatchMultiClosePicker();
+      break;
+    case ACTION.MULTI_START:
+      await dispatchMultiStart(payload.count);
+      break;
+    case ACTION.MULTI_DONE:
+      dispatchMultiDone();
       break;
     default:
       console.warn('sessionDispatch: unknown action', action);
@@ -646,12 +705,13 @@ async function dispatchPickCard() {
 
 function dispatchScratchAnother() {
   if (state.mode !== 'live') return;
-  if (sessionPhase() !== PHASE.REVEALED) return;
+  if (sessionPhase() !== PHASE.REVEALED && sessionPhase() !== PHASE.MULTI) return;
   resetSessionToIdle();
 }
 
 function dispatchDisconnect() {
   clearSessionTimers();
+  teardownMultiBoard();
   state.account = null;
   state.walletClient = null;
   state.userStaked = 0n;
@@ -669,6 +729,42 @@ function dispatchDisconnect() {
   updateStakeFormBalances();
   resetSessionToIdle({ keepNote: true });
   setSessionNote('Wallet disconnected.');
+}
+
+async function dispatchMultiOpen() {
+  if (state.mode !== 'live') return;
+  if (sessionPhase() !== PHASE.IDLE) return;
+  if (activeTierTickets() < 2) return;
+  const picker = $('multiPicker');
+  picker?.classList.add('show');
+  syncMultiPickerCap();
+  const note = $('multiFallbackNote');
+  note?.classList.remove('show');
+  if (state.account) {
+    const batchOk = await detectEip5792SendCalls();
+    if (!batchOk) note?.classList.add('show');
+  }
+}
+
+function dispatchMultiClosePicker() {
+  $('multiPicker')?.classList.remove('show');
+  $('multiFallbackNote')?.classList.remove('show');
+}
+
+async function dispatchMultiStart(count) {
+  if (state.mode !== 'live') return;
+  if (sessionPhase() !== PHASE.IDLE) return;
+  const n = clampMultiCount(count);
+  if (n < 2) return;
+  dispatchMultiClosePicker();
+  await startMultiScratch(n);
+}
+
+function dispatchMultiDone() {
+  if (!isMultiSession()) return;
+  const cards = state.session.multi?.cards || [];
+  if (!cards.every((c) => c.phase === PHASE.REVEALED || c.phase === 'rescued')) return;
+  resetSessionToIdle();
 }
 
 /** Sync every scratch control from the single session phase + ticket counts. */
@@ -723,6 +819,8 @@ function applySessionView() {
   if (phase === PHASE.REVEALED) {
     renderPostRevealAction();
   }
+
+  updateMultiEntryVisibility();
 }
 
 function clearSessionTimers() {
@@ -824,7 +922,7 @@ function activeTierTickets() {
   return spendableOnTier(tierKey);
 }
 
-/** Clear optimistic spend only once chain balance is below the pick-time snapshot. */
+/** Clear optimistic spend as chain balance catches up (supports multi delta > 1). */
 function reconcileOptimisticSpend() {
   if (state.session.optimisticDelta <= 0) return;
   if (state.session.ticketsAtPick == null) {
@@ -832,7 +930,14 @@ function reconcileOptimisticSpend() {
     return;
   }
   const key = state.session.tierKey === 'prem' ? 'prem' : 'std';
-  if (state.liveTickets[key] < state.session.ticketsAtPick) {
+  const live = state.liveTickets[key];
+  if (live >= state.session.ticketsAtPick) return;
+  const dropped = Number((state.session.ticketsAtPick - live) / CONFIG.ticketCost);
+  if (dropped <= 0) return;
+  const apply = Math.min(dropped, state.session.optimisticDelta);
+  state.session.optimisticDelta -= apply;
+  state.session.ticketsAtPick = live;
+  if (state.session.optimisticDelta <= 0) {
     state.session.optimisticDelta = 0;
     state.session.ticketsAtPick = null;
   }
@@ -1674,9 +1779,10 @@ function buildWinShareText(win) {
   return `scratched a free ticket on @scratch4663 → ${prize} 🎟️\n${page}`;
 }
 
-function shareWinOnX() {
-  const win = state.lastWin;
-  if (!win || !state.currentWin) return;
+function shareWinOnX(winOverride) {
+  const win = winOverride || state.lastWin;
+  if (!win) return;
+  if (!winOverride && !state.currentWin) return;
   const text = buildWinShareText(win);
   const url = `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`;
   window.open(url, '_blank', 'noopener,noreferrer');
@@ -1841,9 +1947,10 @@ function renderWinCardCanvas(win) {
   return canvas;
 }
 
-async function saveWinCardPng() {
-  const win = state.lastWin;
-  if (!win || !state.currentWin) return;
+async function saveWinCardPng(winOverride) {
+  const win = winOverride || state.lastWin;
+  if (!win) return;
+  if (!winOverride && !state.currentWin) return;
   try {
     if (document.fonts?.ready) await document.fonts.ready;
   } catch {
@@ -2838,11 +2945,13 @@ function watchScratchTransfers() {
 
 function resetSessionToIdle(opts = {}) {
   clearSessionTimers();
+  teardownMultiBoard();
   state.session.phase = PHASE.IDLE;
   state.session.requestId = null;
   state.session.optimisticDelta = 0;
   state.session.ticketsAtPick = null;
   state.session.requestedAt = 0n;
+  state.session.multi = null;
   state.pendingRequestId = null;
   state.lastWin = null;
   state.currentWin = false;
@@ -3241,6 +3350,960 @@ function isUserRejection(err) {
   );
 }
 
+/* -------------------------------------------------------------------------- */
+/* Multi-scratch — EIP-5792 batch when supported, sequential fallback          */
+/* -------------------------------------------------------------------------- */
+
+function clampMultiCount(raw) {
+  const spendable = activeTierTickets();
+  const cap = Math.min(MULTI_MAX_BATCH, Math.max(0, spendable));
+  const n = Math.floor(Number(raw));
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(cap, n));
+}
+
+function multiBatchCap() {
+  return Math.min(MULTI_MAX_BATCH, Math.max(0, activeTierTickets()));
+}
+
+function syncMultiPickerCap() {
+  const cap = multiBatchCap();
+  const input = $('multiCountInput');
+  if (input) {
+    input.max = String(Math.max(2, cap));
+    input.min = '2';
+    let v = clampMultiCount(input.value || 3);
+    if (v < 2 && cap >= 2) v = Math.min(3, cap);
+    if (v >= 2) input.value = String(v);
+  }
+  $('multiChips')?.querySelectorAll('button[data-n]').forEach((btn) => {
+    const n = Number(btn.dataset.n);
+    btn.disabled = n > cap || cap < 2;
+    btn.classList.toggle('active', input && Number(input.value) === n && n <= cap);
+  });
+}
+
+function updateMultiEntryVisibility() {
+  const entry = $('multiEntry');
+  const walletMulti = $('scratchBtnMulti');
+  const live = state.mode === 'live';
+  const idle = sessionPhase() === PHASE.IDLE;
+  const show = live && idle && !!state.account && activeTierTickets() >= 2;
+  entry?.classList.toggle('show', show);
+  if (walletMulti) {
+    walletMulti.hidden = !show;
+    walletMulti.disabled = !show;
+  }
+  if (!show) {
+    $('multiPicker')?.classList.remove('show');
+    $('multiFallbackNote')?.classList.remove('show');
+  } else {
+    syncMultiPickerCap();
+  }
+}
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function hexChainId() {
+  return '0x' + CONFIG.chainId.toString(16);
+}
+
+/** Feature-detect EIP-5792 atomic batch via wallet_getCapabilities. */
+async function detectEip5792SendCalls() {
+  const provider = getActiveProvider();
+  if (!provider?.request || !state.account) return false;
+  try {
+    const caps = await provider.request({
+      method: 'wallet_getCapabilities',
+      params: [state.account],
+    });
+    if (!caps || typeof caps !== 'object') return false;
+    const chainCaps =
+      caps[hexChainId()] ||
+      caps[String(CONFIG.chainId)] ||
+      caps[CONFIG.chainId] ||
+      null;
+    if (!chainCaps || typeof chainCaps !== 'object') return false;
+    const atomic = chainCaps.atomic ?? chainCaps.atomicBatch;
+    if (atomic == null) return false;
+    if (atomic === true) return true;
+    if (typeof atomic === 'object') {
+      const status = String(atomic.status || atomic.supported || '').toLowerCase();
+      if (status === 'unsupported' || status === 'false') return false;
+      if (
+        status === 'supported' ||
+        status === 'ready' ||
+        status === 'true' ||
+        atomic.supported === true
+      ) {
+        return true;
+      }
+      // Present but unknown shape — try sendCalls.
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function encodeScratchCall(tier) {
+  return {
+    to: addr.game,
+    data: encodeFunctionData({
+      abi: ABI_GAME,
+      functionName: 'scratch',
+      args: [tier],
+    }),
+    value: '0x0',
+  };
+}
+
+function extractRequestIdsFromLogs(logs) {
+  const ids = [];
+  for (const log of logs || []) {
+    try {
+      const decoded = decodeEventLog({
+        abi: [EVENT_SCRATCH_REQUESTED],
+        data: log.data,
+        topics: log.topics,
+      });
+      if (decoded.eventName === 'ScratchRequested' && decoded.args?.requestId != null) {
+        ids.push(decoded.args.requestId);
+      }
+    } catch {
+      /* not our event */
+    }
+  }
+  return ids;
+}
+
+function extractRequestIdsFromReceipts(receipts) {
+  const ids = [];
+  for (const receipt of receipts || []) {
+    ids.push(...extractRequestIdsFromLogs(receipt.logs || []));
+  }
+  return ids;
+}
+
+async function sendCallsBatch(tier, count) {
+  const provider = getActiveProvider();
+  if (!provider?.request) throw new Error('No wallet provider');
+  const call = encodeScratchCall(tier);
+  const calls = Array.from({ length: count }, () => ({ ...call }));
+  const params = {
+    version: '2.0.0',
+    from: state.account,
+    chainId: hexChainId(),
+    atomicRequired: true,
+    calls,
+  };
+  const id = await provider.request({
+    method: 'wallet_sendCalls',
+    params: [params],
+  });
+  return typeof id === 'string' ? id : id?.id || String(id);
+}
+
+async function waitCallsStatus(callsId) {
+  const provider = getActiveProvider();
+  const deadline = Date.now() + 180_000;
+  while (Date.now() < deadline) {
+    const status = await provider.request({
+      method: 'wallet_getCallsStatus',
+      params: [callsId],
+    });
+    const code = Number(status?.status);
+    if (code === 200) return status;
+    if (code >= 400) {
+      throw new Error(status?.error?.message || `Batch failed (status ${code})`);
+    }
+    await sleep(1200);
+  }
+  throw new Error('Timed out waiting for batch confirmation');
+}
+
+async function collectRequestIdsAfterBatch(callsStatus, count) {
+  let ids = extractRequestIdsFromReceipts(callsStatus?.receipts);
+  if (ids.length >= count) return ids.slice(0, count);
+
+  // Fallback: recent ScratchRequested logs for this user.
+  const tip = await publicClient.getBlockNumber();
+  const fromBlock = tip > 5000n ? tip - 5000n : 0n;
+  const logs = await publicClient.getLogs({
+    address: addr.game,
+    event: EVENT_SCRATCH_REQUESTED,
+    args: { user: state.account },
+    fromBlock,
+    toBlock: tip,
+  });
+  const sorted = [...logs].sort((a, b) => {
+    const ba = a.blockNumber - b.blockNumber;
+    if (ba !== 0n) return ba < 0n ? -1 : 1;
+    return (a.logIndex ?? 0) - (b.logIndex ?? 0);
+  });
+  const recent = sorted.slice(-count);
+  ids = recent.map((l) => l.args.requestId).filter((x) => x != null);
+  return ids;
+}
+
+function teardownMultiBoard() {
+  clearInterval(state.pollTimer);
+  state.pollTimer = null;
+  try {
+    state.eventUnwatch?.();
+  } catch {
+    /* ignore */
+  }
+  state.eventUnwatch = null;
+
+  const grid = $('multiGrid');
+  if (grid) grid.innerHTML = '';
+  $('multiBoard')?.classList.remove('show');
+  $('multiDoneRow')?.classList.remove('show');
+  $('multiProgress')?.classList.remove('show');
+  setText($('multiProgress'), '');
+  setText($('multiSummary'), '');
+  $('stage')?.classList.remove('multi-active');
+  if (state.session.multi?.cards) {
+    for (const card of state.session.multi.cards) {
+      if (card.disableTimer) clearTimeout(card.disableTimer);
+    }
+  }
+}
+
+function setMultiProgress(msg) {
+  const el = $('multiProgress');
+  if (!el) return;
+  if (msg) {
+    el.textContent = msg;
+    el.classList.add('show');
+  } else {
+    el.textContent = '';
+    el.classList.remove('show');
+  }
+}
+
+function formatWonSoFar(cards) {
+  let scratch = 0n;
+  const extras = [];
+  for (const c of cards) {
+    if (!c.isWin || c.amount == null || !c.asset) continue;
+    if (c.asset.toLowerCase() === addr.scratch.toLowerCase()) {
+      scratch += c.amount;
+    } else if (c.win?.sharePrize) {
+      extras.push(c.win.sharePrize);
+    }
+  }
+  const parts = [];
+  if (scratch > 0n) parts.push(`+${formatScratchWhole(scratch)} SCRATCH`);
+  for (const e of extras.slice(0, 3)) parts.push(e);
+  if (!parts.length) return '—';
+  return parts.join(', ');
+}
+
+function updateMultiSummary() {
+  const multi = state.session.multi;
+  const el = $('multiSummary');
+  if (!multi || !el) return;
+  const cards = multi.cards;
+  let revealedN = 0;
+  let printingN = 0;
+  let readyN = 0;
+  for (const c of cards) {
+    if (c.phase === PHASE.REVEALED) revealedN++;
+    else if (c.phase === PHASE.READY) readyN++;
+    else if (
+      c.phase === PHASE.PICKED ||
+      c.phase === PHASE.PENDING ||
+      c.phase === 'submitting'
+    ) {
+      printingN++;
+    }
+  }
+  const won = formatWonSoFar(cards);
+  const bits = [];
+  bits.push(`<b>${revealedN}</b> revealed`);
+  if (readyN) bits.push(`<b>${readyN}</b> ready`);
+  if (printingN) bits.push(`<b>${printingN}</b> printing`);
+  bits.push(`won so far: <span class="won">${won}</span>`);
+  el.innerHTML = bits.join(' · ');
+
+  const allDone = cards.length > 0 && cards.every((c) => c.phase === PHASE.REVEALED);
+  $('multiDoneRow')?.classList.toggle('show', allDone);
+  if (allDone) {
+    const left = spendableOnTier(state.session.tierKey || state.tier);
+    const btn = $('multiDoneBtn');
+    if (btn) {
+      btn.textContent =
+        left >= 1 ? `Scratch another (${left} left)` : 'Done';
+    }
+    setText($('prompt'), 'Batch complete');
+  }
+}
+
+function buildMultiCardElement(index, tierKey) {
+  const card = document.createElement('div');
+  card.className = 'multi-card' + (tierKey === 'prem' ? ' premium' : '');
+  card.dataset.multiIndex = String(index);
+  card.innerHTML = `
+    <div class="sc-head"><span class="multi-ticket-no">Confirm in wallet…</span>${
+      tierKey === 'prem' ? '<span class="prem">★ PREMIUM</span>' : ''
+    }</div>
+    <div class="scratch-frame">
+      <div class="prize">
+        <div class="amt">…</div>
+        <div class="lbl">Hang tight</div>
+      </div>
+      <canvas class="multi-canvas" aria-label="Scratch area"></canvas>
+      <div class="foil-print-overlay" hidden aria-hidden="true">
+        <div class="foil-sheen" aria-hidden="true"></div>
+        <svg class="foil-stamp" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+          <rect x="1" y="1" width="98" height="98" rx="1.5" ry="1.5"></rect>
+        </svg>
+        <div class="foil-mark-slot" aria-hidden="true">
+          <svg viewBox="0 0 100 140"><use href="#scratch-mark"/></svg>
+        </div>
+        <div class="foil-print-caption">ticket printing<span class="ellipsis">...</span></div>
+      </div>
+    </div>
+    <div class="multi-card-actions">
+      <button type="button" class="btn share-x">Share on 𝕏</button>
+      <button type="button" class="btn save-win">Save win card</button>
+    </div>`;
+  return card;
+}
+
+function multiCardEls(card) {
+  const el = card.el;
+  return {
+    ticketNo: el?.querySelector('.multi-ticket-no'),
+    amt: el?.querySelector('.prize .amt'),
+    lbl: el?.querySelector('.prize .lbl'),
+    frame: el?.querySelector('.scratch-frame'),
+    overlay: el?.querySelector('.foil-print-overlay'),
+    shareBtn: el?.querySelector('.multi-card-actions .share-x'),
+    saveBtn: el?.querySelector('.multi-card-actions .save-win'),
+  };
+}
+
+function paintMultiFoil(card) {
+  const canvas = card.canvas;
+  const ctx = card.ctx;
+  if (!canvas || !ctx) return;
+  const dpr = window.devicePixelRatio || 1;
+  const r = canvas.getBoundingClientRect();
+  if (r.width === 0) {
+    setTimeout(() => paintMultiFoil(card), 200);
+    return;
+  }
+  canvas.width = r.width * dpr;
+  canvas.height = r.height * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.globalCompositeOperation = 'source-over';
+  const prem = state.session.tierKey === 'prem';
+  const g = ctx.createLinearGradient(0, 0, r.width, r.height);
+  if (prem) {
+    g.addColorStop(0, '#1A222B');
+    g.addColorStop(1, '#10161C');
+  } else {
+    g.addColorStop(0, '#B07F35');
+    g.addColorStop(1, '#8F6222');
+  }
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, r.width, r.height);
+  const { overlay } = multiCardEls(card);
+  const printing = overlay && !overlay.hidden;
+  if (!printing) {
+    ctx.strokeStyle = prem ? 'rgba(201,162,39,.55)' : 'rgba(255,244,214,.55)';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([7, 6]);
+    ctx.strokeRect(8, 8, r.width - 16, r.height - 16);
+    ctx.setLineDash([]);
+    const layout = card.foilLayout || computeFoilMarkLayout(r.width, r.height);
+    drawScratchMark(
+      ctx,
+      layout.cx,
+      layout.cy,
+      layout.markH / 140,
+      prem ? '#C9A227' : '#5C3F12',
+    );
+    ctx.fillStyle = prem ? 'rgba(201,162,39,.8)' : 'rgba(92,63,18,.9)';
+    ctx.font = "700 10px 'Inter'";
+    ctx.textAlign = 'center';
+    ctx.fillText('SCRATCH TO REVEAL', r.width / 2, r.height - 14);
+  }
+  ctx.globalCompositeOperation = 'destination-out';
+  ctx.lineWidth = 28;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  card.revealed = false;
+  card.strokeDist = 0;
+  card.moveCount = 0;
+}
+
+function captureMultiFoilLayout(card) {
+  const { overlay, frame } = multiCardEls(card);
+  const svg = overlay?.querySelector('.foil-mark-slot svg');
+  if (!frame || !svg || !overlay || overlay.hidden) return null;
+  const fr = frame.getBoundingClientRect();
+  const sr = svg.getBoundingClientRect();
+  if (sr.width < 1 || sr.height < 1) return null;
+  return {
+    markH: sr.height,
+    cx: sr.left + sr.width / 2 - fr.left,
+    cy: sr.top + sr.height / 2 - fr.top,
+  };
+}
+
+function lockMultiFoil(card) {
+  const { overlay } = multiCardEls(card);
+  if (overlay) {
+    overlay.hidden = false;
+    overlay.setAttribute('aria-hidden', 'false');
+  }
+  if (card.canvas) {
+    card.canvas.style.pointerEvents = 'none';
+    card.canvas.classList.add('is-printing');
+    card.canvas.style.cursor = 'not-allowed';
+  }
+  card.el?.classList.remove('ready-pop');
+  requestAnimationFrame(() => {
+    const layout = captureMultiFoilLayout(card);
+    if (layout) card.foilLayout = layout;
+    paintMultiFoil(card);
+  });
+}
+
+function unlockMultiFoil(card) {
+  const layout = captureMultiFoilLayout(card);
+  if (layout) card.foilLayout = layout;
+  const { overlay } = multiCardEls(card);
+  if (overlay) {
+    overlay.hidden = true;
+    overlay.setAttribute('aria-hidden', 'true');
+  }
+  if (card.canvas) {
+    card.canvas.style.pointerEvents = 'auto';
+    card.canvas.style.opacity = '1';
+    card.canvas.classList.remove('is-printing');
+    card.canvas.style.cursor = 'grab';
+  }
+  paintMultiFoil(card);
+  card.el?.classList.remove('ready-pop');
+  void card.el?.offsetWidth;
+  card.el?.classList.add('ready-pop');
+}
+
+function shakeMultiFrame(card) {
+  const { frame } = multiCardEls(card);
+  if (!frame) return;
+  frame.classList.remove('foil-shake');
+  void frame.offsetWidth;
+  frame.classList.add('foil-shake');
+  frame.addEventListener(
+    'animationend',
+    () => frame.classList.remove('foil-shake'),
+    { once: true },
+  );
+}
+
+function wireMultiCardInput(card) {
+  const canvas = card.canvas;
+  if (!canvas) return;
+  const posOf = (e) => {
+    const r = canvas.getBoundingClientRect();
+    return { x: e.clientX - r.left, y: e.clientY - r.top };
+  };
+  const move = (e) => {
+    if (!card.drawing || !card.ctx || card.revealed) return;
+    const p = posOf(e);
+    if (card.last) {
+      card.strokeDist += Math.hypot(p.x - card.last.x, p.y - card.last.y);
+    }
+    card.ctx.beginPath();
+    card.ctx.moveTo((card.last || p).x, (card.last || p).y);
+    card.ctx.lineTo(p.x, p.y);
+    card.ctx.stroke();
+    card.last = p;
+    if (++card.moveCount % 6 === 0) checkMultiReveal(card);
+  };
+  const release = () => {
+    card.drawing = false;
+    card.last = null;
+    if (!card.revealed && card.strokeDist > 30) doMultiReveal(card);
+  };
+  canvas.addEventListener('pointerdown', (e) => {
+    if (canvas.style.pointerEvents === 'none') return;
+    if (card.phase !== PHASE.READY || card.revealed) {
+      if (card.phase === PHASE.PICKED || card.phase === PHASE.PENDING) {
+        shakeMultiFrame(card);
+      }
+      return;
+    }
+    card.drawing = true;
+    card.last = null;
+    canvas.setPointerCapture(e.pointerId);
+    move(e);
+  });
+  canvas.addEventListener('pointermove', move);
+  canvas.addEventListener('pointerup', release);
+  canvas.addEventListener('pointercancel', release);
+
+  const { overlay, shareBtn, saveBtn } = multiCardEls(card);
+  overlay?.addEventListener('pointerdown', (e) => {
+    if (card.phase !== PHASE.PICKED && card.phase !== PHASE.PENDING) return;
+    e.preventDefault();
+    shakeMultiFrame(card);
+  });
+  shareBtn?.addEventListener('click', () => {
+    if (card.win) shareWinOnX(card.win);
+  });
+  saveBtn?.addEventListener('click', () => {
+    if (card.win) void saveWinCardPng(card.win);
+  });
+}
+
+function checkMultiReveal(card) {
+  if (card.revealed || !card.ctx || !card.canvas) return;
+  const c = card.canvas;
+  const rx = Math.floor(c.width * 0.18);
+  const rw = Math.floor(c.width * 0.64);
+  const ry = Math.floor(c.height * 0.28);
+  const rh = Math.floor(c.height * 0.44);
+  if (rw <= 0 || rh <= 0) return;
+  const d = card.ctx.getImageData(rx, ry, rw, rh).data;
+  let clear = 0;
+  let total = 0;
+  for (let i = 3; i < d.length; i += 64) {
+    total++;
+    if (d[i] === 0) clear++;
+  }
+  if (clear / total > 0.6) doMultiReveal(card);
+}
+
+function doMultiReveal(card) {
+  if (card.revealed) return;
+  card.revealed = true;
+  card.phase = PHASE.REVEALED;
+  if (card.canvas) {
+    card.canvas.style.transition = 'opacity .55s ease';
+    card.canvas.style.opacity = '0';
+    card.disableTimer = setTimeout(() => {
+      if (card.canvas) card.canvas.style.pointerEvents = 'none';
+    }, 500);
+  }
+  if (card.isWin) {
+    card.el?.classList.add('is-win', 'is-revealed');
+    burstConfetti();
+  } else {
+    card.el?.classList.add('is-revealed');
+  }
+  updateMultiSummary();
+  applySessionView();
+}
+
+function enterMultiBoardUI(tier, tierKey, count) {
+  state.session.phase = PHASE.MULTI;
+  state.session.tier = tier;
+  state.session.tierKey = tierKey;
+  state.session.startedAt = Date.now();
+  state.session.requestId = null;
+  state.session.optimisticDelta = 0;
+  state.session.ticketsAtPick =
+    tierKey === 'prem' ? state.liveTickets.prem : state.liveTickets.std;
+  state.tier = tierKey;
+
+  const stage = $('stage');
+  stage?.classList.add('multi-active');
+  stage?.classList.toggle('premium', tierKey === 'prem');
+
+  setSessionNote('');
+  setReassure(false);
+  clearStageFooter();
+  $('fan')?.classList.add('picked');
+  $('panel')?.classList.remove('show');
+  setText($('prompt'), `Scratching ${count}…`);
+
+  const grid = $('multiGrid');
+  if (grid) grid.innerHTML = '';
+  $('multiBoard')?.classList.add('show');
+  $('multiDoneRow')?.classList.remove('show');
+
+  const cards = [];
+  for (let i = 0; i < count; i++) {
+    const el = buildMultiCardElement(i, tierKey);
+    grid?.appendChild(el);
+    const canvas = el.querySelector('canvas.multi-canvas');
+    const card = {
+      index: i,
+      phase: PHASE.PICKED,
+      requestId: null,
+      requestedAt: 0n,
+      asset: null,
+      amount: null,
+      isWin: false,
+      win: null,
+      revealed: false,
+      el,
+      canvas,
+      ctx: canvas?.getContext('2d') || null,
+      drawing: false,
+      last: null,
+      strokeDist: 0,
+      moveCount: 0,
+      foilLayout: null,
+      disableTimer: null,
+    };
+    cards.push(card);
+    wireMultiCardInput(card);
+    lockMultiFoil(card);
+  }
+
+  state.session.multi = {
+    count,
+    cards,
+    batchSupported: null,
+    submitting: true,
+  };
+  updateMultiSummary();
+  applySessionView();
+}
+
+function bumpOptimistic(n) {
+  state.session.optimisticDelta += n;
+  applySessionView();
+}
+
+async function assignRequestToCard(card, requestId, requestedAt) {
+  card.requestId = requestId;
+  card.requestedAt = requestedAt ?? 0n;
+  card.phase = PHASE.PENDING;
+  const { ticketNo, lbl } = multiCardEls(card);
+  if (ticketNo) ticketNo.textContent = `Request #${requestId.toString()}`;
+  if (lbl) lbl.textContent = 'Waiting for randomness';
+  lockMultiFoil(card);
+  updateMultiSummary();
+}
+
+async function applyMultiSettled(card, asset, amount, opts = {}) {
+  if (card.phase === PHASE.READY || card.phase === PHASE.REVEALED) return;
+  card.phase = PHASE.READY;
+  card.asset = asset;
+  card.amount = amount ?? 0n;
+
+  const isWin =
+    asset &&
+    asset.toLowerCase() !== zeroAddress.toLowerCase() &&
+    amount &&
+    amount > 0n;
+
+  const { amt, lbl, ticketNo } = multiCardEls(card);
+  if (ticketNo && card.requestId != null) {
+    ticketNo.textContent = `Request #${card.requestId.toString()}`;
+  }
+
+  if (!isWin) {
+    if (amt) {
+      amt.textContent = 'Not this time';
+      amt.className = 'amt';
+    }
+    if (lbl) lbl.textContent = 'Same time tomorrow';
+    card.isWin = false;
+    card.win = null;
+  } else {
+    const meta = await tokenMeta(asset);
+    const human = formatHuman(amount, meta.decimals);
+    const label = `+${human} ${meta.symbol}`;
+    if (amt) {
+      amt.textContent = label;
+      amt.className = 'amt ' + (meta.kind === 'stock' ? 'gold' : 'win');
+    }
+    if (lbl) lbl.textContent = 'Paid to your wallet';
+    card.isWin = true;
+    const sharePrize =
+      meta.symbol === 'SCRATCH' ? `+${human} $SCRATCH` : `+${human} ${meta.symbol}`;
+    card.win = {
+      requestId: card.requestId != null ? card.requestId.toString() : '',
+      txHash: opts.txHash || null,
+      sharePrize,
+      cardPrize: `+${human} ${meta.symbol}`,
+      tierKey: state.session.tierKey || state.tier,
+    };
+    card.el?.classList.add('is-win');
+  }
+
+  unlockMultiFoil(card);
+  updateMultiSummary();
+  try {
+    await refreshWalletPanel({ skipStage: true });
+  } catch {
+    /* ignore */
+  }
+  applySessionView();
+}
+
+async function pollMultiBoard() {
+  clearInterval(state.pollTimer);
+  const check = async () => {
+    if (!isMultiSession()) return;
+    const cards = state.session.multi.cards.filter(
+      (c) => c.phase === PHASE.PENDING && c.requestId != null,
+    );
+    for (const card of cards) {
+      try {
+        const req = await publicClient.readContract({
+          address: addr.game,
+          abi: ABI_GAME,
+          functionName: 'requests',
+          args: [card.requestId],
+        });
+        const status = Number(req.status ?? req[3]);
+        card.requestedAt = BigInt(req.requestedAt ?? req[2]);
+        if (status === STATUS.Settled) {
+          let asset = zeroAddress;
+          let amount = 0n;
+          let txHash = null;
+          const tip = await publicClient.getBlockNumber();
+          const from = tip > 200_000n ? tip - 200_000n : 0n;
+          try {
+            const recent = await publicClient.getLogs({
+              address: addr.game,
+              event: EVENT_SCRATCH_SETTLED,
+              args: { requestId: card.requestId },
+              fromBlock: from,
+              toBlock: tip,
+            });
+            if (recent.length) {
+              const settled = recent[recent.length - 1];
+              asset = settled.args.asset;
+              amount = settled.args.amount;
+              txHash = settled.transactionHash || null;
+            }
+          } catch {
+            /* prize unknown — still unlock as no-win */
+          }
+          await applyMultiSettled(card, asset, amount, {
+            txHash,
+            requestId: card.requestId,
+          });
+        } else if (status === STATUS.Rescued) {
+          card.phase = PHASE.REVEALED;
+          card.revealed = true;
+          const { amt, lbl } = multiCardEls(card);
+          if (amt) amt.textContent = 'Rescued';
+          if (lbl) lbl.textContent = 'Ticket refunded';
+          updateMultiSummary();
+        }
+      } catch {
+        /* keep polling */
+      }
+    }
+  };
+
+  await check();
+  state.pollTimer = setInterval(check, 2000);
+
+  try {
+    state.eventUnwatch = publicClient.watchContractEvent({
+      address: addr.game,
+      abi: [EVENT_SCRATCH_SETTLED],
+      eventName: 'ScratchSettled',
+      args: { user: state.account },
+      onLogs: async (logs) => {
+        if (!isMultiSession()) return;
+        for (const log of logs) {
+          const rid = log.args.requestId;
+          const card = state.session.multi.cards.find(
+            (c) => c.requestId != null && c.requestId === rid,
+          );
+          if (!card || card.phase !== PHASE.PENDING) continue;
+          await applyMultiSettled(card, log.args.asset, log.args.amount, {
+            txHash: log.transactionHash || null,
+            requestId: rid,
+          });
+        }
+      },
+    });
+  } catch {
+    /* polling is enough */
+  }
+}
+
+function pruneUnsentMultiCards() {
+  const multi = state.session.multi;
+  if (!multi) return;
+  const kept = multi.cards.filter((c) => c.requestId != null);
+  for (const c of multi.cards) {
+    if (c.requestId == null) c.el?.remove();
+  }
+  multi.cards = kept;
+  multi.count = kept.length;
+  updateMultiSummary();
+}
+
+async function startMultiScratch(count) {
+  if (sessionPhase() !== PHASE.IDLE) return;
+
+  const tier = activeChainTier();
+  const tierKey = tier === TIER_STD ? 'std' : 'prem';
+  const n = clampMultiCount(count);
+  if (n < 2) {
+    showToast('Need at least 2 tickets for a batch.', { kind: 'warn' });
+    return;
+  }
+
+  if (!state.account) {
+    await connectWallet();
+    if (!state.account) return;
+  }
+
+  const tickets =
+    tier === TIER_STD ? state.liveTickets.std : state.liveTickets.prem;
+  if (tickets < CONFIG.ticketCost * BigInt(n)) {
+    showToast('Not enough tickets for that batch.', { kind: 'warn' });
+    return;
+  }
+
+  enterMultiBoardUI(tier, tierKey, n);
+
+  try {
+    await ensureChain();
+    const batchOk = await detectEip5792SendCalls();
+    state.session.multi.batchSupported = batchOk;
+
+    if (batchOk) {
+      setMultiProgress('Confirm the batch in your wallet…');
+      setText($('prompt'), 'Confirm batch…');
+      try {
+        const callsId = await sendCallsBatch(tier, n);
+        setMultiProgress('Batch submitted — waiting for confirmation…');
+        const status = await waitCallsStatus(callsId);
+        const ids = await collectRequestIdsAfterBatch(status, n);
+        if (ids.length < n) {
+          throw new Error(
+            `Expected ${n} request ids, found ${ids.length}. Check wallet activity.`,
+          );
+        }
+        bumpOptimistic(n);
+        for (let i = 0; i < n; i++) {
+          await assignRequestToCard(state.session.multi.cards[i], ids[i]);
+        }
+        setMultiProgress('');
+        setText($('prompt'), 'tickets printing…');
+        state.session.multi.submitting = false;
+        await refreshWalletPanel({ skipStage: true });
+        await pollMultiBoard();
+        return;
+      } catch (batchErr) {
+        // If wallet advertised support but sendCalls failed as unsupported, fall through.
+        if (
+          !isUserRejection(batchErr) &&
+          /4200|unsupported method|does not exist|method not found/i.test(
+            `${batchErr?.message || ''} ${batchErr?.code || ''}`,
+          )
+        ) {
+          state.session.multi.batchSupported = false;
+        } else {
+          throw batchErr;
+        }
+      }
+    }
+
+    // Sequential fallback
+    $('multiFallbackNote')?.classList.add('show');
+    setSessionNote('Your wallet confirms each ticket individually.');
+    for (let i = 0; i < n; i++) {
+      if (!isMultiSession()) return;
+      setMultiProgress(`Confirm ${i + 1} of ${n} in your wallet…`);
+      setText($('prompt'), `Confirm ${i + 1} of ${n}…`);
+      try {
+        const hash = await state.walletClient.writeContract({
+          address: addr.game,
+          abi: ABI_GAME,
+          functionName: 'scratch',
+          args: [tier],
+          account: state.account,
+          chain: robinhoodChain,
+        });
+        const receipt = await publicClient.waitForTransactionReceipt({ hash });
+        let requestId = extractRequestId(receipt);
+        if (requestId == null) {
+          const logs = await publicClient.getLogs({
+            address: addr.game,
+            event: EVENT_SCRATCH_REQUESTED,
+            args: { user: state.account },
+            fromBlock: receipt.blockNumber,
+            toBlock: receipt.blockNumber,
+          });
+          if (logs.length) requestId = logs[logs.length - 1].args.requestId;
+        }
+        if (requestId == null) {
+          throw new Error('Could not find request id in receipt');
+        }
+        bumpOptimistic(1);
+        await assignRequestToCard(state.session.multi.cards[i], requestId);
+      } catch (err) {
+        if (isUserRejection(err)) {
+          pruneUnsentMultiCards();
+          setMultiProgress('');
+          state.session.multi.submitting = false;
+          if (state.session.multi.cards.length === 0) {
+            resetSessionToIdle({
+              cancelNote: 'Cancelled — tickets unspent.',
+            });
+            showToast(WALLET_REJECT_TOAST, { kind: 'warn', duration: 9000 });
+            return;
+          }
+          setSessionNote(
+            `Stopped at ${i + 1} of ${n} — sent scratches continue; remaining cancelled.`,
+            'cancel',
+          );
+          showToast('Batch stopped — unsent tickets were not spent.', {
+            kind: 'warn',
+          });
+          await refreshWalletPanel({ skipStage: true });
+          await pollMultiBoard();
+          return;
+        }
+        throw err;
+      }
+    }
+
+    setMultiProgress('');
+    setText($('prompt'), 'tickets printing…');
+    state.session.multi.submitting = false;
+    await refreshWalletPanel({ skipStage: true });
+    await pollMultiBoard();
+  } catch (err) {
+    const msg = err?.shortMessage || err?.message || String(err);
+    if (isUserRejection(err)) {
+      pruneUnsentMultiCards();
+      if (!state.session.multi?.cards?.length) {
+        resetSessionToIdle({ cancelNote: 'Cancelled — tickets unspent.' });
+        showToast(WALLET_REJECT_TOAST, { kind: 'warn', duration: 9000 });
+        return;
+      }
+      setSessionNote('Cancelled remaining — sent scratches continue.', 'cancel');
+      state.session.multi.submitting = false;
+      await pollMultiBoard();
+      return;
+    }
+    if (state.session.multi?.cards?.some((c) => c.requestId != null)) {
+      pruneUnsentMultiCards();
+      setSessionNote(`Batch interrupted: ${msg}`, 'cancel');
+      state.session.multi.submitting = false;
+      await pollMultiBoard();
+      showToast(`Multi-scratch interrupted: ${msg}`, { kind: 'error' });
+      return;
+    }
+    resetSessionToIdle({ cancelNote: `Multi-scratch failed: ${msg}` });
+    showToast(`Multi-scratch failed: ${msg}`, { kind: 'error' });
+  }
+}
+
 async function startLiveScratch(tierOverride) {
   // Only IDLE may enter a new scratch; REVEALED must reset via sessionDispatch first.
   if (sessionPhase() !== PHASE.IDLE) return;
@@ -3320,7 +4383,7 @@ function onCardPick() {
   sessionDispatch(ACTION.PICK_CARD);
 }
 
-/** Find newest Pending ScratchRequested for connected wallet and rehydrate. */
+/** Find Pending ScratchRequested(s) for connected wallet and rehydrate (single or multi). */
 async function rehydratePendingSession() {
   if (!state.account || state.mode !== 'live' || stageBusy()) return;
   try {
@@ -3329,7 +4392,8 @@ async function rehydratePendingSession() {
       Math.min(Math.ceil((CONFIG.winsLookbackSec * 2) / 0.1), 1_000_000),
     );
     const fromBlock = tip > lookbackBlocks ? tip - lookbackBlocks : 0n;
-    let newest = null;
+    /** @type {Array<{ requestId: bigint, tier: number, requestedAt: bigint }>} */
+    const pending = [];
 
     for (let start = fromBlock; start <= tip; start += CONFIG.logChunkBlocks) {
       const end =
@@ -3360,11 +4424,11 @@ async function rehydratePendingSession() {
           });
           const status = Number(req.status ?? req[3]);
           if (status === STATUS.Pending) {
-            newest = {
+            pending.push({
               requestId,
               tier: Number(req.tier ?? req[1]),
               requestedAt: BigInt(req.requestedAt ?? req[2]),
-            };
+            });
           }
         } catch {
           /* skip */
@@ -3372,18 +4436,59 @@ async function rehydratePendingSession() {
       }
     }
 
-    if (!newest) return;
+    if (!pending.length) return;
 
-    const tierKey = newest.tier === TIER_PREM ? 'prem' : 'std';
+    // Prefer the tier with the most pending (cap 10); ties → higher requestId.
+    const byTier = { 0: [], 1: [] };
+    for (const p of pending) {
+      const t = p.tier === TIER_PREM ? TIER_PREM : TIER_STD;
+      byTier[t].push(p);
+    }
+    for (const t of [0, 1]) {
+      byTier[t].sort((a, b) => (a.requestId < b.requestId ? -1 : 1));
+    }
+    let chosenTier = byTier[0].length >= byTier[1].length ? TIER_STD : TIER_PREM;
+    if (byTier[0].length === byTier[1].length && byTier[0].length > 0) {
+      const a = byTier[0][byTier[0].length - 1].requestId;
+      const b = byTier[1][byTier[1].length - 1].requestId;
+      chosenTier = a >= b ? TIER_STD : TIER_PREM;
+    }
+    let chosen = byTier[chosenTier].slice(-MULTI_MAX_BATCH);
+    if (!chosen.length) {
+      chosenTier = chosenTier === TIER_STD ? TIER_PREM : TIER_STD;
+      chosen = byTier[chosenTier].slice(-MULTI_MAX_BATCH);
+    }
+    if (!chosen.length) return;
+
+    const tierKey = chosenTier === TIER_PREM ? 'prem' : 'std';
     state.tier = tierKey;
-    state.session.tier = newest.tier;
+    state.session.tier = chosenTier;
     state.session.tierKey = tierKey;
-    const stage = $('stage');
-    stage?.classList.toggle('premium', tierKey === 'prem');
-    $('scratchCardEl')?.classList.toggle('premium', tierKey === 'prem');
-    enterPendingUI(newest.requestId, newest.requestedAt);
-    setSessionNote('Resumed a pending draw from your wallet.');
-    await pollRequest(newest.requestId);
+
+    if (chosen.length === 1) {
+      const newest = chosen[0];
+      const stage = $('stage');
+      stage?.classList.toggle('premium', tierKey === 'prem');
+      $('scratchCardEl')?.classList.toggle('premium', tierKey === 'prem');
+      enterPendingUI(newest.requestId, newest.requestedAt);
+      setSessionNote('Resumed a pending draw from your wallet.');
+      await pollRequest(newest.requestId);
+      return;
+    }
+
+    enterMultiBoardUI(chosenTier, tierKey, chosen.length);
+    state.session.multi.submitting = false;
+    state.session.optimisticDelta = chosen.length;
+    for (let i = 0; i < chosen.length; i++) {
+      await assignRequestToCard(
+        state.session.multi.cards[i],
+        chosen[i].requestId,
+        chosen[i].requestedAt,
+      );
+    }
+    setText($('prompt'), 'tickets printing…');
+    setSessionNote(`Resumed ${chosen.length} pending draws from your wallet.`);
+    await pollMultiBoard();
   } catch (err) {
     console.warn('rehydrate pending', err);
   }
@@ -3632,6 +4737,37 @@ function wireUi() {
   });
   $('scratchBtnPrem')?.addEventListener('click', () => {
     sessionDispatch(ACTION.QUICK_SCRATCH, { tierKey: 'prem' });
+  });
+
+  const openMulti = () => sessionDispatch(ACTION.MULTI_OPEN);
+  $('multiScratchOpen')?.addEventListener('click', openMulti);
+  $('scratchBtnMulti')?.addEventListener('click', openMulti);
+  $('multiCancelBtn')?.addEventListener('click', () => {
+    sessionDispatch(ACTION.MULTI_CLOSE_PICKER);
+  });
+  $('multiGoBtn')?.addEventListener('click', () => {
+    const n = clampMultiCount($('multiCountInput')?.value);
+    sessionDispatch(ACTION.MULTI_START, { count: n });
+  });
+  $('multiDoneBtn')?.addEventListener('click', () => {
+    sessionDispatch(ACTION.MULTI_DONE);
+  });
+  $('multiChips')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-n]');
+    if (!btn || btn.disabled) return;
+    const input = $('multiCountInput');
+    if (input) input.value = btn.dataset.n;
+    syncMultiPickerCap();
+  });
+  $('multiCountInput')?.addEventListener('input', () => {
+    syncMultiPickerCap();
+  });
+  $('multiCountInput')?.addEventListener('change', () => {
+    const input = $('multiCountInput');
+    if (!input) return;
+    const n = clampMultiCount(input.value);
+    if (n >= 2) input.value = String(n);
+    syncMultiPickerCap();
   });
 
   // Withdraw warning copy (static)

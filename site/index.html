@@ -316,6 +316,102 @@
   .fan.picked .card:nth-child(2){transition-delay:.06s}
   .fan.picked .card:nth-child(3){transition-delay:.12s}
   .fan.locked{opacity:.35;pointer-events:none;filter:grayscale(1)}
+  .stage.multi-active{max-width:min(920px,96vw);min-height:auto;padding-bottom:36px}
+  .stage.multi-active .fan,.stage.multi-active #panel{display:none!important}
+
+  .multi-entry{
+    display:none;margin:0 auto 18px;max-width:420px;text-align:center;
+  }
+  .multi-entry.show{display:block}
+  .multi-entry > .btn{min-height:40px}
+  .multi-picker{
+    display:none;margin-top:12px;padding:14px 14px 12px;background:#131A21;border-radius:14px;
+    border:1px solid #22303A;text-align:left;
+  }
+  .multi-picker.show{display:block}
+  .multi-picker-label{font-size:12px;font-weight:600;color:#8FA3B0;margin-bottom:10px;letter-spacing:.03em}
+  .multi-chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}
+  .multi-chips button{
+    min-width:44px;min-height:40px;padding:0 14px;border-radius:10px;cursor:pointer;
+    font-family:'Inter';font-size:14px;font-weight:700;border:1.5px solid #2A3640;
+    background:#0B1015;color:#E8EDF0;
+  }
+  .multi-chips button:hover{border-color:#21CE99}
+  .multi-chips button.active{border-color:#21CE99;background:#15241F;color:#21CE99}
+  .multi-chips button:disabled{opacity:.35;cursor:not-allowed}
+  .multi-count-row{display:flex;flex-wrap:wrap;align-items:center;gap:10px}
+  .multi-count-row input{
+    width:72px;min-height:40px;border-radius:10px;border:1.5px solid #2A3640;
+    background:#0B1015;color:#E8EDF0;font-family:'IBM Plex Mono';font-size:14px;
+    font-weight:600;text-align:center;padding:0 8px;
+  }
+  .multi-count-row input:focus{outline:2px solid #21CE99;outline-offset:1px}
+  .multi-cap-note{font-size:12px;color:#7E93A0;flex:1 1 auto}
+  .multi-picker-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+  .multi-picker-actions .btn{flex:1 1 120px;min-height:40px}
+  .multi-fallback-note{
+    display:none;margin-top:10px;font-size:12.5px;line-height:1.45;color:#B8A46A;
+  }
+  .multi-fallback-note.show{display:block}
+
+  .multi-board{display:none;width:100%;margin-top:4px}
+  .multi-board.show{display:block}
+  .multi-summary{
+    font-size:13px;font-weight:600;color:#9FB4A8;text-align:center;margin-bottom:16px;
+    letter-spacing:.02em;min-height:1.2em;
+  }
+  .multi-summary b{font-family:'IBM Plex Mono';font-weight:600;color:#E8EDF0;font-variant-numeric:tabular-nums}
+  .multi-summary .won{color:#21CE99}
+  .multi-grid{
+    display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;
+    width:100%;
+  }
+  @media (min-width:720px){
+    .multi-grid{grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:14px}
+  }
+  .multi-card{
+    background:#10161C;border:1px solid #22303A;border-radius:16px;
+    box-shadow:0 16px 36px -18px rgba(0,0,0,.65);padding:14px 12px 12px;
+    min-width:0;
+  }
+  .stage.premium .multi-card{border-color:#3A3320}
+  .multi-card.premium .foil-stamp rect{stroke:rgba(201,162,39,.75)}
+  .multi-card.premium .foil-mark-slot{color:var(--gold)}
+  .multi-card.premium .foil-print-caption{color:rgba(234,211,126,.95)}
+  .multi-card .sc-head{font-size:10px;letter-spacing:.1em}
+  .multi-card .scratch-frame{height:150px;margin-top:10px}
+  .multi-card .prize .amt{font-size:20px}
+  .multi-card .prize .lbl{font-size:11px}
+  .multi-card .foil-mark-slot svg{height:min(72px,80%)}
+  .multi-card .foil-print-caption{font-size:9.5px;letter-spacing:.12em}
+  .multi-card canvas.multi-canvas{
+    position:absolute;inset:0;width:100%;height:100%;cursor:grab;touch-action:none;z-index:1;
+  }
+  .multi-card canvas.multi-canvas:active{cursor:grabbing}
+  .multi-card canvas.multi-canvas.is-printing{cursor:not-allowed}
+  .multi-card .multi-card-actions{
+    display:none;flex-wrap:wrap;gap:6px;margin-top:10px;
+  }
+  .multi-card.is-win.is-revealed .multi-card-actions{display:flex}
+  .multi-card .multi-card-actions .btn{
+    flex:1 1 90px;min-height:36px;padding:6px 8px;font-size:12px;
+  }
+  .multi-card .multi-card-actions .btn.share-x{
+    background:#0B1015;color:#E8EDF0;border:1px solid #3A4A55;
+  }
+  .multi-card .multi-card-actions .btn.save-win{
+    background:transparent;color:#8FA3B0;border:1px solid #2A3640;
+  }
+  .multi-card.ready-pop{animation:foilReadyPop .38s cubic-bezier(.34,1.56,.64,1)}
+  .multi-done-row{display:none;margin-top:18px;text-align:center}
+  .multi-done-row.show{display:block}
+  .multi-done-row .btn{min-height:44px;min-width:200px;background:#21CE99;color:#0B1015}
+  .multi-done-row .btn:hover{background:#1BB786}
+  .multi-progress{
+    display:none;text-align:center;font-size:13px;font-weight:600;color:#B8A46A;
+    margin:8px 0 14px;
+  }
+  .multi-progress.show{display:block}
 
   .stage-footer,.locked-note{
     display:none;margin-top:22px;font-size:14px;color:#8FA3B0;
@@ -728,6 +824,7 @@
     <div class="wallet-actions">
       <button type="button" class="btn sm" id="scratchBtnStd">Scratch holder card</button>
       <button type="button" class="btn sm" id="scratchBtnPrem">Scratch staked card</button>
+      <button type="button" class="btn ghost sm" id="scratchBtnMulti" hidden>Scratch multiple</button>
     </div>
     <div class="scratch-status" id="scratchStatus"></div>
     <div class="pending-rescue" id="pendingRescue">
@@ -772,10 +869,40 @@
   <div class="stage" id="stage">
     <div class="stage-prompt" id="prompt">Choose your free scratch</div>
 
+    <div class="multi-entry" id="multiEntry">
+      <button type="button" class="btn ghost sm" id="multiScratchOpen">Scratch multiple</button>
+      <div class="multi-picker" id="multiPicker">
+        <div class="multi-picker-label">How many tickets?</div>
+        <div class="multi-chips" id="multiChips" role="group" aria-label="Batch size presets">
+          <button type="button" data-n="3">3</button>
+          <button type="button" data-n="5">5</button>
+          <button type="button" data-n="10">10</button>
+        </div>
+        <div class="multi-count-row">
+          <input type="number" id="multiCountInput" inputmode="numeric" min="2" max="10" value="3" aria-label="Number of tickets">
+          <span class="multi-cap-note">max 10 per batch</span>
+        </div>
+        <p class="multi-fallback-note" id="multiFallbackNote">Your wallet confirms each ticket individually.</p>
+        <div class="multi-picker-actions">
+          <button type="button" class="btn sm" id="multiGoBtn">Scratch</button>
+          <button type="button" class="btn ghost sm" id="multiCancelBtn">Cancel</button>
+        </div>
+      </div>
+    </div>
+
     <div class="fan" id="fan">
       <button class="card" aria-label="Pick card one"><span class="mark" aria-hidden="true"><svg viewBox="0 0 100 140"><use href="#scratch-mark"/></svg></span></button>
       <button class="card" aria-label="Pick card two"><span class="mark" aria-hidden="true"><svg viewBox="0 0 100 140"><use href="#scratch-mark"/></svg></span></button>
       <button class="card" aria-label="Pick card three"><span class="mark" aria-hidden="true"><svg viewBox="0 0 100 140"><use href="#scratch-mark"/></svg></span></button>
+    </div>
+
+    <div class="multi-board" id="multiBoard">
+      <div class="multi-progress" id="multiProgress" aria-live="polite"></div>
+      <div class="multi-summary" id="multiSummary" aria-live="polite"></div>
+      <div class="multi-grid" id="multiGrid"></div>
+      <div class="multi-done-row" id="multiDoneRow">
+        <button type="button" class="btn" id="multiDoneBtn">Scratch another</button>
+      </div>
     </div>
 
     <div class="stage-footer" id="stageFooter" aria-live="polite"></div>
@@ -1001,6 +1128,6 @@
 <div class="toast-host" id="toastHost" aria-live="polite" aria-relevant="additions"></div>
 
 <!-- Bump ?v= to the short commit hash on every site/ ship so Render/CDN cannot serve stale app.js -->
-<script type="module" src="./app.js?v=mark-size-6"></script>
+<script type="module" src="./app.js?v=multi-scratch-1"></script>
 </body>
 </html>

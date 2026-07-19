@@ -1,7 +1,7 @@
 # Site session QA matrix
 
 Single authority: `sessionDispatch` + `state.session.phase`  
-Phases: `IDLE` · `PICKED` · `PENDING` · `READY` · `REVEALED`
+Phases: `IDLE` · `PICKED` · `PENDING` · `READY` · `REVEALED` · `MULTI` (per-card sub-phases)
 
 ## Delivery (BANKED / cache)
 
@@ -22,21 +22,34 @@ Phases: `IDLE` · `PICKED` · `PENDING` · `READY` · `REVEALED`
 | tickets = 0, holder tier | Daily-drop copy |
 | Rate still loading (eligible stake, no emission/total yet) | Show **nothing** (no `—` placeholder) |
 
+## Multi-scratch
+
+| Check | Expected |
+| --- | --- |
+| Entry | IDLE + ≥2 spendable on active tier → “Scratch multiple” (stage + wallet actions) |
+| Cap | Presets 3/5/10 + free input; `min(spendable, 10)`; inline “max 10 per batch” |
+| EIP-5792 | `wallet_getCapabilities` → `wallet_sendCalls` one confirmation; IDs via `wallet_getCallsStatus` + `ScratchRequested` |
+| Fallback | Sequential txs; progress “Confirm i of n…”; abort mid-run keeps sent, cancels unsent; note before start |
+| Board | N foil cards in grid (2/col mobile); per-card printing→ready→reveal; summary line; Share/Save per win |
+| Rehydrate | ≥2 pending same tier → multi board; 1 → single; refresh never resets board |
+| Optimistic | Delta += per confirmed submit; reconcile as chain tickets drop |
+
 ## State × action matrix
 
 Legend: **OK** = allowed / expected UI · **no-op** = ignored · **dis** = control visibly disabled
 
-| Action \\ State | IDLE | PICKED | PENDING | READY | REVEALED |
-| --- | --- | --- | --- | --- | --- |
-| Tier tab (other tier) | Switch tier, re-render fan/footer | **dis** / no-op | **dis** / no-op | **dis** / no-op | Reset→IDLE, switch tier, fan |
-| Tier tab (same tier) | Re-render | **dis** / no-op | **dis** / no-op | **dis** / no-op | Reset→IDLE, fan |
-| Quick “Scratch holder/staked” | Switch tier + auto-pick scratch | **dis** | **dis** | **dis** | Reset→IDLE then auto-pick |
-| Fan card click | Start scratch (if tickets>0) | no-op (fan picked) | no-op | no-op | no-op (must Scratch another / tab) |
-| Scratch input (foil) | n/a | Shake / not scratchable | Shake / not scratchable | Scratch enabled | n/a (foil gone) |
-| Scratch another | hidden | hidden | hidden | hidden | →IDLE, fan + footer; or exhausted footer only |
-| Stake / withdraw | Allowed (wallet panel) | Allowed | Allowed | Allowed | Allowed |
-| Wallet disconnect | Clear panel, IDLE footer | Abort session→IDLE, clear | Abort→IDLE, clear | Abort→IDLE, clear | Abort→IDLE, clear |
-| Page refresh mid-PENDING | — | — | Rehydrate pending UI | — | — |
+| Action \\ State | IDLE | PICKED | PENDING | READY | REVEALED | MULTI |
+| --- | --- | --- | --- | --- | --- | --- |
+| Tier tab (other tier) | Switch tier, re-render fan/footer | **dis** / no-op | **dis** / no-op | **dis** / no-op | Reset→IDLE, switch tier, fan | **dis** / no-op |
+| Tier tab (same tier) | Re-render | **dis** / no-op | **dis** / no-op | **dis** / no-op | Reset→IDLE, fan | **dis** / no-op |
+| Quick “Scratch holder/staked” | Switch tier + auto-pick scratch | **dis** | **dis** | **dis** | Reset→IDLE then auto-pick | **dis** |
+| Fan card click | Start scratch (if tickets>0) | no-op (fan picked) | no-op | no-op | no-op (must Scratch another / tab) | n/a (board) |
+| Scratch multiple | Open picker if ≥2 tickets | **dis** | **dis** | **dis** | hidden | n/a |
+| Scratch input (foil) | n/a | Shake / not scratchable | Shake / not scratchable | Scratch enabled | n/a (foil gone) | Per-card READY only |
+| Scratch another / Done | hidden | hidden | hidden | hidden | →IDLE, fan + footer | →IDLE when all revealed |
+| Stake / withdraw | Allowed (wallet panel) | Allowed | Allowed | Allowed | Allowed | Allowed |
+| Wallet disconnect | Clear panel, IDLE footer | Abort session→IDLE, clear | Abort→IDLE, clear | Abort→IDLE, clear | Abort→IDLE, clear | Abort→IDLE, clear |
+| Page refresh mid-PENDING | — | — | Rehydrate pending UI | — | — | Rehydrate multi if ≥2 pending |
 
 ## Walk checklist (deployed preview)
 
@@ -48,6 +61,7 @@ Run on `https://scratch4663.xyz` after deploy (hard refresh once for new `?v=`).
 - [x] Fan click with tickets → PICKED (printing overlay)
 - [x] Fan locked + footer truth table when tickets = 0
 - [x] Stake/withdraw pct fills work; disconnect clears panel
+- [ ] ≥2 tickets → Scratch multiple entry; cap + presets; unsupported wallet shows per-ticket note
 
 ### PICKED
 - [x] Tabs disabled
@@ -74,6 +88,13 @@ Run on `https://scratch4663.xyz` after deploy (hard refresh once for new `?v=`).
 - [x] Tabs reset to IDLE and switch
 - [x] Quick button resets then auto-picks when tickets remain
 - [x] Disconnect resets cleanly
+
+### MULTI
+- [ ] Batch wallet: one confirmation for N; cards print then unlock as settlements land
+- [ ] Sequential: progress line; reject mid-run keeps sent cards
+- [ ] Summary updates; Share/Save on each win; Done when all revealed
+- [ ] Refresh mid-multi rehydrates pending set; ticket refresh does not wipe board
+- [ ] Mobile: 2 cards per row; touch scratch works
 
 ### Footer impossibles
 - [x] String `Next ticket in —` unreachable in UI
