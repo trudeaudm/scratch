@@ -3,7 +3,7 @@
  * Wire from index.html: <script type="module" src="./app.js?v=…"></script>
  * Bump ASSET_VERSION (and the index.html ?v=) on every site/ commit.
  */
-export const ASSET_VERSION = 'svg-mark-1';
+export const ASSET_VERSION = 'wallet-6963-1';
 
 import {
   createPublicClient,
@@ -2297,25 +2297,286 @@ function startDemoScratch() {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Wallet                                                                      */
+/* Wallet — EIP-6963 discovery + late-injection grace                          */
 /* -------------------------------------------------------------------------- */
+
+const NO_WALLET_MSG =
+  "No wallet detected. Open this site inside your wallet's browser, or install a browser wallet.";
+const WALLET_DISCOVERY_GRACE_MS = 3000;
+
+/** @type {Map<string, { info: { uuid: string, name: string, icon?: string, rdns?: string }, provider: object }>} */
+const discoveredWallets = new Map();
+/** Session-selected provider detail (remembered until reload). */
+let selectedWallet = null;
+/** @type {object|null} */
+let boundProvider = null;
+/** @type {Promise<object[]>|null} */
+let discoveryPromise = null;
 
 function setStatus(elOrId, msg) {
   const el = typeof elOrId === 'string' ? $(elOrId) : elOrId;
   if (el) el.textContent = msg || '';
 }
 
+function getActiveProvider() {
+  return selectedWallet?.provider ?? null;
+}
+
+function listDiscoveredWallets() {
+  return [...discoveredWallets.values()];
+}
+
+function isProviderDiscovered(provider) {
+  for (const d of discoveredWallets.values()) {
+    if (d.provider === provider) return true;
+  }
+  return false;
+}
+
+function legacyWalletName(provider) {
+  if (!provider || typeof provider !== 'object') return 'Browser wallet';
+  if (provider.isRabby) return 'Rabby';
+  if (provider.isCoinbaseWallet || provider.isBaseWallet) return 'Coinbase Wallet';
+  if (provider.isOkxWallet || provider.isOKExWallet) return 'OKX Wallet';
+  if (provider.isUniswapWallet) return 'Uniswap Wallet';
+  if (provider.isBraveWallet) return 'Brave Wallet';
+  if (provider.isMetaMask) return 'MetaMask';
+  return 'Browser wallet';
+}
+
+function upsertDiscoveredWallet(detail) {
+  const uuid = detail?.info?.uuid;
+  const provider = detail?.provider;
+  if (!uuid || !provider) return;
+  discoveredWallets.set(uuid, {
+    info: {
+      uuid,
+      name: detail.info.name || 'Wallet',
+      icon: detail.info.icon || '',
+      rdns: detail.info.rdns || '',
+    },
+    provider,
+  });
+}
+
+function captureLegacyEthereum() {
+  const eth = window.ethereum;
+  if (!eth) return;
+  const candidates =
+    Array.isArray(eth.providers) && eth.providers.length > 0 ? eth.providers : [eth];
+  for (let i = 0; i < candidates.length; i++) {
+    const provider = candidates[i];
+    if (!provider || isProviderDiscovered(provider)) continue;
+    const name = legacyWalletName(provider);
+    const uuid = `legacy:${name}:${i}`;
+    upsertDiscoveredWallet({
+      info: { uuid, name, icon: '', rdns: '' },
+      provider,
+    });
+  }
+}
+
+function onEip6963Announce(event) {
+  const { info, provider } = event.detail ?? {};
+  if (!info?.uuid || !provider) return;
+  upsertDiscoveredWallet({ info, provider });
+}
+
+function startWalletDiscovery() {
+  if (discoveryPromise) return discoveryPromise;
+
+  window.addEventListener('eip6963:announceProvider', onEip6963Announce);
+  try {
+    window.dispatchEvent(new Event('eip6963:requestProvider'));
+  } catch {
+    /* ignore */
+  }
+  captureLegacyEthereum();
+
+  discoveryPromise = new Promise((resolve) => {
+    const begun = Date.now();
+    let settled = false;
+
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      captureLegacyEthereum();
+      resolve(listDiscoveredWallets());
+    };
+
+    const hasAny = () => {
+      captureLegacyEthereum();
+      return discoveredWallets.size > 0;
+    };
+
+    if (hasAny()) {
+      // Brief settle so multiple EIP-6963 extensions can all announce.
+      setTimeout(finish, 200);
+      return;
+    }
+
+    const onEthInitialized = () => {
+      captureLegacyEthereum();
+    };
+    window.addEventListener('ethereum#initialized', onEthInitialized, { once: true });
+
+    const tick = setInterval(() => {
+      if (hasAny() || Date.now() - begun >= WALLET_DISCOVERY_GRACE_MS) {
+        clearInterval(tick);
+        window.removeEventListener('ethereum#initialized', onEthInitialized);
+        finish();
+      }
+    }, 100);
+  });
+
+  return discoveryPromise;
+}
+
+// Start as early as the module loads — in-app browsers often inject after first paint.
+startWalletDiscovery();
+
+function providerOff(provider, event, fn) {
+  if (!provider || !fn) return;
+  if (typeof provider.removeListener === 'function') provider.removeListener(event, fn);
+  else if (typeof provider.off === 'function') provider.off(event, fn);
+}
+
+function unbindProviderEvents() {
+  if (!boundProvider) return;
+  providerOff(boundProvider, 'accountsChanged', onProviderAccountsChanged);
+  providerOff(boundProvider, 'chainChanged', onProviderChainChanged);
+  boundProvider = null;
+}
+
+function bindProviderEvents(provider) {
+  if (!provider || boundProvider === provider) return;
+  unbindProviderEvents();
+  boundProvider = provider;
+  provider.on?.('accountsChanged', onProviderAccountsChanged);
+  provider.on?.('chainChanged', onProviderChainChanged);
+}
+
+function onProviderAccountsChanged(accs) {
+  if (!accs?.length) {
+    sessionDispatch(ACTION.DISCONNECT);
+    return;
+  }
+  const provider = getActiveProvider();
+  if (!provider) return;
+  state.account = getAddress(accs[0]);
+  state.walletClient = createWalletClient({
+    account: state.account,
+    chain: robinhoodChain,
+    transport: custom(provider),
+  });
+  const btn = $('connectBtn');
+  if (btn) {
+    btn.textContent = shortAddr(state.account);
+    btn.dataset.connected = '1';
+  }
+  watchScratchTransfers();
+  refreshWalletPanel();
+}
+
+function onProviderChainChanged() {
+  refreshWalletPanel();
+}
+
+/**
+ * @param {ReturnType<typeof listDiscoveredWallets>} providers
+ * @returns {Promise<object|null>}
+ */
+function showWalletPicker(providers) {
+  return new Promise((resolve) => {
+    const root = $('walletPicker');
+    const list = $('walletPickerList');
+    if (!root || !list) {
+      resolve(providers[0] || null);
+      return;
+    }
+
+    list.replaceChildren();
+    let done = false;
+    const finish = (value) => {
+      if (done) return;
+      done = true;
+      root.hidden = true;
+      document.removeEventListener('keydown', onKey);
+      resolve(value);
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') finish(null);
+    };
+
+    for (const detail of providers) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'wallet-picker-item';
+      const name = detail.info.name || 'Wallet';
+      if (detail.info.icon) {
+        const img = document.createElement('img');
+        img.src = detail.info.icon;
+        img.alt = '';
+        img.width = 28;
+        img.height = 28;
+        btn.appendChild(img);
+      } else {
+        const fall = document.createElement('span');
+        fall.className = 'wp-fallback';
+        fall.textContent = name.slice(0, 1).toUpperCase();
+        fall.setAttribute('aria-hidden', 'true');
+        btn.appendChild(fall);
+      }
+      const label = document.createElement('span');
+      label.textContent = name;
+      btn.appendChild(label);
+      btn.addEventListener('click', () => finish(detail));
+      list.appendChild(btn);
+    }
+
+    const cancelBtn = $('walletPickerCancel');
+    if (cancelBtn) cancelBtn.onclick = () => finish(null);
+    root.onclick = (e) => {
+      if (e.target === root) finish(null);
+    };
+    document.addEventListener('keydown', onKey);
+    root.hidden = false;
+    list.querySelector('button')?.focus();
+  });
+}
+
+async function resolveWalletForConnect() {
+  await startWalletDiscovery();
+  try {
+    window.dispatchEvent(new Event('eip6963:requestProvider'));
+  } catch {
+    /* ignore */
+  }
+  captureLegacyEthereum();
+
+  const providers = listDiscoveredWallets();
+  if (providers.length === 0) return null;
+
+  if (selectedWallet) {
+    const still = providers.find((p) => p.provider === selectedWallet.provider);
+    if (still) return still;
+  }
+  if (providers.length === 1) return providers[0];
+  return showWalletPicker(providers);
+}
+
 async function ensureChain() {
-  if (!window.ethereum) throw new Error('No wallet found. Install MetaMask or another injected wallet.');
+  const provider = getActiveProvider();
+  if (!provider) throw new Error(NO_WALLET_MSG);
   const hexId = '0x' + CONFIG.chainId.toString(16);
   try {
-    await window.ethereum.request({
+    await provider.request({
       method: 'wallet_switchEthereumChain',
       params: [{ chainId: hexId }],
     });
   } catch (err) {
     if (err?.code === 4902 || /Unrecognized chain/i.test(err?.message || '')) {
-      await window.ethereum.request({
+      await provider.request({
         method: 'wallet_addEthereumChain',
         params: [
           {
@@ -2336,21 +2597,23 @@ async function ensureChain() {
 async function connectWallet() {
   const btn = $('connectBtn');
   try {
-    if (!window.ethereum) {
-      setStatus(btn, 'No wallet');
-      showToast('No Ethereum wallet detected. Install MetaMask or a compatible wallet.', {
-        kind: 'error',
-      });
+    const detail = await resolveWalletForConnect();
+    if (!detail) {
+      if (btn) btn.textContent = 'Connect';
+      showToast(NO_WALLET_MSG, { kind: 'error', duration: 9000 });
       return;
     }
+    selectedWallet = detail;
+    bindProviderEvents(detail.provider);
+
     await ensureChain();
-    const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+    const accounts = await detail.provider.request({ method: 'eth_requestAccounts' });
     const account = getAddress(accounts[0]);
     state.account = account;
     state.walletClient = createWalletClient({
       account,
       chain: robinhoodChain,
-      transport: custom(window.ethereum),
+      transport: custom(detail.provider),
     });
     if (btn) {
       btn.textContent = shortAddr(account);
@@ -2934,10 +3197,6 @@ async function startLiveScratch(tierOverride) {
   const tier = tierOverride != null ? tierOverride : activeChainTier();
   const tierKey = tier === TIER_STD ? 'std' : 'prem';
 
-  if (!window.ethereum) {
-    showToast('Connect a wallet to scratch live tickets.', { kind: 'warn' });
-    return;
-  }
   if (!state.account) {
     await connectWallet();
     if (!state.account) return;
@@ -3377,31 +3636,6 @@ function wireUi() {
       msg.style.color = '#B04A3A';
     }
   });
-
-  if (window.ethereum) {
-    window.ethereum.on?.('accountsChanged', (accs) => {
-      if (!accs?.length) {
-        sessionDispatch(ACTION.DISCONNECT);
-      } else {
-        state.account = getAddress(accs[0]);
-        state.walletClient = createWalletClient({
-          account: state.account,
-          chain: robinhoodChain,
-          transport: custom(window.ethereum),
-        });
-        const btn = $('connectBtn');
-        if (btn) {
-          btn.textContent = shortAddr(state.account);
-          btn.dataset.connected = '1';
-        }
-        watchScratchTransfers();
-        refreshWalletPanel();
-      }
-    });
-    window.ethereum.on?.('chainChanged', () => {
-      refreshWalletPanel();
-    });
-  }
 
   // Accrual countdown tick — only when footer is showing a live countdown (tickets === 0).
   setInterval(() => {
