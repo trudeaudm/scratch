@@ -1,12 +1,15 @@
 #!/usr/bin/env node
 /**
- * Daily holder-tier granter for StandardTicketSource.
+ * Daily holder-tier drop for StandardTicketSource via the **crediter** path.
  *
- * Safety defaults: DRY_RUN (or unset RUN) prints the recipient list and exits 0
- * without sending. Set RUN=true to broadcast grant() batches.
+ * Uses CREDITER_PRIVATE_KEY (dedicated bot wallet) → credit(user, amount) one-by-one.
+ * Does NOT hold the treasury key. Treasury only runs addCrediter once (manual).
  *
- * GRANTER_PRIVATE_KEY must be the StandardTicketSource owner (treasury).
- * onlyOwner = treasury — this key can raise caps and addCrediters. Handle as hot-treasury.
+ * Safety: dry-run is the default. Set RUN=true to broadcast.
+ *
+ * Crediter semantics (StandardTicketSource):
+ *   - Owner: addCrediter(addr, dailyCap), lowerCrediterCap (down only), grant() batch
+ *   - Crediter: credit(user, amount) — consumes caller's dailyCap; 7× balance ceiling
  */
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,20 +17,14 @@ import dotenv from "dotenv";
 import { Contract, JsonRpcProvider, Wallet, formatUnits } from "ethers";
 import { buildExclusionSet, parseExcludeEnv } from "./exclusions.js";
 import { fetchAllHolders } from "./fetch-holders.js";
-import {
-  chunkAddresses,
-  filterEligibleHolders,
-  takeWithinAllowance,
-} from "./filter.js";
+import { filterEligibleHolders, takeWithinAllowance } from "./filter.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: resolve(__dirname, "..", ".env"), override: false });
 
 const SOURCE_ABI = [
-  "function grant(address[] users, uint256 amountEach)",
-  "function grantDailyCap() view returns (uint256)",
-  "function grantUsedToday() view returns (uint256)",
-  "function grantDayBucket() view returns (uint256)",
+  "function credit(address user, uint256 amount)",
+  "function crediters(address) view returns (bool authorized, uint256 dailyCap, uint256 usedToday, uint256 dayBucket)",
   "function owner() view returns (address)",
 ];
 
@@ -42,15 +39,15 @@ async function isContractAddress(provider, addr) {
   return yes;
 }
 
-function remainingGrantWei(cap, used, dayBucket, nowSec) {
+function remainingCrediterWei(cap, used, dayBucket, nowSec) {
   const currentBucket = BigInt(Math.floor(Number(nowSec) / 86400));
-  const usedEffective = currentBucket === dayBucket ? used : 0n;
+  const usedEffective = currentBucket === BigInt(dayBucket) ? used : 0n;
   return cap > usedEffective ? cap - usedEffective : 0n;
 }
 
 async function main() {
   const rpcUrl = process.env.RPC_URL;
-  const pk = process.env.GRANTER_PRIVATE_KEY;
+  const pk = process.env.CREDITER_PRIVATE_KEY;
   const sourceAddr =
     process.env.STANDARD_SOURCE || "0xC94894Cd3986E2D0f85616a0Dc59914f1057f003";
   const scratch =
@@ -58,46 +55,71 @@ async function main() {
   const threshold = BigInt(process.env.THRESHOLD || "1000000000000000000000000");
   const ticketsEach = BigInt(process.env.TICKETS_EACH || "1000000000000000000");
   const run = process.env.RUN === "true" || process.env.RUN === "1";
-  // Dry-run is the default unless RUN=true. DRY_RUN=true forces dry-run even if RUN is set.
   const forceDry =
     process.env.DRY_RUN === "true" || process.env.DRY_RUN === "1";
   const willSend = run && !forceDry;
 
   if (!rpcUrl) throw new Error("RPC_URL is required");
   if (willSend && !pk) {
-    throw new Error("GRANTER_PRIVATE_KEY is required when RUN=true");
+    throw new Error("CREDITER_PRIVATE_KEY is required when RUN=true");
+  }
+  if (process.env.GRANTER_PRIVATE_KEY) {
+    console.warn(
+      "WARN: GRANTER_PRIVATE_KEY is set but ignored — holder-drop uses CREDITER_PRIVATE_KEY + credit() only.",
+    );
   }
 
   const exclusions = buildExclusionSet(parseExcludeEnv(process.env.EXCLUDE));
   const provider = new JsonRpcProvider(rpcUrl);
   const source = new Contract(sourceAddr, SOURCE_ABI, provider);
 
-  console.log("=== holder-drop ===");
+  // Resolve bot address: from key if present, else CREDITER_ADDRESS for dry-run without key.
+  let botAddress = (process.env.CREDITER_ADDRESS || "").toLowerCase();
+  let wallet = null;
+  if (pk) {
+    wallet = new Wallet(pk, provider);
+    botAddress = wallet.address.toLowerCase();
+  }
+
+  console.log("=== holder-drop (crediter path) ===");
   console.log(`  scratch:       ${scratch}`);
   console.log(`  source:        ${sourceAddr}`);
+  console.log(`  crediter:      ${botAddress || "(unset — cap check skipped)"}`);
   console.log(`  threshold:     ${formatUnits(threshold, 18)} SCRATCH`);
   console.log(`  ticketsEach:   ${formatUnits(ticketsEach, 18)}`);
   console.log(`  mode:          ${willSend ? "LIVE RUN" : "DRY_RUN (no txs)"}`);
 
-  const [cap, used, dayBucket, owner, block] = await Promise.all([
-    source.grantDailyCap(),
-    source.grantUsedToday(),
-    source.grantDayBucket(),
-    source.owner(),
-    provider.getBlock("latest"),
-  ]);
-  const remaining = remainingGrantWei(cap, used, dayBucket, block.timestamp);
-  console.log(`  owner:         ${owner}`);
-  console.log(`  grantDailyCap: ${formatUnits(cap, 18)}`);
-  console.log(`  remainingToday:${formatUnits(remaining, 18)} ticket-wei`);
+  let authorized = false;
+  let remaining = 0n;
+  const owner = await source.owner();
+  console.log(`  source.owner:  ${owner}`);
 
-  if (willSend) {
-    const wallet = new Wallet(pk, provider);
-    if (wallet.address.toLowerCase() !== owner.toLowerCase()) {
-      throw new Error(
-        `GRANTER_PRIVATE_KEY ${wallet.address} != StandardTicketSource.owner() ${owner} — grant is onlyOwner (treasury).`,
+  if (botAddress && /^0x[a-f0-9]{40}$/.test(botAddress)) {
+    const c = await source.crediters(botAddress);
+    authorized = c.authorized === true || c[0] === true;
+    const dailyCap = c.dailyCap ?? c[1];
+    const usedToday = c.usedToday ?? c[2];
+    const dayBucket = c.dayBucket ?? c[3];
+    console.log(`  authorized:    ${authorized}`);
+    console.log(
+      `  crediterCap:   ${authorized ? formatUnits(dailyCap, 18) : "(not added yet)"}`,
+    );
+    if (!authorized) {
+      console.log(
+        "Crediter not authorized on-chain yet — dry-run will still list recipients.\n" +
+          "  Treasury must call addCrediter(bot, 200e18) once (see README).",
       );
+    } else {
+      const block = await provider.getBlock("latest");
+      remaining = remainingCrediterWei(dailyCap, usedToday, dayBucket, block.timestamp);
+      console.log(`  remainingToday:${formatUnits(remaining, 18)} ticket-wei`);
     }
+  } else if (willSend) {
+    throw new Error("CREDITER_PRIVATE_KEY is required when RUN=true");
+  } else {
+    console.log(
+      "  authorized:    (skipped — set CREDITER_ADDRESS or CREDITER_PRIVATE_KEY to resolve crediters())",
+    );
   }
 
   console.log("fetching holders from Blockscout…");
@@ -110,9 +132,11 @@ async function main() {
     isContract: (addr) => isContractAddress(provider, addr),
   });
 
+  // If not yet authorized, show full eligible list (cap unknown); live runs use remaining.
+  const allowance = authorized ? remaining : BigInt(filtered.eligible.length) * ticketsEach;
   const { recipients, skippedOverCap } = takeWithinAllowance(
     filtered.eligible,
-    remaining,
+    allowance,
     ticketsEach,
   );
 
@@ -122,7 +146,7 @@ async function main() {
   console.log(`  excluded contracts: ${filtered.excludedContracts}`);
   console.log(`  below threshold: ${filtered.belowThreshold}`);
   console.log(`  skipped over cap: ${skippedOverCap}`);
-  console.log(`  will grant:    ${recipients.length}`);
+  console.log(`  will credit:   ${recipients.length}`);
 
   console.log("--- recipients (balance-desc) ---");
   for (const r of recipients) {
@@ -130,33 +154,37 @@ async function main() {
   }
 
   if (!willSend) {
-    console.log("DRY_RUN complete — set RUN=true (and unset DRY_RUN) to broadcast.");
+    console.log(
+      "DRY_RUN complete — set RUN=true with CREDITER_PRIVATE_KEY after addCrediter to broadcast.",
+    );
     return;
   }
 
+  if (!authorized) {
+    throw new Error(
+      `crediter ${botAddress} is not authorized — treasury must addCrediter first`,
+    );
+  }
   if (recipients.length === 0) {
-    console.log("nothing to grant");
+    console.log("nothing to credit");
     return;
   }
 
-  const wallet = new Wallet(pk, provider);
   const writable = source.connect(wallet);
-  const batches = chunkAddresses(
-    recipients.map((r) => r.address),
-    100,
-  );
   const txHashes = [];
+  let credited = 0;
 
-  for (let i = 0; i < batches.length; i++) {
-    const batch = batches[i];
-    console.log(`granting batch ${i + 1}/${batches.length} size=${batch.length}…`);
-    const tx = await writable.grant(batch, ticketsEach);
+  for (let i = 0; i < recipients.length; i++) {
+    const user = recipients[i].address;
+    console.log(`credit ${i + 1}/${recipients.length} ${user}…`);
+    const tx = await writable.credit(user, ticketsEach);
     console.log(`  submitted ${tx.hash}`);
     const receipt = await tx.wait();
     if (!receipt || receipt.status !== 1) {
-      throw new Error(`grant batch ${i + 1} failed tx=${tx.hash}`);
+      throw new Error(`credit failed user=${user} tx=${tx.hash}`);
     }
     txHashes.push(tx.hash);
+    credited++;
     console.log(`  confirmed block=${receipt.blockNumber}`);
   }
 
@@ -165,7 +193,7 @@ async function main() {
     JSON.stringify(
       {
         eligible: filtered.eligible.length,
-        granted: recipients.length,
+        credited,
         excludedContracts: filtered.excludedContracts,
         excludedListed: filtered.excludedListed,
         skippedOverCap,
