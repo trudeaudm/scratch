@@ -29,7 +29,7 @@ export type PriceTag = "config" | "dex" | "peg" | "none";
 async function fetchPairUsd(chainId: string, pairAddress: `0x${string}`): Promise<number | null> {
   if (pairAddress === zeroAddress) return null;
   const url = `https://api.dexscreener.com/latest/dex/pairs/${chainId}/${pairAddress}`;
-  const res = await fetch(url);
+  const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
   if (!res.ok) throw new Error(`DexScreener ${res.status}`);
   const data = (await res.json()) as {
     pair?: { priceUsd?: string; liquidity?: { usd?: number } } | null;
@@ -76,7 +76,7 @@ export async function fetchTokenDexPairs(
 ): Promise<DexPairOption[]> {
   if (tokenAddress === zeroAddress) return [];
   const url = `https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`;
-  const res = await fetch(url);
+  const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
   if (!res.ok) return [];
   const data = (await res.json()) as { pairs?: DexScreenerPairRow[] | null };
   const rows = [...(data.pairs ?? [])]

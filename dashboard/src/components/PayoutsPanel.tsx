@@ -58,6 +58,7 @@ type PayoutsPayload = {
     newestTimestamp: string | null;
     stale: boolean;
     staleLagMs: number | null;
+    sync: { appended: number; skipped: number; error: string | null } | null;
     rows: LedgerRowView[];
   };
   biggestWins: BigWin[];
@@ -174,10 +175,18 @@ export function PayoutsPanel() {
             {data.ledger.staleLagMs != null && (
               <> · lag {lagLabel(data.ledger.staleLagMs)}</>
             )}
-            . Restart <span className="mono">npm run watch</span> (live append) or run{" "}
-            <span className="mono">npm run backfill-ledger</span>.
+            . Refresh — the dashboard auto-fills gaps from chain (live appends stay on Render).
           </p>
         </div>
+      )}
+      {data?.ledger.sync && data.ledger.sync.appended > 0 && !data.ledger.stale && (
+        <p className="ok" style={{ fontSize: "0.85rem" }}>
+          Synced +{data.ledger.sync.appended} ledger row
+          {data.ledger.sync.appended === 1 ? "" : "s"} from chain.
+        </p>
+      )}
+      {data?.ledger.sync?.error && (
+        <p className="warn">Ledger sync: {data.ledger.sync.error}</p>
       )}
 
       {loading && !data ? (

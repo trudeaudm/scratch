@@ -23,7 +23,7 @@ type BlockscoutTokenRow = {
  */
 export async function fetchBlockscoutTokenList(address: Address): Promise<DiscoveredToken[]> {
   const url = `${BLOCKSCOUT_API}?module=account&action=tokenlist&address=${address}`;
-  const res = await fetch(url);
+  const res = await fetch(url, { signal: AbortSignal.timeout(12_000) });
   if (!res.ok) throw new Error(`Blockscout HTTP ${res.status}`);
 
   const data = (await res.json()) as {

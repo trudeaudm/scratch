@@ -11,6 +11,7 @@ import {
 import { EXPLORER_BASE, contracts, findTokenConfig, tokens } from "@/config/addresses";
 import { robinhoodChain } from "@/config/chain";
 import { defaultLedgerPath, readLedgerFile, type LedgerRow } from "@/utils/payoutLedger";
+import { syncMissingLedgerRows } from "@/utils/syncLedger";
 
 const PUBLIC_RPC = "https://rpc.mainnet.chain.robinhood.com";
 
@@ -39,6 +40,7 @@ type ChainSettlement = {
   requestId: string;
   user: Address;
   tier: number;
+  rowIndex: string;
   asset: Address;
   amount: bigint;
   txHash: `0x${string}`;
@@ -60,10 +62,15 @@ let chainCache: { at: number; value: ChainAgg } | null = null;
 function resolveSymbol(asset: string): { symbol: string; decimals: number } {
   const key = asset.toLowerCase();
   if (key === zeroAddress) return { symbol: "NO_WIN", decimals: 18 };
-  const cfg = findTokenConfig(asset as Address);
-  if (cfg) return { symbol: cfg.symbol, decimals: cfg.decimals };
-  const hit = tokens.find((t) => t.address.toLowerCase() === key);
-  if (hit) return { symbol: hit.symbol, decimals: hit.decimals };
+  const cfg =
+    findTokenConfig(asset as Address) ??
+    tokens.find((t) => t.address.toLowerCase() === key);
+  if (cfg) {
+    // Stocks: show underlying ticker (ledger may have stale truncated CA labels).
+    const symbol =
+      cfg.kind === "stock" && cfg.ticker?.trim() ? cfg.ticker.trim() : cfg.symbol;
+    return { symbol, decimals: cfg.decimals };
+  }
   return { symbol: key.slice(0, 10), decimals: 18 };
 }
 
@@ -113,11 +120,13 @@ async function loadChainAgg(): Promise<ChainAgg> {
         const requestId = (log.args.requestId ?? 0n).toString();
         const user = (log.args.user ?? zeroAddress) as Address;
         const tier = Number(log.args.tier ?? 0);
+        const rowIndex = (log.args.rowIndex ?? 0n).toString();
         const txHash = log.transactionHash;
         settlements.push({
           requestId,
           user,
           tier,
+          rowIndex,
           asset,
           amount,
           txHash,
@@ -153,6 +162,7 @@ async function loadChainAgg(): Promise<ChainAgg> {
 }
 
 function serializeLedgerRow(r: LedgerRow) {
+  const { symbol } = resolveSymbol(r.asset || zeroAddress);
   return {
     timestamp: r.timestamp,
     requestId: r.requestId,
@@ -160,7 +170,7 @@ function serializeLedgerRow(r: LedgerRow) {
     tier: r.tier,
     rowIndex: r.rowIndex,
     asset: r.asset,
-    symbol: r.symbol,
+    symbol,
     humanAmount: r.humanAmount,
     priceUsd: r.priceUsd,
     usdValue: r.usdValue,
@@ -172,7 +182,23 @@ function serializeLedgerRow(r: LedgerRow) {
 
 export async function GET() {
   const ledgerPath = defaultLedgerPath();
-  const ledger = readLedgerFile(ledgerPath);
+  let ledger = readLedgerFile(ledgerPath);
+
+  const chain = await loadChainAgg();
+
+  // Local CSV is not the live Render writer — fill gaps from chain logs we already scanned.
+  let sync: { appended: number; skipped: number; error: string | null } | null = null;
+  if (!chain.error && chain.settlements.length > 0) {
+    const have = new Set(ledger.rows.map((r) => r.requestId));
+    const missing = chain.settlements.filter((s) => !have.has(s.requestId));
+    if (missing.length > 0) {
+      sync = await syncMissingLedgerRows(missing, ledgerPath);
+      if (sync.appended > 0) {
+        ledger = readLedgerFile(ledgerPath);
+        // Chain cache is fine; ledger-derived USD maps must refresh.
+      }
+    }
+  }
 
   const usdByAsset = new Map<string, number>();
   const usdByRequest = new Map<string, number>();
@@ -183,8 +209,6 @@ export async function GET() {
     usdByAsset.set(row.asset, (usdByAsset.get(row.asset) ?? 0) + v);
     usdByRequest.set(row.requestId, v);
   }
-
-  const chain = await loadChainAgg();
 
   const byAsset: AssetAgg[] = [...chain.rawByAsset.entries()]
     .map(([asset, raw]) => {
@@ -258,7 +282,8 @@ export async function GET() {
 
   // Prefer ledger win rows (have prices + timestamps).
   for (const r of ledger.rows) {
-    if (!isWinRow(r.symbol, r.humanAmount, r.asset)) continue;
+    const { symbol } = resolveSymbol(r.asset || zeroAddress);
+    if (!isWinRow(symbol, r.humanAmount, r.asset)) continue;
     const usd = Number(r.usdValue);
     const qty = Number(r.humanAmount);
     const sortKey = Number.isFinite(usd) && usd > 0 ? usd : Number.isFinite(qty) ? qty : 0;
@@ -268,7 +293,7 @@ export async function GET() {
     bigCandidates.push({
       requestId: r.requestId,
       user: r.user,
-      symbol: r.symbol,
+      symbol,
       humanAmount: r.humanAmount,
       usdValue: Number.isFinite(usd) && r.usdValue !== "" ? usd : null,
       sortKey,
@@ -334,10 +359,11 @@ export async function GET() {
       newestTimestamp: newestLedgerAt,
       stale,
       staleLagMs,
+      sync,
       rows: allLedger,
     },
     biggestWins,
     note:
-      "Quantities are from chain ScratchSettled logs. USD totals join the operator payout-ledger.csv when present (pull the CSV from the VPS running the bot).",
+      "Quantities are from chain ScratchSettled logs. USD joins the local payout-ledger.csv; gaps vs chain are auto-filled (retro prices). Live appends still run on the Render operator.",
   });
 }
