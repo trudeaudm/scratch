@@ -5,7 +5,9 @@
 
 # Runtime artifacts
 entropy-state.json
+entropy-state.json.*
 payout-ledger.csv
 ledger-errors.log
 node_modules/
 catch-up-drain*.log
+_transfer_chunks/

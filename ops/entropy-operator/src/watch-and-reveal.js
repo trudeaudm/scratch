@@ -16,19 +16,22 @@
  *   CATCH_UP_ONCE           if "1", drain pending then exit (no perpetual poll)
  *   GAME_ADDRESS            ScratchGame (for ScratchSettled ledger parse)
  *   LEDGER_FILE             CSV path (alias: PAYOUT_LEDGER_PATH; default ../payout-ledger.csv)
+ *   I_AM_THE_PRODUCTION_HOST  must be "true" to start — laptop fail-safe (see DEPLOY-RENDER.md)
+ *   STATUS_PORT             if set, start HTTP status/ledger server on this port
+ *   STATUS_TOKEN            Bearer token for /status /reconcile /ledger.csv (required with STATUS_PORT)
  *
  * Reveal targeting always reads on-chain nextFulfillSeq (never event order).
  * getLogs / websocket only accelerate discovery + latency metrics.
  *
  * Usage:
- *   node src/watch-and-reveal.js
- *   FROM_BLOCK=13390000 CATCH_UP_ONCE=1 node src/watch-and-reveal.js
+ *   I_AM_THE_PRODUCTION_HOST=true node src/watch-and-reveal.js
+ *   FROM_BLOCK=13390000 CATCH_UP_ONCE=1 I_AM_THE_PRODUCTION_HOST=true node src/watch-and-reveal.js
  *
  * Loads ops/entropy-operator/.env via dotenv (override: false — existing
  * process.env wins over the file).
  */
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 import {
@@ -40,6 +43,7 @@ import {
   solidityPacked,
 } from "ethers";
 import { defaultLedgerPath, logLedgerError, recordRevealSettlements } from "./payout-ledger.js";
+import { startStatusServer } from "./status-server.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ENV_FILE = resolve(__dirname, "..", ".env");
@@ -49,6 +53,32 @@ const DEFAULT_FILE = resolve(__dirname, "..", "entropy-state.json");
 const LOG_CHUNK = 2_000;
 /** Max blocks to walk when locating a single request for latency / resync. */
 const HEAD_FIND_MAX = 50_000;
+
+/**
+ * Refuse habitual local `npm run watch` after Render cutover.
+ * Production host must set I_AM_THE_PRODUCTION_HOST=true (Render env).
+ * Retired laptop chain files (*.laptop-retired*) never start, even with the flag.
+ */
+function assertProductionHostAllowed(chainFile) {
+  const name = basename(chainFile);
+  if (/\.laptop-retired/i.test(name)) {
+    console.error(
+      `REFUSING TO START: chain file looks retired (${name}).\n` +
+        `  Reveal host is Render — see ops/DEPLOY-RENDER.md.\n` +
+        `  Do not point CHAIN_FILE at a *.laptop-retired* path.`,
+    );
+    process.exit(1);
+  }
+  if (process.env.I_AM_THE_PRODUCTION_HOST !== "true") {
+    console.error(
+      `REFUSING TO START: I_AM_THE_PRODUCTION_HOST=true is required.\n` +
+        `  Accidental laptop watchers double-reveal against the Render operator.\n` +
+        `  Production: set I_AM_THE_PRODUCTION_HOST=true on the Render service.\n` +
+        `  See ops/DEPLOY-RENDER.md.`,
+    );
+    process.exit(1);
+  }
+}
 
 const ABI = [
   "event RandomnessRequested(uint256 indexed requestId, address indexed requester)",
@@ -362,6 +392,8 @@ async function main() {
   }
 
   const chainFile = resolve(process.env.CHAIN_FILE || DEFAULT_FILE);
+  assertProductionHostAllowed(chainFile);
+
   const pollMs = Number(process.env.POLL_MS || 2500);
   const headCheckMs = Number(process.env.HEAD_CHECK_MS || 60_000);
   const maxRetries = Number(process.env.REVEAL_MAX_RETRIES || 8);
@@ -419,6 +451,36 @@ async function main() {
   let wsContract = null;
   let wakePoll = null; // resolve to interrupt sleep on ws event
   let wsBackoffMs = 1000;
+
+  const statusPort = process.env.STATUS_PORT ? Number(process.env.STATUS_PORT) : 0;
+  if (statusPort) {
+    startStatusServer({
+      port: statusPort,
+      token: process.env.STATUS_TOKEN || "",
+      getHealth: () => ({
+        operator: wallet.address,
+        transport: useWs ? "websocket" : "http-poll",
+        nextRevealIndex: state.nextRevealIndex,
+        chainFile,
+        ledgerFile: ledgerPath,
+      }),
+      getLiveStatus: async () => {
+        const epoch = await contract.currentEpoch();
+        const nextFulfillSeq = await contract.nextFulfillSeq(epoch);
+        const nextSeq = await contract.nextSeq();
+        return {
+          operator: wallet.address,
+          transport: useWs ? "websocket" : "http-poll",
+          epoch: epoch.toString(),
+          nextFulfillSeq: nextFulfillSeq.toString(),
+          nextSeq: nextSeq.toString(),
+          lag: (nextSeq - nextFulfillSeq).toString(),
+          nextRevealIndex: state.nextRevealIndex,
+          lastProcessedBlock: state.lastProcessedBlock ?? null,
+        };
+      },
+    });
+  }
 
   const bumpWake = () => {
     if (wakePoll) {
