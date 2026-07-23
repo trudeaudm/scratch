@@ -6,18 +6,13 @@ import {
   contracts,
   explorerAddress,
   isConfigured,
-  tokens,
 } from "@/config/addresses";
 import { fmtToken, fmtUsd, countdown } from "@/utils/format";
 import { priceTagLabel } from "@/utils/prices";
 import type { HoldingToken, TreasurySnapshot } from "@/hooks/useTreasuryData";
 import { RemoveVerifiedModal, VerifyTokenModal } from "@/components/VerifyTokenModal";
 import { CopyAddress } from "@/components/CopyAddress";
-
-function tokenDecimals(asset: string): number {
-  const t = tokens.find((x) => x.address.toLowerCase() === asset.toLowerCase());
-  return t?.decimals ?? 18;
-}
+import { PrizeVaultSweeps } from "@/components/PrizeVaultSweeps";
 
 function HoldingRows({
   rows,
@@ -163,10 +158,12 @@ export function ReadPanel({
   data,
   loading,
   onRefresh,
+  tokensEpoch = 0,
 }: {
   data: TreasurySnapshot | null;
   loading: boolean;
   onRefresh: () => void;
+  tokensEpoch?: number;
 }) {
   const [verifyAddr, setVerifyAddr] = useState<Address | null>(null);
   const [removeToken, setRemoveToken] = useState<{ symbol: string; address: Address } | null>(
@@ -230,77 +227,12 @@ export function ReadPanel({
         ))
       )}
 
-      <h3>PrizeVault inventory</h3>
-      {loading && !data ? (
-        <p className="empty">Loading…</p>
-      ) : !data?.prizeVault ? (
-        <p className="empty">PrizeVault address not set in addresses.ts</p>
-      ) : (
-        <>
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Asset</th>
-                <th className="num">Balance</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.prizeVault.inventory.length === 0 ? (
-                <tr>
-                  <td colSpan={2} className="muted">
-                    Empty inventory
-                  </td>
-                </tr>
-              ) : (
-                data.prizeVault.inventory.map((row) => (
-                  <tr key={row.asset}>
-                    <td>
-                      {row.symbol} <CopyAddress address={row.asset} />
-                    </td>
-                    <td className="num">{fmtToken(row.balance, tokenDecimals(row.asset))}</td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-
-          <h3>Queued sweeps</h3>
-          {data.prizeVault.sweeps.length === 0 ? (
-            <p className="empty">No pending sweeps</p>
-          ) : (
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>ID</th>
-                  <th>Asset → to</th>
-                  <th>Status</th>
-                  <th className="num">Countdown</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.prizeVault.sweeps.map((s) => (
-                  <tr key={String(s.id)}>
-                    <td className="mono">{String(s.id)}</td>
-                    <td className="mono">
-                      <CopyAddress address={s.asset} /> → <CopyAddress address={s.to} />
-                    </td>
-                    <td className={s.status === "expired" ? "danger" : s.status === "ready" ? "ok" : "warn"}>
-                      {s.status}
-                    </td>
-                    <td className="num">
-                      {s.status === "queued"
-                        ? `eta ${countdown(s.secondsToEta)}`
-                        : s.status === "ready"
-                          ? `expires ${countdown(s.secondsToExpiry)}`
-                          : "re-queue"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </>
-      )}
+      <PrizeVaultSweeps
+        vaults={data?.prizeVaults ?? []}
+        loading={loading}
+        tokensEpoch={tokensEpoch}
+        onRefresh={onRefresh}
+      />
 
       <h3>StakingVault</h3>
       {loading && !data ? (

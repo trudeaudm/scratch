@@ -6,14 +6,17 @@ import {
   http,
   parseAbiItem,
   type Address,
+  type Hash,
   type Log,
 } from "viem";
 import {
   balanceHolders,
+  configuredPrizeVaults,
   contracts,
   findTokenConfig,
   isConfigured,
   tokens,
+  type ContractEntry,
 } from "@/config/addresses";
 import {
   prizeVaultAbiTyped,
@@ -27,12 +30,23 @@ import { robinhoodChain, REFRESH_MS } from "@/config/chain";
 import { ethUsd, fetchPrices, amountUsd, unitPriceFor, type PriceMap, type PriceTag } from "@/utils/prices";
 import { fetchBlockscoutTokenList } from "@/utils/blockscout";
 
-const SWEEP_GRACE = 24 * 60 * 60;
+/** Fallback if on-chain SWEEP_* reads fail — matches PrizeVault.sol. */
+const SWEEP_DELAY_DEFAULT = 48 * 60 * 60;
+const SWEEP_GRACE_DEFAULT = 24 * 60 * 60;
 const RANDOMNESS_SWAP_GRACE = 24 * 60 * 60;
 const DAY = 24 * 60 * 60;
 
 const scratchRequestedEvent = parseAbiItem(
   "event ScratchRequested(address indexed user, uint256 indexed requestId, uint8 tier)",
+);
+const sweepQueuedEvent = parseAbiItem(
+  "event SweepQueued(uint256 indexed id, address indexed asset, address indexed to, uint64 eta)",
+);
+const sweepExecutedEvent = parseAbiItem(
+  "event SweepExecuted(uint256 indexed id, address indexed asset, address indexed to, uint256 amount)",
+);
+const sweepCancelledEvent = parseAbiItem(
+  "event SweepCancelled(uint256 indexed id)",
 );
 
 export type HoldingToken = {
@@ -65,11 +79,29 @@ export type SweepRow = {
   status: "queued" | "ready" | "expired";
   secondsToEta: number;
   secondsToExpiry: number;
+  /** Resolved symbol for cancel typed-confirm + display. */
+  symbol: string;
+};
+
+export type SweepHistoryRow = {
+  kind: "SweepQueued" | "SweepExecuted" | "SweepCancelled";
+  id: bigint;
+  asset: Address | null;
+  to: Address | null;
+  eta: number | null;
+  amount: bigint | null;
+  symbol: string | null;
+  txHash: Hash;
+  blockNumber: bigint;
 };
 
 export type PrizeVaultVitals = {
+  config: ContractEntry;
   inventory: { asset: Address; balance: bigint; symbol: string }[];
   sweeps: SweepRow[];
+  history: SweepHistoryRow[];
+  sweepDelay: number;
+  sweepGrace: number;
 };
 
 export type StakingVitals = {
@@ -126,7 +158,10 @@ export type TreasurySnapshot = {
   updatedAt: number;
   prices: PriceMap;
   holders: HolderBalances[];
+  /** Primary (v1) vault vitals — used by fund / prize tables. */
   prizeVault: PrizeVaultVitals | null;
+  /** All configured PrizeVault instances (v1 and/or v2). */
+  prizeVaults: PrizeVaultVitals[];
   staking: StakingVitals | null;
   tickets: TicketSourceVitals | null;
   vesting: VestingVitals | null;
@@ -162,77 +197,75 @@ async function loadHolders(
   const configuredTokens = tokens.filter((t) => isConfigured(t.address));
 
   return Promise.all(
-    balanceHolders.map(async (holder) => {
-      if (!isConfigured(holder.address)) {
-        return { holder, eth: 0n, ethUsd: null, tokens: [] as HoldingToken[] };
-      }
+    balanceHolders
+      .filter((holder) => isConfigured(holder.address))
+      .map(async (holder) => {
+        const eth = await pc.getBalance({ address: holder.address });
+        const byAddr = new Map<string, HoldingToken>();
 
-      const eth = await pc.getBalance({ address: holder.address });
-      const byAddr = new Map<string, HoldingToken>();
-
-      await Promise.all(
-        configuredTokens.map(async (t) => {
-          let amount = 0n;
-          let decimals = t.decimals;
-          try {
-            amount = (await pc.readContract({
+        await Promise.all(
+          configuredTokens.map(async (t) => {
+            let amount = 0n;
+            let decimals = t.decimals;
+            try {
+              amount = (await pc.readContract({
+                address: t.address,
+                abi: erc20AbiTyped,
+                functionName: "balanceOf",
+                args: [holder.address],
+              })) as bigint;
+            } catch {
+              amount = 0n;
+            }
+            // Prefer config decimals — skip per-holder on-chain decimals RPC.
+            const unit = unitPriceFor(t.address, prices);
+            let priceTag: PriceTag = "none";
+            if (t.price === "usdg") priceTag = "peg";
+            else if (unit?.tag === "dex") priceTag = "dex";
+            else if (unit) priceTag = "config";
+            byAddr.set(t.address.toLowerCase(), {
+              symbol: t.symbol,
               address: t.address,
-              abi: erc20AbiTyped,
-              functionName: "balanceOf",
-              args: [holder.address],
-            })) as bigint;
-          } catch {
-            amount = 0n;
-          }
-          // Prefer config decimals — skip per-holder on-chain decimals RPC.
-          const unit = unitPriceFor(t.address, prices);
-          let priceTag: PriceTag = "none";
-          if (t.price === "usdg") priceTag = "peg";
-          else if (unit?.tag === "dex") priceTag = "dex";
-          else if (unit) priceTag = "config";
-          byAddr.set(t.address.toLowerCase(), {
-            symbol: t.symbol,
-            address: t.address,
-            amount,
-            decimals,
-            usd: amountUsd(amount, decimals, unit),
-            verified: true,
-            kind: t.kind ?? "crypto",
-            ticker: t.ticker,
-            priceTag,
+              amount,
+              decimals,
+              usd: amountUsd(amount, decimals, unit),
+              verified: true,
+              kind: t.kind ?? "crypto",
+              ticker: t.ticker,
+              priceTag,
+            });
+          }),
+        );
+
+        for (const d of discovered.get(holder.address.toLowerCase()) ?? []) {
+          if (findTokenConfig(d.address)) continue;
+          const unit = unitPriceFor(d.address, prices);
+          byAddr.set(d.address.toLowerCase(), {
+            symbol: d.symbol,
+            address: d.address,
+            amount: d.balance,
+            decimals: d.decimals,
+            usd: amountUsd(d.balance, d.decimals, unit),
+            verified: false,
+            kind: "crypto",
+            priceTag: unit ? "dex" : "none",
           });
-        }),
-      );
+        }
 
-      for (const d of discovered.get(holder.address.toLowerCase()) ?? []) {
-        if (findTokenConfig(d.address)) continue;
-        const unit = unitPriceFor(d.address, prices);
-        byAddr.set(d.address.toLowerCase(), {
-          symbol: d.symbol,
-          address: d.address,
-          amount: d.balance,
-          decimals: d.decimals,
-          usd: amountUsd(d.balance, d.decimals, unit),
-          verified: false,
-          kind: "crypto",
-          priceTag: unit ? "dex" : "none",
-        });
-      }
+        const tokenRows = [...byAddr.values()]
+          .filter((t) => t.amount > 0n)
+          .sort((a, b) => {
+            if (a.verified !== b.verified) return a.verified ? -1 : 1;
+            return a.symbol.localeCompare(b.symbol);
+          });
 
-      const tokenRows = [...byAddr.values()]
-        .filter((t) => t.amount > 0n)
-        .sort((a, b) => {
-          if (a.verified !== b.verified) return a.verified ? -1 : 1;
-          return a.symbol.localeCompare(b.symbol);
-        });
-
-      return {
-        holder,
-        eth,
-        ethUsd: ethUsd(eth, prices),
-        tokens: tokenRows,
-      };
-    }),
+        return {
+          holder,
+          eth,
+          ethUsd: ethUsd(eth, prices),
+          tokens: tokenRows,
+        };
+      }),
   );
 }
 
@@ -282,8 +315,137 @@ async function discoverAllHoldings(): Promise<{
   return { byHolder, addresses: [...addrs] as Address[], warning };
 }
 
-async function loadPrizeVault(pc: ReturnType<typeof client>): Promise<PrizeVaultVitals | null> {
-  const addr = contracts.prizeVault.address;
+async function resolveAssetSymbol(
+  pc: ReturnType<typeof client>,
+  asset: Address,
+): Promise<string> {
+  const known = tokens.find((t) => t.address.toLowerCase() === asset.toLowerCase());
+  if (known) return known.symbol;
+  try {
+    return (await pc.readContract({
+      address: asset,
+      abi: erc20AbiTyped,
+      functionName: "symbol",
+    })) as string;
+  } catch {
+    return asset.slice(0, 6) + "…";
+  }
+}
+
+async function loadSweepHistory(
+  pc: ReturnType<typeof client>,
+  addr: Address,
+): Promise<SweepHistoryRow[]> {
+  try {
+    const latest = await pc.getBlockNumber();
+    // Alchemy caps eth_getLogs at 10k blocks.
+    const lookback = 9_000n;
+    const fromBlock = latest > lookback ? latest - lookback : 0n;
+    const [queued, executed, cancelled] = await Promise.all([
+      pc.getLogs({ address: addr, event: sweepQueuedEvent, fromBlock, toBlock: latest }) as Promise<
+        Log[]
+      >,
+      pc.getLogs({
+        address: addr,
+        event: sweepExecutedEvent,
+        fromBlock,
+        toBlock: latest,
+      }) as Promise<Log[]>,
+      pc.getLogs({
+        address: addr,
+        event: sweepCancelledEvent,
+        fromBlock,
+        toBlock: latest,
+      }) as Promise<Log[]>,
+    ]);
+
+    type Raw = {
+      kind: SweepHistoryRow["kind"];
+      id: bigint;
+      asset: Address | null;
+      to: Address | null;
+      eta: number | null;
+      amount: bigint | null;
+      txHash: Hash;
+      blockNumber: bigint;
+    };
+    const rows: Raw[] = [];
+
+    for (const l of queued) {
+      const args = (l as { args?: { id?: bigint; asset?: Address; to?: Address; eta?: bigint | number } })
+        .args;
+      if (args?.id === undefined || !l.transactionHash || l.blockNumber === null) continue;
+      rows.push({
+        kind: "SweepQueued",
+        id: args.id,
+        asset: args.asset ?? null,
+        to: args.to ?? null,
+        eta: args.eta !== undefined ? Number(args.eta) : null,
+        amount: null,
+        txHash: l.transactionHash,
+        blockNumber: l.blockNumber,
+      });
+    }
+    for (const l of executed) {
+      const args = (
+        l as { args?: { id?: bigint; asset?: Address; to?: Address; amount?: bigint } }
+      ).args;
+      if (args?.id === undefined || !l.transactionHash || l.blockNumber === null) continue;
+      rows.push({
+        kind: "SweepExecuted",
+        id: args.id,
+        asset: args.asset ?? null,
+        to: args.to ?? null,
+        eta: null,
+        amount: args.amount ?? null,
+        txHash: l.transactionHash,
+        blockNumber: l.blockNumber,
+      });
+    }
+    for (const l of cancelled) {
+      const args = (l as { args?: { id?: bigint } }).args;
+      if (args?.id === undefined || !l.transactionHash || l.blockNumber === null) continue;
+      rows.push({
+        kind: "SweepCancelled",
+        id: args.id,
+        asset: null,
+        to: null,
+        eta: null,
+        amount: null,
+        txHash: l.transactionHash,
+        blockNumber: l.blockNumber,
+      });
+    }
+
+    rows.sort((a, b) => {
+      if (a.blockNumber === b.blockNumber) return Number(b.id - a.id);
+      return a.blockNumber > b.blockNumber ? -1 : 1;
+    });
+
+    const symbolCache = new Map<string, string>();
+    const out: SweepHistoryRow[] = [];
+    for (const r of rows) {
+      let symbol: string | null = null;
+      if (r.asset) {
+        const key = r.asset.toLowerCase();
+        if (!symbolCache.has(key)) {
+          symbolCache.set(key, await resolveAssetSymbol(pc, r.asset));
+        }
+        symbol = symbolCache.get(key)!;
+      }
+      out.push({ ...r, symbol });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+async function loadPrizeVault(
+  pc: ReturnType<typeof client>,
+  config: ContractEntry,
+): Promise<PrizeVaultVitals | null> {
+  const addr = config.address;
   if (!isConfigured(addr)) return null;
 
   const [assets, balances] = (await pc.readContract({
@@ -295,21 +457,29 @@ async function loadPrizeVault(pc: ReturnType<typeof client>): Promise<PrizeVault
   const inventory = [];
   for (let i = 0; i < assets.length; i++) {
     const asset = assets[i];
-    let symbol = asset.slice(0, 6) + "…";
-    const known = tokens.find((t) => t.address.toLowerCase() === asset.toLowerCase());
-    if (known) symbol = known.symbol;
-    else {
-      try {
-        symbol = (await pc.readContract({
-          address: asset,
-          abi: erc20AbiTyped,
-          functionName: "symbol",
-        })) as string;
-      } catch {
-        /* keep short */
-      }
-    }
+    const symbol = await resolveAssetSymbol(pc, asset);
     inventory.push({ asset, balance: balances[i], symbol });
+  }
+
+  let sweepDelay = SWEEP_DELAY_DEFAULT;
+  let sweepGrace = SWEEP_GRACE_DEFAULT;
+  try {
+    const [d, g] = await Promise.all([
+      pc.readContract({
+        address: addr,
+        abi: prizeVaultAbiTyped,
+        functionName: "SWEEP_DELAY",
+      }) as Promise<bigint | number>,
+      pc.readContract({
+        address: addr,
+        abi: prizeVaultAbiTyped,
+        functionName: "SWEEP_GRACE",
+      }) as Promise<bigint | number>,
+    ]);
+    sweepDelay = Number(d);
+    sweepGrace = Number(g);
+  } catch {
+    /* keep defaults */
   }
 
   const sweepCount = (await pc.readContract({
@@ -330,10 +500,11 @@ async function loadPrizeVault(pc: ReturnType<typeof client>): Promise<PrizeVault
     const [asset, to, etaRaw, pending] = row;
     if (!pending) continue;
     const eta = Number(etaRaw);
-    const expiry = eta + SWEEP_GRACE;
+    const expiry = eta + sweepGrace;
     let status: SweepRow["status"] = "queued";
     if (t >= expiry) status = "expired";
     else if (t >= eta) status = "ready";
+    const symbol = await resolveAssetSymbol(pc, asset);
     sweeps.push({
       id,
       asset,
@@ -343,10 +514,20 @@ async function loadPrizeVault(pc: ReturnType<typeof client>): Promise<PrizeVault
       status,
       secondsToEta: Math.max(0, eta - t),
       secondsToExpiry: Math.max(0, expiry - t),
+      symbol,
     });
   }
 
-  return { inventory, sweeps };
+  const history = await loadSweepHistory(pc, addr);
+  return { config, inventory, sweeps, history, sweepDelay, sweepGrace };
+}
+
+async function loadAllPrizeVaults(
+  pc: ReturnType<typeof client>,
+): Promise<PrizeVaultVitals[]> {
+  const configs = configuredPrizeVaults();
+  const results = await Promise.all(configs.map((c) => loadPrizeVault(pc, c)));
+  return results.filter((v): v is PrizeVaultVitals => v !== null);
 }
 
 async function loadStaking(pc: ReturnType<typeof client>): Promise<StakingVitals | null> {
@@ -657,10 +838,10 @@ export function useTreasuryData() {
         const pc = client();
         const discovery = await discoverAllHoldings();
         const prices = await fetchPrices(discovery.addresses);
-        const [holders, prizeVault, staking, tickets, vesting, game, prizeTables, vaultAssets] =
+        const [holders, prizeVaults, staking, tickets, vesting, game, prizeTables, vaultAssets] =
           await Promise.all([
             loadHolders(pc, prices, discovery.byHolder),
-            loadPrizeVault(pc),
+            loadAllPrizeVaults(pc),
             loadStaking(pc),
             loadTickets(pc),
             loadVesting(pc),
@@ -668,11 +849,16 @@ export function useTreasuryData() {
             loadPrizeTables(pc),
             loadVaultAssets(pc),
           ]);
+        const prizeVault =
+          prizeVaults.find((v) => v.config.key === contracts.prizeVault.key) ??
+          prizeVaults[0] ??
+          null;
         setData({
           updatedAt: Date.now(),
           prices,
           holders,
           prizeVault,
+          prizeVaults,
           staking,
           tickets,
           vesting,
@@ -694,6 +880,7 @@ export function useTreasuryData() {
           },
           holders: prev?.holders ?? [],
           prizeVault: prev?.prizeVault ?? null,
+          prizeVaults: prev?.prizeVaults ?? [],
           staking: prev?.staking ?? null,
           tickets: prev?.tickets ?? null,
           vesting: prev?.vesting ?? null,

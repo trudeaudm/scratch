@@ -34,7 +34,12 @@ export default function HomePage() {
       </header>
 
       <div className="grid grid-2">
-        <ReadPanel data={data} loading={loading} onRefresh={() => void refresh()} />
+        <ReadPanel
+          data={data}
+          loading={loading}
+          onRefresh={() => void refresh()}
+          tokensEpoch={tokensEpoch}
+        />
         <WritePanel tickets={data?.tickets ?? null} tokensEpoch={tokensEpoch} />
       </div>
 

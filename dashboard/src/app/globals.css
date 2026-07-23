@@ -370,13 +370,14 @@ select option {
   font-size: 1.1rem;
 }
 
-.summary {
-  background: var(--bg);
-  border: 1px dashed var(--border);
-  border-radius: 8px;
-  padding: 12px;
-  margin: 10px 0;
-  font-size: 0.9rem;
+.vault-sweep-block {
+  margin-bottom: 20px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.vault-sweep-block:last-of-type {
+  border-bottom: none;
 }
 
 .summary strong {

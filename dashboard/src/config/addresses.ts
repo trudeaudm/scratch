@@ -97,10 +97,20 @@ export const dexPairs = {
 };
 
 export const contracts = {
+  /** Production Deploy2 PrizeVault (v1 stack). */
   prizeVault: {
     key: "prizeVault",
-    label: "PrizeVault",
+    label: "PrizeVault (v1)",
     address: "0x86Ade8b30D481bBd9D2897d20931b107e776Ba52",
+  } satisfies ContractEntry,
+  /**
+   * Fresh PrizeVault from Deploy3 (v2 stack). Zero until cutover — fill after
+   * Deploy3; never commit rehearsal addresses as production.
+   */
+  prizeVaultV2: {
+    key: "prizeVaultV2",
+    label: "PrizeVault (v2)",
+    address: Z,
   } satisfies ContractEntry,
   stakingVault: {
     key: "stakingVault",
@@ -135,9 +145,21 @@ export const contracts = {
   } satisfies ContractEntry,
 } as const;
 
-/** Labeled destinations for the send panel (fat-finger protection — no free text). */
+/** v1 + v2 PrizeVault entries (configured or not). Same ABI; separate instances. */
+export const prizeVaultConfigs: ContractEntry[] = [
+  contracts.prizeVault,
+  contracts.prizeVaultV2,
+];
+
+/** Configured PrizeVault instances only (v1 and/or v2 once Deploy3 is filled). */
+export function configuredPrizeVaults(): ContractEntry[] {
+  return prizeVaultConfigs.filter((v) => isConfigured(v.address));
+}
+
+/** Labeled destinations for send / sweep (fat-finger protection — no free text). */
 export const sendTargets: ContractEntry[] = [
   contracts.prizeVault,
+  contracts.prizeVaultV2,
   contracts.stakingVault,
   contracts.standardTicketSource,
   contracts.scratchGame,
@@ -148,6 +170,7 @@ export const sendTargets: ContractEntry[] = [
 /** Holders whose balances are shown in the read panel. */
 export const balanceHolders: ContractEntry[] = [
   contracts.prizeVault,
+  contracts.prizeVaultV2,
   contracts.stakingVault,
   contracts.standardTicketSource,
   contracts.vestingWallet,
