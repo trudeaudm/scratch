@@ -1200,11 +1200,33 @@ async function drillV5(env, state) {
     const token = new Contract(state.addresses.token, ERC20_ABI, user);
     const staking = new Contract(state.addresses.stakingVault, STAKING_ABI, user);
 
-    // Fresh stake after V4 exit
-    await sendAndLog(id, withGasBuffer(token, "approve", [state.addresses.stakingVault, USER_STAKE]), "approve");
-    await sendAndLog(id, withGasBuffer(staking, "deposit", [USER_STAKE, TIER_NORMAL]), "deposit NORMAL");
-    await sleep(20_000);
-    await sendAndLog(id, withGasBuffer(staking, "deposit", [1n, TIER_NORMAL]), "settle");
+    // Fresh stake after V4 exit (idempotent if already deposited this attempt)
+    let u = await staking.users(user.address);
+    if (u.staked < USER_STAKE) {
+      await sendAndLog(
+        id,
+        withGasBuffer(token, "approve", [state.addresses.stakingVault, USER_STAKE]),
+        "approve",
+      );
+      await sendAndLog(
+        id,
+        withGasBuffer(staking, "deposit", [USER_STAKE, TIER_NORMAL]),
+        "deposit NORMAL",
+      );
+      await sleep(20_000);
+    } else {
+      logDrill(id, `already staked ${u.staked} — skip deposit`);
+    }
+    await sendAndLog(
+      id,
+      withGasBuffer(token, "approve", [state.addresses.stakingVault, 1n]),
+      "approve settle dust",
+    );
+    await sendAndLog(
+      id,
+      withGasBuffer(staking, "deposit", [1n, Number((await staking.users(user.address)).tier)]),
+      "settle",
+    );
 
     const ticketsBefore = await staking.ticketsOf(user.address);
     const u0 = await staking.users(user.address);
