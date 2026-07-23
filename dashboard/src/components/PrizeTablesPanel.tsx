@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState, type DragEvent } from "react";
 import {
   useAccount,
   useConnect,
@@ -16,7 +16,8 @@ import {
 } from "@/config/addresses";
 import { scratchGameAbiTyped } from "@/config/abis";
 import { injected } from "@/utils/injected";
-import { fmtToken, fmtUsd, shortAddr } from "@/utils/format";
+import { fmtToken, fmtUsd } from "@/utils/format";
+import { CopyAddress } from "@/components/CopyAddress";
 import {
   TIER_LABELS,
   TIER_PREMIUM,
@@ -26,10 +27,14 @@ import {
   blockingIssues,
   diffTables,
   editorToPrizeRows,
+  ensureTerminalNoWin,
   formatOneInN,
   formatProbability,
+  isNoWinAsset,
   newEditorRow,
+  normalizeAsset,
   prizeRowsToEditor,
+  reorderEditorRows,
   tableEvUsd,
   validatePrizeTable,
   type EditorRow,
@@ -99,7 +104,7 @@ function RowTable({
             );
             const decimals = token?.decimals ?? 18;
             let payoutLabel: string;
-            if (a.row.asset === zeroAddress) {
+            if (isNoWinAsset(a.row.asset)) {
               payoutLabel = "no-win";
             } else if (a.row.isBpsOfPool) {
               payoutLabel = `${a.row.amountOrBps.toString()} bps → ${fmtToken(a.payoutAmount, decimals)} now`;
@@ -111,9 +116,7 @@ function RowTable({
                 <td className="mono">{a.index}</td>
                 <td>
                   <strong>{symbol}</strong>{" "}
-                  {a.row.asset !== zeroAddress && (
-                    <span className="mono muted">{shortAddr(a.row.asset)}</span>
-                  )}
+                  {!isNoWinAsset(a.row.asset) && <CopyAddress address={a.row.asset} />}
                 </td>
                 <td>
                   {payoutLabel}
@@ -143,12 +146,14 @@ export function PrizeTablesPanel({
   vaultAssets,
   prices,
   pendingCount,
+  loading,
   onRefresh,
 }: {
   prizeTables: PrizeTableSnapshot[] | null;
   vaultAssets: VaultAssetMeta[];
   prices: PriceMap;
   pendingCount: number;
+  loading?: boolean;
   onRefresh: () => void;
 }) {
   const [tier, setTier] = useState<TierId>(TIER_STANDARD);
@@ -157,6 +162,9 @@ export function PrizeTablesPanel({
   const [editorRows, setEditorRows] = useState<EditorRow[]>([]);
   const [bigPayoutAck, setBigPayoutAck] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
+  const dragIdRef = useRef<string | null>(null);
 
   const { address, isConnected } = useAccount();
   const { connect, isPending: connecting } = useConnect();
@@ -184,10 +192,12 @@ export function PrizeTablesPanel({
     setErr(null);
     setBigPayoutAck(false);
     setConfirming(false);
+    setDragId(null);
+    setDragOverId(null);
     setEditorRows(
       current.length > 0
         ? prizeRowsToEditor(current)
-        : [
+        : ensureTerminalNoWin([
             newEditorRow({ probabilityPercent: "10.000", amountInput: "1" }),
             newEditorRow({
               asset: zeroAddress,
@@ -195,21 +205,76 @@ export function PrizeTablesPanel({
               amountInput: "0",
               isBpsOfPool: false,
             }),
-          ],
+          ]),
     );
     setEditing(true);
   }
 
   function updateRow(id: string, patch: Partial<EditorRow>) {
-    setEditorRows((rows) => rows.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+    setEditorRows((rows) =>
+      ensureTerminalNoWin(
+        rows.map((r) => {
+          if (r.id !== id) return r;
+          const next = { ...r, ...patch };
+          if (patch.asset !== undefined) {
+            next.asset = normalizeAsset(patch.asset);
+            if (isNoWinAsset(next.asset)) {
+              next.isBpsOfPool = false;
+              next.amountInput = "0";
+            }
+          }
+          return next;
+        }),
+      ),
+    );
   }
 
   function removeRow(id: string) {
-    setEditorRows((rows) => rows.filter((r) => r.id !== id));
+    setEditorRows((rows) => {
+      const target = rows.find((r) => r.id === id);
+      if (target && isNoWinAsset(target.asset)) return rows; // terminal stays
+      return ensureTerminalNoWin(rows.filter((r) => r.id !== id));
+    });
   }
 
   function addRow() {
-    setEditorRows((rows) => [...rows, newEditorRow({ probabilityPercent: "0.001" })]);
+    setEditorRows((rows) => {
+      const prizes = rows.filter((r) => !isNoWinAsset(r.asset));
+      const terminal = rows.find((r) => isNoWinAsset(r.asset));
+      return ensureTerminalNoWin([
+        ...prizes,
+        newEditorRow({ probabilityPercent: "0.001" }),
+        ...(terminal ? [terminal] : []),
+      ]);
+    });
+  }
+
+  function onRowDragStart(id: string, e: DragEvent) {
+    dragIdRef.current = id;
+    setDragId(id);
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", id);
+  }
+
+  function onRowDragOver(id: string, e: DragEvent) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    if (dragOverId !== id) setDragOverId(id);
+  }
+
+  function onRowDrop(id: string, e: DragEvent) {
+    e.preventDefault();
+    const from = dragIdRef.current || e.dataTransfer.getData("text/plain");
+    if (from) setEditorRows((rows) => reorderEditorRows(rows, from, id));
+    dragIdRef.current = null;
+    setDragId(null);
+    setDragOverId(null);
+  }
+
+  function onRowDragEnd() {
+    dragIdRef.current = null;
+    setDragId(null);
+    setDragOverId(null);
   }
 
   function goConfirm() {
@@ -311,7 +376,9 @@ export function PrizeTablesPanel({
       )}
 
       {!prizeTables ? (
-        <p className="empty">ScratchGame address not set in addresses.ts</p>
+        <p className="empty">
+          {loading ? "Loading prize tables…" : "ScratchGame address not set in addresses.ts"}
+        </p>
       ) : !editing ? (
         <>
           <RowTable rows={current} prices={prices} vaultAssets={vaultAssets} />
@@ -330,9 +397,7 @@ export function PrizeTablesPanel({
                 Edit {TIER_LABELS[tier]}
               </button>
             )}
-            {isConnected && address && (
-              <span className="mono muted">{shortAddr(address)}</span>
-            )}
+            {isConnected && address && <CopyAddress address={address} />}
           </div>
         </>
       ) : confirming && diff ? (
@@ -371,7 +436,7 @@ export function PrizeTablesPanel({
                   );
                   const dec = token?.decimals ?? 18;
                   const pay =
-                    r.asset === zeroAddress
+                    isNoWinAsset(r.asset)
                       ? "no-win"
                       : r.isBpsOfPool
                         ? `${r.amountOrBps} bps`
@@ -427,8 +492,8 @@ export function PrizeTablesPanel({
         <>
           <h3>Edit {TIER_LABELS[tier]}</h3>
           <p className="muted" style={{ marginTop: 0 }}>
-            Enter human probabilities (must sum to <span className="mono">100.000%</span>). UI
-            computes <span className="mono">cumOdds</span> (up to 4 decimal places). Current sum:{" "}
+            Drag the handle to reorder prize rows. NO-WIN stays terminal (last). Probabilities must
+            sum to <span className="mono">100.000%</span>. Current sum:{" "}
             <span className={Math.abs(probSum - 100) < 0.0005 ? "ok" : "danger mono"}>
               {probSum.toFixed(3)}%
             </span>
@@ -440,76 +505,121 @@ export function PrizeTablesPanel({
             </p>
           ))}
 
-          {editorRows.map((r, i) => (
-            <div key={r.id} className="card-block editor-row">
-              <div className="row" style={{ marginBottom: 0 }}>
-                <div className="field" style={{ maxWidth: 60 }}>
-                  <label>#</label>
-                  <div className="mono">{i}</div>
+          {editorRows.map((r, i) => {
+            const noWin = isNoWinAsset(r.asset);
+            const assetValue = normalizeAsset(r.asset);
+            return (
+              <div
+                key={r.id}
+                className={[
+                  "card-block editor-row",
+                  noWin ? "editor-row-terminal" : "",
+                  dragId === r.id ? "editor-row-dragging" : "",
+                  dragOverId === r.id && dragId && dragId !== r.id ? "editor-row-drop" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+                onDragOver={(e) => onRowDragOver(r.id, e)}
+                onDrop={(e) => onRowDrop(r.id, e)}
+              >
+                <div className="row" style={{ marginBottom: 0, alignItems: "flex-end" }}>
+                  <div className="field" style={{ maxWidth: 36, marginBottom: 0 }}>
+                    <label className="sr-only">Drag</label>
+                    {noWin ? (
+                      <div className="drag-handle drag-handle-locked" title="NO-WIN is always last">
+                        •
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        className="drag-handle"
+                        title="Drag to reorder"
+                        draggable
+                        onDragStart={(e) => onRowDragStart(r.id, e)}
+                        onDragEnd={onRowDragEnd}
+                        aria-label={`Drag row ${i}`}
+                      >
+                        ⋮⋮
+                      </button>
+                    )}
+                  </div>
+                  <div className="field" style={{ maxWidth: 48 }}>
+                    <label>#</label>
+                    <div className="mono">{i}</div>
+                  </div>
+                  <div className="field">
+                    <label>Asset</label>
+                    {noWin ? (
+                      <div className="mono" style={{ padding: "8px 0" }}>
+                        NO-WIN (terminal)
+                      </div>
+                    ) : (
+                      <select
+                        value={assetValue}
+                        onChange={(e) =>
+                          updateRow(r.id, {
+                            asset: e.target.value as Address,
+                          })
+                        }
+                      >
+                        {configuredAssets.map((t) => (
+                          <option key={t.address} value={normalizeAsset(t.address)}>
+                            {t.symbol}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+                  <div className="field" style={{ maxWidth: 100 }}>
+                    <label>bps?</label>
+                    <select
+                      value={r.isBpsOfPool ? "1" : "0"}
+                      disabled={noWin}
+                      onChange={(e) =>
+                        updateRow(r.id, { isBpsOfPool: e.target.value === "1" })
+                      }
+                    >
+                      <option value="0">Fixed</option>
+                      <option value="1">bps of pool</option>
+                    </select>
+                  </div>
+                  <div className="field">
+                    <label>{r.isBpsOfPool ? "bps (0–10000)" : "Amount"}</label>
+                    <input
+                      className="mono"
+                      value={noWin ? "—" : r.amountInput}
+                      disabled={noWin}
+                      onChange={(e) => updateRow(r.id, { amountInput: e.target.value })}
+                    />
+                  </div>
+                  <div className="field" style={{ maxWidth: 120 }}>
+                    <label>Probability %</label>
+                    <input
+                      className="mono"
+                      value={r.probabilityPercent}
+                      onChange={(e) =>
+                        updateRow(r.id, { probabilityPercent: e.target.value })
+                      }
+                      placeholder="10.000"
+                    />
+                  </div>
+                  {!noWin ? (
+                    <button type="button" className="btn ghost" onClick={() => removeRow(r.id)}>
+                      Remove
+                    </button>
+                  ) : (
+                    <span className="muted" style={{ fontSize: "0.75rem", alignSelf: "center" }}>
+                      pinned last
+                    </span>
+                  )}
                 </div>
-                <div className="field">
-                  <label>Asset</label>
-                  <select
-                    value={r.asset}
-                    onChange={(e) =>
-                      updateRow(r.id, {
-                        asset: e.target.value as Address,
-                        isBpsOfPool:
-                          e.target.value === zeroAddress ? false : r.isBpsOfPool,
-                      })
-                    }
-                  >
-                    <option value={zeroAddress}>NO-WIN (terminal)</option>
-                    {configuredAssets.map((t) => (
-                      <option key={t.address} value={t.address}>
-                        {t.symbol}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="field" style={{ maxWidth: 100 }}>
-                  <label>bps?</label>
-                  <select
-                    value={r.isBpsOfPool ? "1" : "0"}
-                    disabled={r.asset === zeroAddress}
-                    onChange={(e) =>
-                      updateRow(r.id, { isBpsOfPool: e.target.value === "1" })
-                    }
-                  >
-                    <option value="0">Fixed</option>
-                    <option value="1">bps of pool</option>
-                  </select>
-                </div>
-                <div className="field">
-                  <label>{r.isBpsOfPool ? "bps (0–10000)" : "Amount"}</label>
-                  <input
-                    className="mono"
-                    value={r.amountInput}
-                    disabled={r.asset === zeroAddress}
-                    onChange={(e) => updateRow(r.id, { amountInput: e.target.value })}
-                  />
-                </div>
-                <div className="field" style={{ maxWidth: 120 }}>
-                  <label>Probability %</label>
-                  <input
-                    className="mono"
-                    value={r.probabilityPercent}
-                    onChange={(e) =>
-                      updateRow(r.id, { probabilityPercent: e.target.value })
-                    }
-                    placeholder="10.000"
-                  />
-                </div>
-                <button type="button" className="btn ghost" onClick={() => removeRow(r.id)}>
-                  Remove
-                </button>
               </div>
-            </div>
-          ))}
+            );
+          })}
 
           <div className="row">
             <button type="button" className="btn ghost" onClick={addRow}>
-              Add row
+              Add prize row
             </button>
             <button
               type="button"

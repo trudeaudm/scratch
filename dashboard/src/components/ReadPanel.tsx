@@ -8,10 +8,11 @@ import {
   isConfigured,
   tokens,
 } from "@/config/addresses";
-import { fmtToken, fmtUsd, countdown, shortAddr } from "@/utils/format";
+import { fmtToken, fmtUsd, countdown } from "@/utils/format";
 import { priceTagLabel } from "@/utils/prices";
 import type { HoldingToken, TreasurySnapshot } from "@/hooks/useTreasuryData";
 import { RemoveVerifiedModal, VerifyTokenModal } from "@/components/VerifyTokenModal";
+import { CopyAddress } from "@/components/CopyAddress";
 
 function tokenDecimals(asset: string): number {
   const t = tokens.find((x) => x.address.toLowerCase() === asset.toLowerCase());
@@ -44,8 +45,8 @@ function HoldingRows({
                 unverified
               </span>
             )}
-            <div className="mono muted" style={{ fontSize: "0.75rem" }}>
-              {shortAddr(t.address)}
+            <div style={{ fontSize: "0.75rem" }}>
+              <CopyAddress address={t.address} />
             </div>
             <div className="token-actions">
               {!t.verified ? (
@@ -101,14 +102,19 @@ function HolderCard({
       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
         <strong>{h.holder.label}</strong>
         {isConfigured(h.holder.address) ? (
-          <a
-            href={explorerAddress(h.holder.address)}
-            target="_blank"
-            rel="noreferrer"
-            className="mono muted"
-          >
-            {shortAddr(h.holder.address)}
-          </a>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+            <CopyAddress address={h.holder.address} />
+            <a
+              href={explorerAddress(h.holder.address)}
+              target="_blank"
+              rel="noreferrer"
+              className="muted"
+              title="Open in Blockscout"
+              style={{ fontSize: "0.8rem" }}
+            >
+              ↗
+            </a>
+          </span>
         ) : (
           <span className="muted">not configured</span>
         )}
@@ -209,7 +215,9 @@ export function ReadPanel({
       </p>
 
       <h3>Balances</h3>
-      {!data?.holders.length ? (
+      {loading && !data ? (
+        <p className="empty">Loading balances…</p>
+      ) : !data?.holders.length ? (
         <p className="empty">Waiting for first fetch…</p>
       ) : (
         data.holders.map((h) => (
@@ -223,7 +231,9 @@ export function ReadPanel({
       )}
 
       <h3>PrizeVault inventory</h3>
-      {!data?.prizeVault ? (
+      {loading && !data ? (
+        <p className="empty">Loading…</p>
+      ) : !data?.prizeVault ? (
         <p className="empty">PrizeVault address not set in addresses.ts</p>
       ) : (
         <>
@@ -245,8 +255,7 @@ export function ReadPanel({
                 data.prizeVault.inventory.map((row) => (
                   <tr key={row.asset}>
                     <td>
-                      {row.symbol}{" "}
-                      <span className="mono muted">{shortAddr(row.asset)}</span>
+                      {row.symbol} <CopyAddress address={row.asset} />
                     </td>
                     <td className="num">{fmtToken(row.balance, tokenDecimals(row.asset))}</td>
                   </tr>
@@ -273,7 +282,7 @@ export function ReadPanel({
                   <tr key={String(s.id)}>
                     <td className="mono">{String(s.id)}</td>
                     <td className="mono">
-                      {shortAddr(s.asset)} → {shortAddr(s.to)}
+                      <CopyAddress address={s.asset} /> → <CopyAddress address={s.to} />
                     </td>
                     <td className={s.status === "expired" ? "danger" : s.status === "ready" ? "ok" : "warn"}>
                       {s.status}
@@ -294,7 +303,9 @@ export function ReadPanel({
       )}
 
       <h3>StakingVault</h3>
-      {!data?.staking ? (
+      {loading && !data ? (
+        <p className="empty">Loading…</p>
+      ) : !data?.staking ? (
         <p className="empty">StakingVault address not set</p>
       ) : (
         <dl className="kv">
@@ -308,7 +319,9 @@ export function ReadPanel({
       )}
 
       <h3>StandardTicketSource</h3>
-      {!data?.tickets ? (
+      {loading && !data ? (
+        <p className="empty">Loading…</p>
+      ) : !data?.tickets ? (
         <p className="empty">StandardTicketSource address not set</p>
       ) : (
         <dl className="kv">
@@ -324,7 +337,9 @@ export function ReadPanel({
       )}
 
       <h3>Ops VestingWallet</h3>
-      {!data?.vesting ? (
+      {loading && !data ? (
+        <p className="empty">Loading…</p>
+      ) : !data?.vesting ? (
         <p className="empty">
           VestingWallet / SCRATCH not set
           {isConfigured(contracts.vestingWallet.address) ? "" : " (address zero)"}
@@ -351,14 +366,23 @@ export function ReadPanel({
       )}
 
       <h3>ScratchGame</h3>
-      {!data?.game ? (
+      {loading && !data ? (
+        <p className="empty">Loading…</p>
+      ) : !data?.game ? (
         <p className="empty">ScratchGame address not set</p>
       ) : (
         <dl className="kv">
           <dt>randomness provider</dt>
           <dd>
-            <a href={explorerAddress(data.game.randomness)} target="_blank" rel="noreferrer">
-              {shortAddr(data.game.randomness)}
+            <CopyAddress address={data.game.randomness} />{" "}
+            <a
+              href={explorerAddress(data.game.randomness)}
+              target="_blank"
+              rel="noreferrer"
+              className="muted"
+              title="Open in Blockscout"
+            >
+              ↗
             </a>
           </dd>
           <dt>pending swap</dt>
@@ -367,7 +391,8 @@ export function ReadPanel({
               "—"
             ) : (
               <span className={data.game.swapStatus === "expired" ? "danger" : "warn"}>
-                {shortAddr(data.game.pendingRandomness)} ({data.game.swapStatus}
+                <CopyAddress address={data.game.pendingRandomness} className="mono" /> (
+                {data.game.swapStatus}
                 {data.game.swapStatus === "queued"
                   ? ` · eta ${countdown(data.game.secondsToEta)}`
                   : data.game.swapStatus === "ready"

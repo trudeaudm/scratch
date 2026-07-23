@@ -52,6 +52,7 @@ export default function HomePage() {
           }
         }
         pendingCount={data?.game?.pendingCount ?? 0}
+        loading={loading && !data}
         onRefresh={() => void refresh()}
       />
 

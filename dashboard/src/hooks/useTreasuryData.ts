@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   createPublicClient,
   http,
@@ -141,7 +141,10 @@ export type TreasurySnapshot = {
 function client() {
   return createPublicClient({
     chain: robinhoodChain,
-    transport: http(robinhoodChain.rpcUrls.default.http[0]),
+    transport: http(robinhoodChain.rpcUrls.default.http[0], {
+      timeout: 20_000,
+      retryCount: 1,
+    }),
   });
 }
 
@@ -157,90 +160,80 @@ async function loadHolders(
   discovered: Map<string, DiscoveredBag[]>,
 ): Promise<HolderBalances[]> {
   const configuredTokens = tokens.filter((t) => isConfigured(t.address));
-  const holders: HolderBalances[] = [];
 
-  for (const holder of balanceHolders) {
-    if (!isConfigured(holder.address)) {
-      holders.push({ holder, eth: 0n, ethUsd: null, tokens: [] });
-      continue;
-    }
-
-    const eth = await pc.getBalance({ address: holder.address });
-    const byAddr = new Map<string, HoldingToken>();
-
-    for (const t of configuredTokens) {
-      let amount = 0n;
-      let decimals = t.decimals;
-      try {
-        amount = (await pc.readContract({
-          address: t.address,
-          abi: erc20AbiTyped,
-          functionName: "balanceOf",
-          args: [holder.address],
-        })) as bigint;
-      } catch {
-        amount = 0n;
+  return Promise.all(
+    balanceHolders.map(async (holder) => {
+      if (!isConfigured(holder.address)) {
+        return { holder, eth: 0n, ethUsd: null, tokens: [] as HoldingToken[] };
       }
-      try {
-        const onChain = (await pc.readContract({
-          address: t.address,
-          abi: erc20AbiTyped,
-          functionName: "decimals",
-        })) as number | bigint;
-        const n = Number(onChain);
-        if (Number.isInteger(n) && n >= 0 && n <= 36) decimals = n;
-      } catch {
-        /* keep config decimals */
+
+      const eth = await pc.getBalance({ address: holder.address });
+      const byAddr = new Map<string, HoldingToken>();
+
+      await Promise.all(
+        configuredTokens.map(async (t) => {
+          let amount = 0n;
+          let decimals = t.decimals;
+          try {
+            amount = (await pc.readContract({
+              address: t.address,
+              abi: erc20AbiTyped,
+              functionName: "balanceOf",
+              args: [holder.address],
+            })) as bigint;
+          } catch {
+            amount = 0n;
+          }
+          // Prefer config decimals — skip per-holder on-chain decimals RPC.
+          const unit = unitPriceFor(t.address, prices);
+          let priceTag: PriceTag = "none";
+          if (t.price === "usdg") priceTag = "peg";
+          else if (unit?.tag === "dex") priceTag = "dex";
+          else if (unit) priceTag = "config";
+          byAddr.set(t.address.toLowerCase(), {
+            symbol: t.symbol,
+            address: t.address,
+            amount,
+            decimals,
+            usd: amountUsd(amount, decimals, unit),
+            verified: true,
+            kind: t.kind ?? "crypto",
+            ticker: t.ticker,
+            priceTag,
+          });
+        }),
+      );
+
+      for (const d of discovered.get(holder.address.toLowerCase()) ?? []) {
+        if (findTokenConfig(d.address)) continue;
+        const unit = unitPriceFor(d.address, prices);
+        byAddr.set(d.address.toLowerCase(), {
+          symbol: d.symbol,
+          address: d.address,
+          amount: d.balance,
+          decimals: d.decimals,
+          usd: amountUsd(d.balance, d.decimals, unit),
+          verified: false,
+          kind: "crypto",
+          priceTag: unit ? "dex" : "none",
+        });
       }
-      const unit = unitPriceFor(t.address, prices);
-      let priceTag: PriceTag = "none";
-      if (t.price === "usdg") priceTag = "peg";
-      else if (unit?.tag === "dex") priceTag = "dex";
-      else if (unit) priceTag = "config";
-      byAddr.set(t.address.toLowerCase(), {
-        symbol: t.symbol,
-        address: t.address,
-        amount,
-        decimals,
-        usd: amountUsd(amount, decimals, unit),
-        verified: true,
-        kind: t.kind ?? "crypto",
-        ticker: t.ticker,
-        priceTag,
-      });
-    }
 
-    for (const d of discovered.get(holder.address.toLowerCase()) ?? []) {
-      if (findTokenConfig(d.address)) continue;
-      const unit = unitPriceFor(d.address, prices);
-      byAddr.set(d.address.toLowerCase(), {
-        symbol: d.symbol,
-        address: d.address,
-        amount: d.balance,
-        decimals: d.decimals,
-        usd: amountUsd(d.balance, d.decimals, unit),
-        verified: false,
-        kind: "crypto",
-        priceTag: unit ? "dex" : "none",
-      });
-    }
+      const tokenRows = [...byAddr.values()]
+        .filter((t) => t.amount > 0n)
+        .sort((a, b) => {
+          if (a.verified !== b.verified) return a.verified ? -1 : 1;
+          return a.symbol.localeCompare(b.symbol);
+        });
 
-    const tokenRows = [...byAddr.values()]
-      .filter((t) => t.amount > 0n)
-      .sort((a, b) => {
-        if (a.verified !== b.verified) return a.verified ? -1 : 1;
-        return a.symbol.localeCompare(b.symbol);
-      });
-
-    holders.push({
-      holder,
-      eth,
-      ethUsd: ethUsd(eth, prices),
-      tokens: tokenRows,
-    });
-  }
-
-  return holders;
+      return {
+        holder,
+        eth,
+        ethUsd: ethUsd(eth, prices),
+        tokens: tokenRows,
+      };
+    }),
+  );
 }
 
 /** One Blockscout pass for all holders — feeds Dex pricing and holding merge. */
@@ -251,34 +244,42 @@ async function discoverAllHoldings(): Promise<{
 }> {
   const byHolder = new Map<string, DiscoveredBag[]>();
   const addrs = new Set<string>();
-  for (const holder of balanceHolders) {
-    if (!isConfigured(holder.address)) continue;
-    try {
-      const list = await fetchBlockscoutTokenList(holder.address);
-      byHolder.set(
-        holder.address.toLowerCase(),
-        list.map((t) => ({
-          address: t.address,
-          balance: t.balance,
-          symbol: t.symbol,
-          decimals: t.decimals,
-        })),
-      );
-      for (const t of list) {
-        if (!findTokenConfig(t.address)) addrs.add(t.address.toLowerCase());
+  const holders = balanceHolders.filter((h) => isConfigured(h.address));
+  const results = await Promise.all(
+    holders.map(async (holder) => {
+      try {
+        const list = await fetchBlockscoutTokenList(holder.address);
+        return { holder, list, error: null as string | null };
+      } catch (e) {
+        return {
+          holder,
+          list: [] as Awaited<ReturnType<typeof fetchBlockscoutTokenList>>,
+          error: e instanceof Error ? e.message : "Blockscout tokenlist failed",
+        };
       }
-    } catch (e) {
-      return {
-        byHolder,
-        addresses: [],
-        warning:
-          e instanceof Error
-            ? `Blockscout token discovery failed (${e.message}) — showing config tokens only`
-            : "Blockscout token discovery failed — showing config tokens only",
-      };
+    }),
+  );
+
+  let warning: string | null = null;
+  for (const r of results) {
+    if (r.error) {
+      warning = `Blockscout token discovery failed (${r.error}) — showing config tokens only`;
+      continue;
+    }
+    byHolder.set(
+      r.holder.address.toLowerCase(),
+      r.list.map((t) => ({
+        address: t.address,
+        balance: t.balance,
+        symbol: t.symbol,
+        decimals: t.decimals,
+      })),
+    );
+    for (const t of r.list) {
+      if (!findTokenConfig(t.address)) addrs.add(t.address.toLowerCase());
     }
   }
-  return { byHolder, addresses: [...addrs] as Address[], warning: null };
+  return { byHolder, addresses: [...addrs] as Address[], warning };
 }
 
 async function loadPrizeVault(pc: ReturnType<typeof client>): Promise<PrizeVaultVitals | null> {
@@ -499,8 +500,8 @@ async function loadGame(pc: ReturnType<typeof client>): Promise<GameVitals | nul
 
   try {
     const latest = await pc.getBlockNumber();
-    // ~100ms blocks on Orbit → ~10 blocks/sec; 14 days lookback for ops visibility.
-    const lookback = 14n * 24n * 60n * 60n * 10n;
+    // Alchemy caps eth_getLogs at 10k blocks — keep a short recent window for pending ops.
+    const lookback = 9_000n;
     const fromBlock = latest > lookback ? latest - lookback : 0n;
     const logs = (await pc.getLogs({
       address: addr,
@@ -518,18 +519,22 @@ async function loadGame(pc: ReturnType<typeof client>): Promise<GameVitals | nul
     ];
 
     const cutoff = t - rescueDelayN;
-    for (const id of ids) {
-      const req = (await pc.readContract({
-        address: addr,
-        abi: scratchGameAbiTyped,
-        functionName: "requests",
-        args: [id],
-      })) as readonly [Address, number, number | bigint, number];
-      const [, , requestedAt, status] = req;
+    const statuses = await Promise.all(
+      ids.map(async (id) => {
+        const req = (await pc.readContract({
+          address: addr,
+          abi: scratchGameAbiTyped,
+          functionName: "requests",
+          args: [id],
+        })) as readonly [Address, number, number | bigint, number];
+        return { requestedAt: Number(req[2]), status: req[3] };
+      }),
+    );
+    for (const s of statuses) {
       // Status: 0 None, 1 Pending, 2 Settled, 3 Rescued
-      if (status === 1) {
+      if (s.status === 1) {
         pendingCount += 1;
-        if (Number(requestedAt) < cutoff) stalePendingCount += 1;
+        if (s.requestedAt < cutoff) stalePendingCount += 1;
       }
     }
   } catch {
@@ -640,61 +645,72 @@ async function loadVaultAssets(pc: ReturnType<typeof client>): Promise<VaultAsse
 export function useTreasuryData() {
   const [data, setData] = useState<TreasurySnapshot | null>(null);
   const [loading, setLoading] = useState(true);
+  const inflightRef = useRef<Promise<void> | null>(null);
 
   const refresh = useCallback(async () => {
-    try {
-      const pc = client();
-      const discovery = await discoverAllHoldings();
-      const prices = await fetchPrices(discovery.addresses);
-      const [holders, prizeVault, staking, tickets, vesting, game, prizeTables, vaultAssets] =
-        await Promise.all([
-          loadHolders(pc, prices, discovery.byHolder),
-          loadPrizeVault(pc),
-          loadStaking(pc),
-          loadTickets(pc),
-          loadVesting(pc),
-          loadGame(pc),
-          loadPrizeTables(pc),
-          loadVaultAssets(pc),
-        ]);
-      setData({
-        updatedAt: Date.now(),
-        prices,
-        holders,
-        prizeVault,
-        staking,
-        tickets,
-        vesting,
-        game,
-        prizeTables,
-        vaultAssets,
-        discoveryWarning: discovery.warning,
-        error: null,
-      });
-    } catch (e) {
-      setData((prev) => ({
-        updatedAt: Date.now(),
-        prices: prev?.prices ?? {
-          scratchUsd: null,
-          ethUsd: null,
-          byToken: {},
-          fetchedAt: null,
+    // Single-flight: overlapping 30s polls were stacking thousands of RPC calls.
+    if (inflightRef.current) return inflightRef.current;
+
+    const run = (async () => {
+      setLoading(true);
+      try {
+        const pc = client();
+        const discovery = await discoverAllHoldings();
+        const prices = await fetchPrices(discovery.addresses);
+        const [holders, prizeVault, staking, tickets, vesting, game, prizeTables, vaultAssets] =
+          await Promise.all([
+            loadHolders(pc, prices, discovery.byHolder),
+            loadPrizeVault(pc),
+            loadStaking(pc),
+            loadTickets(pc),
+            loadVesting(pc),
+            loadGame(pc),
+            loadPrizeTables(pc),
+            loadVaultAssets(pc),
+          ]);
+        setData({
+          updatedAt: Date.now(),
+          prices,
+          holders,
+          prizeVault,
+          staking,
+          tickets,
+          vesting,
+          game,
+          prizeTables,
+          vaultAssets,
+          discoveryWarning: discovery.warning,
           error: null,
-        },
-        holders: prev?.holders ?? [],
-        prizeVault: prev?.prizeVault ?? null,
-        staking: prev?.staking ?? null,
-        tickets: prev?.tickets ?? null,
-        vesting: prev?.vesting ?? null,
-        game: prev?.game ?? null,
-        prizeTables: prev?.prizeTables ?? null,
-        vaultAssets: prev?.vaultAssets ?? [],
-        discoveryWarning: prev?.discoveryWarning ?? null,
-        error: e instanceof Error ? e.message : "refresh failed",
-      }));
-    } finally {
-      setLoading(false);
-    }
+        });
+      } catch (e) {
+        setData((prev) => ({
+          updatedAt: Date.now(),
+          prices: prev?.prices ?? {
+            scratchUsd: null,
+            ethUsd: null,
+            byToken: {},
+            fetchedAt: null,
+            error: null,
+          },
+          holders: prev?.holders ?? [],
+          prizeVault: prev?.prizeVault ?? null,
+          staking: prev?.staking ?? null,
+          tickets: prev?.tickets ?? null,
+          vesting: prev?.vesting ?? null,
+          game: prev?.game ?? null,
+          prizeTables: prev?.prizeTables ?? null,
+          vaultAssets: prev?.vaultAssets ?? [],
+          discoveryWarning: prev?.discoveryWarning ?? null,
+          error: e instanceof Error ? e.message : "refresh failed",
+        }));
+      } finally {
+        setLoading(false);
+        inflightRef.current = null;
+      }
+    })();
+
+    inflightRef.current = run;
+    return run;
   }, []);
 
   useEffect(() => {

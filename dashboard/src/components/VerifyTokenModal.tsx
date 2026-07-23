@@ -18,7 +18,7 @@ import { erc20AbiTyped } from "@/config/abis";
 import { fetchBlockscoutTokenFacts, type BlockscoutTokenFacts } from "@/utils/blockscout";
 import { fetchTokenDexPairs, type DexPairOption } from "@/utils/prices";
 import { findSymbolConflicts, type SymbolConflict } from "@/utils/symbolConflict";
-import { shortAddr } from "@/utils/format";
+import { CopyAddress } from "@/components/CopyAddress";
 
 type OnChainMeta = {
   symbol: string;
@@ -163,9 +163,15 @@ export function VerifyTokenModal({
         </div>
 
         <p className="muted" style={{ marginTop: 0 }}>
-          Promote{" "}
-          <a href={explorerAddress(address)} target="_blank" rel="noreferrer" className="mono">
-            {shortAddr(address)}
+          Promote <CopyAddress address={address} />{" "}
+          <a
+            href={explorerAddress(address)}
+            target="_blank"
+            rel="noreferrer"
+            className="muted"
+            title="Open in Blockscout"
+          >
+            ↗
           </a>{" "}
           into committed <span className="mono">tokens.json</span>.
         </p>
@@ -183,8 +189,8 @@ export function VerifyTokenModal({
               <dt>decimals</dt>
               <dd className="mono">{meta.decimals}</dd>
               <dt>address</dt>
-              <dd className="mono" style={{ wordBreak: "break-all" }}>
-                {address}
+              <dd style={{ wordBreak: "break-all" }}>
+                <CopyAddress address={address} full className="mono" />
               </dd>
             </dl>
             <p className="muted" style={{ fontSize: "0.8rem" }}>
@@ -241,14 +247,14 @@ export function VerifyTokenModal({
                   <tr key={c.existing.address}>
                     <td>
                       <span className="token-sym">{c.existing.symbol}</span>
-                      <div className="mono muted" style={{ fontSize: "0.75rem" }}>
-                        {c.existing.address}
+                      <div style={{ fontSize: "0.75rem" }}>
+                        <CopyAddress address={c.existing.address} />
                       </div>
                     </td>
                     <td>
                       <span className="token-sym">{meta?.symbol}</span>
-                      <div className="mono muted" style={{ fontSize: "0.75rem" }}>
-                        {address}
+                      <div style={{ fontSize: "0.75rem" }}>
+                        <CopyAddress address={address} />
                       </div>
                     </td>
                     <td>{c.reason}</td>
@@ -381,8 +387,7 @@ export function RemoveVerifiedModal({
           </button>
         </div>
         <p>
-          Remove <strong>{token.symbol}</strong> (
-          <span className="mono">{shortAddr(token.address)}</span>) from{" "}
+          Remove <strong>{token.symbol}</strong> (<CopyAddress address={token.address} />) from{" "}
           <span className="mono">tokens.json</span>. It will show as unverified if still held.
         </p>
         {error && <p className="err">{error}</p>}

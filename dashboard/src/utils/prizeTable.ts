@@ -67,15 +67,75 @@ export type AnnotatedRow = {
 };
 
 export function resolveToken(asset: Address): TokenConfig | null {
-  if (asset === zeroAddress) return null;
+  if (isNoWinAsset(asset)) return null;
   return tokens.find((t) => t.address.toLowerCase() === asset.toLowerCase()) ?? null;
 }
 
+/** Case-insensitive NO-WIN / zero-address check (chain may return mixed-case). */
+export function isNoWinAsset(asset: string): boolean {
+  return asset.toLowerCase() === zeroAddress;
+}
+
+/** Lowercase address for stable <select> values and comparisons. */
+export function normalizeAsset(asset: string): Address {
+  return asset.toLowerCase() as Address;
+}
+
 export function assetLabel(asset: Address): { symbol: string; known: boolean } {
-  if (asset === zeroAddress) return { symbol: "NO-WIN", known: true };
+  if (isNoWinAsset(asset)) return { symbol: "NO-WIN", known: true };
   const t = resolveToken(asset);
   if (t) return { symbol: t.symbol, known: true };
   return { symbol: `${asset.slice(0, 6)}…`, known: false };
+}
+
+/**
+ * Prize rows first, exactly one terminal NO-WIN last.
+ * Collapses duplicate NO-WIN rows (keeps the first one's probability).
+ */
+export function ensureTerminalNoWin(rows: EditorRow[]): EditorRow[] {
+  const prizes = rows.filter((r) => !isNoWinAsset(r.asset));
+  const existing = rows.find((r) => isNoWinAsset(r.asset));
+  const terminal: EditorRow = existing
+    ? {
+        ...existing,
+        asset: zeroAddress,
+        isBpsOfPool: false,
+        amountInput: "0",
+      }
+    : newEditorRow({
+        asset: zeroAddress,
+        probabilityPercent: "0.001",
+        amountInput: "0",
+        isBpsOfPool: false,
+      });
+  return [...prizes, terminal];
+}
+
+/** Move a row by id before/after another (NO-WIN stays terminal). */
+export function reorderEditorRows(
+  rows: EditorRow[],
+  fromId: string,
+  toId: string,
+): EditorRow[] {
+  if (fromId === toId) return rows;
+  const from = rows.findIndex((r) => r.id === fromId);
+  const to = rows.findIndex((r) => r.id === toId);
+  if (from < 0 || to < 0) return rows;
+  // Don't drag the terminal NO-WIN.
+  if (isNoWinAsset(rows[from].asset)) return rows;
+  const next = [...rows];
+  const [item] = next.splice(from, 1);
+  // Dropping on terminal NO-WIN = move to end of prize list (still before terminal).
+  if (isNoWinAsset(rows[to].asset)) {
+    const terminalIdx = next.findIndex((r) => isNoWinAsset(r.asset));
+    const insertAt = terminalIdx < 0 ? next.length : terminalIdx;
+    next.splice(insertAt, 0, item);
+    return ensureTerminalNoWin(next);
+  }
+  const adjustedTo = next.findIndex((r) => r.id === toId);
+  const insertAt = adjustedTo < 0 ? next.length : adjustedTo;
+  next.splice(insertAt, 0, item);
+  return ensureTerminalNoWin(next);
 }
 
 /**
@@ -139,7 +199,7 @@ export function editorToPrizeRows(rows: EditorRow[]): {
     const decimals = token?.decimals ?? 18;
     let amountOrBps = 0n;
 
-    if (er.asset === zeroAddress) {
+    if (isNoWinAsset(er.asset)) {
       amountOrBps = 0n;
     } else if (er.isBpsOfPool) {
       const t = er.amountInput.trim();
@@ -185,9 +245,9 @@ export function editorToPrizeRows(rows: EditorRow[]): {
 
     cum += delta;
     prizeRows.push({
-      asset: er.asset,
+      asset: normalizeAsset(er.asset),
       amountOrBps,
-      isBpsOfPool: er.asset === zeroAddress ? false : er.isBpsOfPool,
+      isBpsOfPool: isNoWinAsset(er.asset) ? false : er.isBpsOfPool,
       cumOdds: cum,
     });
   }
@@ -208,27 +268,29 @@ function parseHumanAmount(input: string, decimals: number): bigint | null {
 }
 
 export function prizeRowsToEditor(rows: PrizeRow[]): EditorRow[] {
-  return rows.map((r, i) => {
-    const prev = i === 0 ? 0 : rows[i - 1].cumOdds;
-    const delta = r.cumOdds - prev;
-    const token = resolveToken(r.asset);
-    const decimals = token?.decimals ?? 18;
-    let amountInput = "0";
-    if (r.asset !== zeroAddress) {
-      if (r.isBpsOfPool) {
-        amountInput = r.amountOrBps.toString();
-      } else {
-        amountInput = formatUnits(r.amountOrBps, decimals);
+  return ensureTerminalNoWin(
+    rows.map((r, i) => {
+      const prev = i === 0 ? 0 : rows[i - 1].cumOdds;
+      const delta = r.cumOdds - prev;
+      const token = resolveToken(r.asset);
+      const decimals = token?.decimals ?? 18;
+      let amountInput = "0";
+      if (!isNoWinAsset(r.asset)) {
+        if (r.isBpsOfPool) {
+          amountInput = r.amountOrBps.toString();
+        } else {
+          amountInput = formatUnits(r.amountOrBps, decimals);
+        }
       }
-    }
-    return {
-      id: `row-${i}-${r.cumOdds}`,
-      asset: r.asset,
-      amountInput,
-      isBpsOfPool: r.isBpsOfPool,
-      probabilityPercent: oddsDeltaToPercent(delta),
-    };
-  });
+      return {
+        id: `row-${i}-${r.cumOdds}-${normalizeAsset(r.asset).slice(2, 10)}`,
+        asset: normalizeAsset(r.asset),
+        amountInput,
+        isBpsOfPool: isNoWinAsset(r.asset) ? false : r.isBpsOfPool,
+        probabilityPercent: oddsDeltaToPercent(delta),
+      };
+    }),
+  );
 }
 
 /**
@@ -262,7 +324,7 @@ export function validatePrizeTable(
   }
 
   const last = rows[n - 1];
-  if (last.cumOdds !== ODDS_DENOM || last.asset !== zeroAddress) {
+  if (last.cumOdds !== ODDS_DENOM || !isNoWinAsset(last.asset)) {
     issues.push({
       code: "bad_terminal",
       message: `TableBadTerminal: last row must be asset=0x0 and cumOdds=${ODDS_DENOM} (got asset=${last.asset}, cumOdds=${last.cumOdds})`,
@@ -286,7 +348,7 @@ export function validatePrizeTable(
   if (covMap) {
     for (let i = 0; i < n; i++) {
       const r = rows[i];
-      if (r.asset === zeroAddress) continue;
+      if (isNoWinAsset(r.asset)) continue;
       const cov = covMap.get(r.asset.toLowerCase());
       const bal = cov?.vaultBalance ?? 0n;
       const rate = cov?.fallbackRate ?? 0n;
@@ -333,7 +395,7 @@ export function annotateRows(
     const oneInN = oddsDelta > 0 ? ODDS_DENOM / oddsDelta : null;
 
     let payoutAmount = 0n;
-    if (row.asset !== zeroAddress) {
+    if (!isNoWinAsset(row.asset)) {
       if (row.isBpsOfPool) {
         const bal = vaultBalances.get(row.asset.toLowerCase()) ?? 0n;
         payoutAmount = (row.amountOrBps * bal) / 10_000n;
@@ -344,11 +406,15 @@ export function annotateRows(
 
     const token = resolveToken(row.asset);
     const payoutUsd =
-      token && payoutAmount > 0n ? tokenUsd(token, payoutAmount, prices) : row.asset === zeroAddress ? 0 : null;
+      token && payoutAmount > 0n
+        ? tokenUsd(token, payoutAmount, prices)
+        : isNoWinAsset(row.asset)
+          ? 0
+          : null;
 
     const vaultBal = vaultBalances.get(row.asset.toLowerCase()) ?? 0n;
     const exceedsTenPercentVault =
-      row.asset !== zeroAddress &&
+      !isNoWinAsset(row.asset) &&
       vaultBal > 0n &&
       payoutAmount * 10n > vaultBal; // > 10%
 

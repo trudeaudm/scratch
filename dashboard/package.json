@@ -4,9 +4,9 @@
   "private": true,
   "description": "Local-only treasury ops dashboard for $SCRATCH Phase-2 contracts (chain 4663). Never deployed.",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
+    "dev": "node --use-system-ca ./node_modules/next/dist/bin/next dev",
+    "build": "node --use-system-ca ./node_modules/next/dist/bin/next build",
+    "start": "node --use-system-ca ./node_modules/next/dist/bin/next start",
     "lint": "next lint",
     "test": "tsx --test src/utils/prizeTable.test.ts src/utils/format.test.ts src/utils/symbolConflict.test.ts",
     "copy-abis": "node scripts/copy-abis.mjs"

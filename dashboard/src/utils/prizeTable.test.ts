@@ -6,9 +6,11 @@ import {
   annotateRows,
   blockingIssues,
   editorToPrizeRows,
+  ensureTerminalNoWin,
   oddsDeltaToPercent,
   percentToOddsDelta,
   prizeRowsToEditor,
+  reorderEditorRows,
   tableEvUsd,
   validatePrizeTable,
   type EditorRow,
@@ -200,6 +202,75 @@ describe("editor ↔ prize rows", () => {
     ];
     const { prizeRows } = editorToPrizeRows(editor);
     assert.ok(validatePrizeTable(prizeRows).some((i) => i.code === "bad_terminal" || i.code === "prob_sum"));
+  });
+
+  it("ensureTerminalNoWin collapses duplicate NO-WIN and pins last", () => {
+    const rows: EditorRow[] = [
+      {
+        id: "n1",
+        asset: NO_WIN,
+        amountInput: "0",
+        isBpsOfPool: false,
+        probabilityPercent: "50.000",
+      },
+      {
+        id: "a",
+        asset: SCRATCH,
+        amountInput: "1",
+        isBpsOfPool: false,
+        probabilityPercent: "10.000",
+      },
+      {
+        id: "n2",
+        asset: "0x0000000000000000000000000000000000000000",
+        amountInput: "9",
+        isBpsOfPool: true,
+        probabilityPercent: "40.000",
+      },
+    ];
+    const out = ensureTerminalNoWin(rows);
+    assert.equal(out.length, 2);
+    assert.equal(out[0].id, "a");
+    assert.equal(out[1].id, "n1");
+    assert.equal(out[1].probabilityPercent, "50.000");
+    assert.equal(out[1].amountInput, "0");
+    assert.equal(out[1].isBpsOfPool, false);
+  });
+
+  it("reorderEditorRows moves prizes and keeps NO-WIN terminal", () => {
+    const rows: EditorRow[] = [
+      {
+        id: "a",
+        asset: SCRATCH,
+        amountInput: "1",
+        isBpsOfPool: false,
+        probabilityPercent: "10.000",
+      },
+      {
+        id: "b",
+        asset: USDG,
+        amountInput: "1",
+        isBpsOfPool: false,
+        probabilityPercent: "20.000",
+      },
+      {
+        id: "n",
+        asset: NO_WIN,
+        amountInput: "0",
+        isBpsOfPool: false,
+        probabilityPercent: "70.000",
+      },
+    ];
+    const moved = reorderEditorRows(rows, "b", "a");
+    assert.deepEqual(
+      moved.map((r) => r.id),
+      ["b", "a", "n"],
+    );
+    const toEnd = reorderEditorRows(moved, "b", "n");
+    assert.deepEqual(
+      toEnd.map((r) => r.id),
+      ["a", "b", "n"],
+    );
   });
 });
 

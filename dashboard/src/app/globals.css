@@ -50,15 +50,79 @@ input,
 select,
 textarea {
   font: inherit;
-  color: inherit;
 }
 
 button {
   cursor: pointer;
+  color: inherit;
+}
+
+/* Explicit dark-theme controls — bare inputs (e.g. verify modal) must not
+   fall back to the browser’s white field + inherited light text. */
+input,
+select,
+textarea {
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+
+input:disabled,
+select:disabled,
+textarea:disabled {
+  color: var(--muted);
+  opacity: 0.7;
+}
+
+select option {
+  background: var(--bg-elev);
+  color: var(--text);
 }
 
 .mono {
   font-family: var(--mono);
+}
+
+.copy-addr {
+  appearance: none;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  border-radius: 3px;
+  vertical-align: baseline;
+}
+
+.copy-addr:hover {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.copy-addr:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.copy-addr.copied {
+  color: var(--ok);
+}
+
+.copy-flash {
+  font-weight: 600;
+  color: var(--ok);
 }
 
 .app {
@@ -220,14 +284,7 @@ button {
   letter-spacing: 0.04em;
 }
 
-.field input,
-.field select,
-.field textarea {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 8px 10px;
-}
+/* Field wrappers inherit the global input/select/textarea dark styles. */
 
 .field textarea {
   min-height: 88px;
@@ -506,4 +563,60 @@ button {
 
 .editor-row {
   margin-bottom: 8px;
+  transition: outline-color 0.12s ease, opacity 0.12s ease;
+}
+
+.editor-row-terminal {
+  border-style: dashed;
+  opacity: 0.95;
+}
+
+.editor-row-dragging {
+  opacity: 0.45;
+}
+
+.editor-row-drop {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 34px;
+  padding: 0;
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2, transparent);
+  color: var(--muted);
+  cursor: grab;
+  font-size: 0.85rem;
+  letter-spacing: -2px;
+  line-height: 1;
+  user-select: none;
+}
+
+.drag-handle:active {
+  cursor: grabbing;
+}
+
+.drag-handle-locked {
+  border-style: dashed;
+  cursor: default;
+  opacity: 0.5;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }

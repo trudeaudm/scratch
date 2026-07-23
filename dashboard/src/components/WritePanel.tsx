@@ -27,6 +27,7 @@ import {
   vestingWalletAbiTyped,
 } from "@/config/abis";
 import { fmtToken, parseAmount, shortAddr } from "@/utils/format";
+import { CopyAddress } from "@/components/CopyAddress";
 import type { TicketSourceVitals } from "@/hooks/useTreasuryData";
 
 type FundStep = "idle" | "approve" | "fund" | "done";
@@ -359,7 +360,7 @@ export function WritePanel({
       <div className="row" style={{ marginBottom: 16 }}>
         {isConnected ? (
           <>
-            <span className="mono muted">{address ? shortAddr(address) : ""}</span>
+            {address ? <CopyAddress address={address} /> : null}
             <button type="button" className="btn secondary" onClick={() => disconnect()}>
               Disconnect
             </button>
