@@ -1,0 +1,18 @@
+{
+  "name": "holder-drop",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Daily holder-tier StandardTicketSource granter for $SCRATCH",
+  "scripts": {
+    "drop": "node --use-system-ca src/run.js",
+    "test": "node --test test/filter.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "dotenv": "^16.6.1",
+    "ethers": "^6.13.4"
+  }
+}
