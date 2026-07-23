@@ -94,3 +94,37 @@ Slither did not require contract patches for the 15 findings above. Separately, 
 | **Code** | `StakingVault.deposit` / `withdraw` — effects then `safeTransfer(From)`. `PrizeVault.fund` — `_track` then pull; `executeSweep` — `pending = false` then transfer; `payout` / `transferAsset` are balance-based with `try/catch` (no accounting to corrupt). `ScratchGame.fulfill` / `rescue` — status transition before vault/ticket external calls. `SelfEntropyProvider.reveal` — effects before `callback.fulfill`. |
 | **Accepted exception** | `ChainlinkVRFAdapter._request` and `ScratchGame.scratch` must write id-keyed state after the provider returns `requestId` (findings #2–#4); both game paths that move value afterward are `nonReentrant`. |
 | **Test** | Withdraw/rescue/fulfill ordering covered by `test_withdraw_*`, `test_rescue_afterDelay_refundsAndMarksRescued`, `test_fulfill_afterRescue_paysNothing_emitsLate_noRevert`; deposit/fund CEI covered indirectly by deposit/withdraw and `test_fund_fromArbitraryCaller` accounting tests. |
+
+---
+
+## v2 gate (`src/v2/`)
+
+**Run recorded:** Slither via Foundry (`python -m slither src/v2 --config-file slither.config.json`).  
+**Scope:** `src/v2/` (StakingVaultV2, ScratchGameV2).  
+**Result:** 8 findings after one local-init fix — all triaged below. **Zero untriaged.**
+
+### Fixes applied
+
+- `StakingVaultV2.claimUnlocked` — initialize `terminalBurn = 0` (clears `uninitialized-local`).
+
+### Slither findings (triaged)
+
+| # | Detector | Location | Disposition | Justification |
+|---|----------|----------|-------------|---------------|
+| V2-1 | `reentrancy-benign` | `ScratchGameV2._scratchOne` | **ACCEPTED** | Same posture as v1 `scratch`: `nonReentrant` on entrypoints; `requests[requestId]` must follow `requestRandomFor` because the provider assigns the id. |
+| V2-2 | `reentrancy-benign` | `ScratchGameV2.scratchMany` | **ACCEPTED** | Loops `_scratchOne` under the same `nonReentrant` guard; each iteration writes only its own id-keyed request. |
+| V2-3 | `timestamp` | `ScratchGameV2.executeRandomnessSwap` | **ACCEPTED** | Deliberate `RANDOMNESS_SWAP_DELAY` + `RANDOMNESS_SWAP_GRACE` (same as v1). |
+| V2-4 | `timestamp` | `ScratchGameV2.rescue` | **ACCEPTED** | Deliberate `rescueDelay` timelock. |
+| V2-5 | `timestamp` | `StakingVaultV2.requestUnlock` | **ACCEPTED** | Merge uses later-of-two `releaseAt` comparison — intentional unlock-window extension. |
+| V2-6 | `timestamp` | `StakingVaultV2.claimUnlocked` | **ACCEPTED** | Deliberate unlock-period gate before principal release. |
+| V2-7 | `timestamp` | `StakingVaultV2.ticketsOf` | **ACCEPTED** | View accrual / bank-cap headroom; emission is time-based. |
+| V2-8 | `timestamp` | `StakingVaultV2._update` | **ACCEPTED** | MasterChef-style accumulator over `totalWeight`; intentional. |
+
+### v2 invariant notes (manual)
+
+1. **No instant withdraw** — principal exits only via `requestUnlock` → `claimUnlocked`; ownership renounced after `setGame`.
+2. **Proportional burn on request** — `burn = banked * burnBps / 10_000 * amount / stakedBefore` (floor); remaining tickets spendable during the window.
+3. **Terminal burn** — only when `claimUnlocked` leaves `staked == 0`; clears tier for restake.
+4. **Weight conservation** — `totalWeight` tracks eligible `staked × tierMult`; unlocking amount leaves weight immediately.
+5. **Balance conservation** — vault SCRATCH = Σ staked + Σ unlocking (`test_invariant_stakedPlusUnlockingPlusExternal`).
+6. **`scratchMany`** — `1..MAX_BATCH(20)`; contiguous request ids; independent settle/rescue per id.
