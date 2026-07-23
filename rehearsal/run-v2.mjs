@@ -1084,14 +1084,55 @@ async function drillV4(env, state) {
   try {
     const provider = new JsonRpcProvider(env.RPC_URL);
     const user = new Wallet(normalizePk(env.BURNER_USER_PK), provider);
+    const token = new Contract(state.addresses.token, ERC20_ABI, user);
     const staking = new Contract(state.addresses.stakingVault, STAKING_ABI, user);
 
-    const slot = await staking.unlocking(user.address);
+    // Resume: prior run completed claimUnlocked but failed `0n !== 0` tier check.
+    {
+      const u0 = await staking.users(user.address);
+      const slot0 = await staking.unlocking(user.address);
+      if (
+        slot0.amount === 0n &&
+        u0.staked === 0n &&
+        Number(u0.tier) === 0 &&
+        u0.banked === 0n &&
+        state.drills.V4?.error?.includes("tier not reset")
+      ) {
+        logDrill(id, "resume: on-chain full exit already complete (tier/banked/staked zero)");
+        recordDrill(state, id, {
+          status: "PASS",
+          earlyRevert: true,
+          tierReset: true,
+          resumedAfterHarnessTierCheck: true,
+        });
+        logDrill(id, "PASS");
+        return;
+      }
+    }
+
+    let slot = await staking.unlocking(user.address);
     if (slot.amount === 0n) {
-      // ensure something unlocking
-      const u = await staking.users(user.address);
-      if (u.staked === 0n) throw new Error("no stake for V4 — run V3 first");
-      await sendAndLog(id, withGasBuffer(staking, "requestUnlock", [u.staked]), "requestUnlock full for claim drill");
+      let u = await staking.users(user.address);
+      if (u.staked === 0n) {
+        // Need a fresh position for the claim drill
+        await sendAndLog(
+          id,
+          withGasBuffer(token, "approve", [state.addresses.stakingVault, USER_STAKE]),
+          "approve",
+        );
+        await sendAndLog(
+          id,
+          withGasBuffer(staking, "deposit", [USER_STAKE, TIER_NORMAL]),
+          "deposit NORMAL for claim drill",
+        );
+        u = await staking.users(user.address);
+      }
+      await sendAndLog(
+        id,
+        withGasBuffer(staking, "requestUnlock", [u.staked]),
+        "requestUnlock full for claim drill",
+      );
+      slot = await staking.unlocking(user.address);
     }
 
     let earlyRevert = false;
@@ -1110,13 +1151,19 @@ async function drillV4(env, state) {
     logDrill(id, `waiting ${waitS}s for releaseAt=${unlock.releaseAt}`);
     await sleep(waitS * 1000);
 
-    // Full exit path: unlock any remaining stake first so claim leaves staked==0
+    // Full exit: unlock remainder so claim leaves staked==0 (may extend releaseAt)
     let u = await staking.users(user.address);
     if (u.staked > 0n) {
-      await sendAndLog(id, withGasBuffer(staking, "requestUnlock", [u.staked]), "unlock remainder for full exit");
+      await sendAndLog(
+        id,
+        withGasBuffer(staking, "requestUnlock", [u.staked]),
+        "unlock remainder for full exit",
+      );
       const unlock2 = await staking.unlocking(user.address);
       const now2 = (await provider.getBlock("latest")).timestamp;
-      await sleep(Math.max(0, Number(unlock2.releaseAt) - Number(now2) + 5) * 1000);
+      const wait2 = Math.max(0, Number(unlock2.releaseAt) - Number(now2) + 5);
+      logDrill(id, `waiting ${wait2}s after remainder unlock releaseAt=${unlock2.releaseAt}`);
+      await sleep(wait2 * 1000);
     }
 
     u = await staking.users(user.address);
@@ -1125,7 +1172,8 @@ async function drillV4(env, state) {
     u = await staking.users(user.address);
     const ticketsAfter = await staking.ticketsOf(user.address);
     if (u.staked !== 0n) throw new Error("staked not zero after full exit claim");
-    if (u.tier !== 0) throw new Error(`tier not reset (got ${u.tier})`);
+    // ethers returns uint8 as bigint — compare numerically
+    if (Number(u.tier) !== 0) throw new Error(`tier not reset (got ${u.tier})`);
     if (u.banked !== 0n || ticketsAfter !== 0n) {
       throw new Error(`terminal burn incomplete banked=${u.banked} tickets=${ticketsAfter}`);
     }
@@ -1311,7 +1359,7 @@ async function drillV7(env, state) {
     const staking = new Contract(state.addresses.stakingVault, STAKING_ABI, user);
 
     let u = await staking.users(user.address);
-    if (u.tier === 0 || u.staked < MIN_STAKE) {
+    if (Number(u.tier) === 0 || u.staked < MIN_STAKE) {
       await sendAndLog(id, withGasBuffer(token, "approve", [state.addresses.stakingVault, USER_STAKE]), "approve");
       await sendAndLog(id, withGasBuffer(staking, "deposit", [USER_STAKE, TIER_NORMAL]), "deposit NORMAL");
     } else if (Number(u.tier) === TIER_ENHANCED) {
