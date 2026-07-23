@@ -747,24 +747,34 @@ async function drillV1(env, state) {
       }
     }
 
+    // Snapshot AFTER both positions exist so A's solo head-start is excluded.
+    // Compare deltas over the window (BOOST_BPS=2000 → B ≈ 1.2× A at equal stake).
+    await sleep(3_000);
+    const t0A = await stakingA.ticketsOf(a.address);
+    const t0B = await stakingB.ticketsOf(b.address);
+    logDrill(id, `t0 ticketsA=${t0A} ticketsB=${t0B}`);
     logDrill(id, `waiting ${ACCRUAL_WINDOW_S}s accrual window…`);
     await sleep(ACCRUAL_WINDOW_S * 1000);
 
-    const ticketsA = await stakingA.ticketsOf(a.address);
-    const ticketsB = await stakingB.ticketsOf(b.address);
-    logDrill(id, `ticketsA=${ticketsA} ticketsB=${ticketsB}`);
-    // B should be ~1.2× A at equal stake
-    const ratio = Number(ticketsB) / Number(ticketsA);
+    const t1A = await stakingA.ticketsOf(a.address);
+    const t1B = await stakingB.ticketsOf(b.address);
+    const deltaA = t1A - t0A;
+    const deltaB = t1B - t0B;
+    logDrill(id, `t1 ticketsA=${t1A} ticketsB=${t1B} deltaA=${deltaA} deltaB=${deltaB}`);
+    if (deltaA <= 0n) throw new Error(`A accrued nothing (deltaA=${deltaA})`);
+    const ratio = Number(deltaB) / Number(deltaA);
     const ok = ratio > 1.15 && ratio < 1.25;
-    if (!ok) throw new Error(`expected B≈1.2×A, got ratio=${ratio}`);
+    if (!ok) throw new Error(`expected ΔB≈1.2×ΔA, got ratio=${ratio}`);
 
     recordDrill(state, id, {
       status: "PASS",
-      ticketsA: ticketsA.toString(),
-      ticketsB: ticketsB.toString(),
+      ticketsA: t1A.toString(),
+      ticketsB: t1B.toString(),
+      deltaA: deltaA.toString(),
+      deltaB: deltaB.toString(),
       ratio,
     });
-    logDrill(id, `PASS ratio=${ratio.toFixed(4)}`);
+    logDrill(id, `PASS deltaRatio=${ratio.toFixed(4)}`);
   } catch (e) {
     recordDrill(state, id, { status: "FAIL", error: e.message });
     logDrill(id, `FAIL ${e.message}`);
