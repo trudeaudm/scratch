@@ -445,15 +445,23 @@ async function main() {
       useWs = true;
       wsBackoffMs = 1000;
       console.log(`  transport:       websocket ${wssUrl.replace(/\/v2\/.+$/, "/v2/***")}`);
-      wsContract.on(wsContract.filters.RandomnessRequested(), (requestId, requester, event) => {
+      // ethers v6: (...args, ContractEventPayload). Payload shape varies; never
+      // let meta parsing throw before bumpWake or we fall back to poll-only latency.
+      wsContract.on(wsContract.filters.RandomnessRequested(), (...args) => {
         try {
+          const requestId = args[0];
+          const requester = args[1];
+          const event = args[args.length - 1];
           const key = requestId.toString();
-          const blockNumber = Number(event.log?.blockNumber ?? event.blockNumber ?? 0);
+          const blockNumber = Number(
+            event?.log?.blockNumber ?? event?.blockNumber ?? 0,
+          );
           requestMeta.set(key, { requestId, blockNumber, requester });
           console.log(`ws: RandomnessRequested ${key} block=${blockNumber || "?"}`);
-          bumpWake();
         } catch (err) {
           console.error(`ws event handler error: ${err?.message || err}`);
+        } finally {
+          bumpWake();
         }
       });
       wsProvider.websocket?.addEventListener?.("close", () => {
