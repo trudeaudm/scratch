@@ -5,10 +5,13 @@
  * Env: RPC_URL, GAME_ADDRESS, GAME_DEPLOY_BLOCK, LEDGER_FILE (or PAYOUT_LEDGER_PATH), LOG_CHUNK
  *
  * Loads ops/entropy-operator/.env via dotenv (override: false — process.env wins).
+ *
+ * NOTE: The laptop checkout CSV is historical-only after Render cutover.
+ * Always reconcile against the authoritative LEDGER_FILE on the reveal host (/data).
  */
 import { Contract, JsonRpcProvider, formatUnits } from "ethers";
 import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import dotenv from "dotenv";
 import {
   SCRATCH_SETTLED_ABI,
@@ -24,6 +27,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: resolve(__dirname, "..", ".env"), override: false });
 
 const DEFAULT_DEPLOY_BLOCK = 13_138_508;
+const SCRATCH = "0xf5e5f4d3c34a14b2fdfd59584fe555cd5e21f196";
 
 function loadLedgerRows(filePath) {
   if (!fs.existsSync(filePath)) return [];
@@ -45,7 +49,12 @@ function loadLedgerRows(filePath) {
   return rows;
 }
 
-async function main() {
+/**
+ * @param {{ silent?: boolean }} [opts]
+ * @returns {Promise<object>}
+ */
+export async function runReconcile(opts = {}) {
+  const silent = !!opts.silent;
   const rpcUrl = process.env.RPC_URL;
   if (!rpcUrl) throw new Error("RPC_URL is required");
 
@@ -82,7 +91,7 @@ async function main() {
         requestId,
         user: log.args.user,
         asset,
-        amount,
+        amount: amount.toString(),
         txHash: log.transactionHash,
         blockNumber: log.blockNumber,
       });
@@ -113,69 +122,102 @@ async function main() {
     .filter(([, n]) => n > 1)
     .map(([requestId, count]) => ({ requestId, count }));
 
-  const bigScratch = [...chainById.values()].filter((s) => {
-    if (s.asset !== "0xf5e5f4d3c34a14b2fdfd59584fe555cd5e21f196") return false;
-    try {
-      return formatUnits(s.amount, 18) === "100000.0" || s.amount === 100000n * 10n ** 18n;
-    } catch {
-      return false;
-    }
-  });
-
   const scratch100k = [...chainById.values()].filter(
-    (s) =>
-      s.asset === "0xf5e5f4d3c34a14b2fdfd59584fe555cd5e21f196" &&
-      s.amount === 100000n * 10n ** 18n,
+    (s) => s.asset === SCRATCH && s.amount === (100000n * 10n ** 18n).toString(),
   );
 
-  console.log("=== payout ledger reconcile ===");
-  console.log(`game:          ${game}`);
-  console.log(`blocks:        ${fromBlock} → ${latest}`);
-  console.log(`ledger:        ${ledgerPath}`);
-  console.log(`chain events:  ${chainIds.length} (wins=${wins} no-win=${noWins})`);
-  console.log(`ledger rows:   ${ledgerRows.length} (unique ids=${ledgerIds.size})`);
-  console.log(`missing ids:   ${missing.length}`);
-  if (missing.length) {
-    console.log(
-      `  first 40: ${missing.slice(0, 40).join(", ")}${missing.length > 40 ? "…" : ""}`,
-    );
-  }
-  console.log(`extra in CSV:  ${extras.length}`);
-  if (extras.length) console.log(`  ${extras.slice(0, 40).join(", ")}`);
-  console.log(`chain dups:    ${duplicates.length}`);
-  console.log(`ledger dups:   ${ledgerDuplicates.length}`);
-  if (ledgerDuplicates.length) console.log(JSON.stringify(ledgerDuplicates.slice(0, 20)));
-
-  console.log("--- 100,000 SCRATCH wins ---");
-  if (scratch100k.length === 0) {
-    console.log("  none found on chain");
-  } else {
-    for (const s of scratch100k) {
-      const inLedger = ledgerIds.has(s.requestId);
-      const tok = resolveToken(s.asset);
-      console.log(
-        `  req=${s.requestId} amount=${formatUnits(s.amount, tok.decimals)} inLedger=${inLedger} tx=${s.txHash}`,
-      );
-    }
-  }
-
-  // Also flag any ~100000 human amounts in ledger
   const ledger100k = ledgerRows.filter(
     (r) =>
       r.symbol === "SCRATCH" &&
       (r.human === "100000.0" || r.human === "100000" || r.raw === "100000000000000000000000"),
   );
-  console.log(`ledger 100k SCRATCH rows: ${ledger100k.length}`);
-  for (const r of ledger100k) {
-    console.log(`  req=${r.requestId} ts=${r.timestamp} retro=${r.retro}`);
+
+  const inSync =
+    missing.length === 0 && extras.length === 0 && ledgerDuplicates.length === 0;
+
+  const summary = {
+    game,
+    fromBlock,
+    toBlock: latest,
+    ledgerPath,
+    chainEvents: chainIds.length,
+    wins,
+    noWins,
+    ledgerRows: ledgerRows.length,
+    ledgerUniqueIds: ledgerIds.size,
+    missingCount: missing.length,
+    missingFirst40: missing.slice(0, 40),
+    extraCount: extras.length,
+    extrasFirst40: extras.slice(0, 40),
+    chainDuplicates: duplicates.length,
+    ledgerDuplicates: ledgerDuplicates.length,
+    ledgerDuplicateSample: ledgerDuplicates.slice(0, 20),
+    scratch100k: scratch100k.map((s) => ({
+      requestId: s.requestId,
+      amount: formatUnits(BigInt(s.amount), resolveToken(s.asset).decimals),
+      inLedger: ledgerIds.has(s.requestId),
+      txHash: s.txHash,
+    })),
+    ledger100k: ledger100k.map((r) => ({
+      requestId: r.requestId,
+      timestamp: r.timestamp,
+      retro: r.retro,
+    })),
+    result: inSync ? "in sync" : "drift",
+    inSync,
+  };
+
+  if (!silent) {
+    console.log("=== payout ledger reconcile ===");
+    console.log(`game:          ${game}`);
+    console.log(`blocks:        ${fromBlock} → ${latest}`);
+    console.log(`ledger:        ${ledgerPath}`);
+    console.log(`chain events:  ${chainIds.length} (wins=${wins} no-win=${noWins})`);
+    console.log(`ledger rows:   ${ledgerRows.length} (unique ids=${ledgerIds.size})`);
+    console.log(`missing ids:   ${missing.length}`);
+    if (missing.length) {
+      console.log(
+        `  first 40: ${missing.slice(0, 40).join(", ")}${missing.length > 40 ? "…" : ""}`,
+      );
+    }
+    console.log(`extra in CSV:  ${extras.length}`);
+    if (extras.length) console.log(`  ${extras.slice(0, 40).join(", ")}`);
+    console.log(`chain dups:    ${duplicates.length}`);
+    console.log(`ledger dups:   ${ledgerDuplicates.length}`);
+    if (ledgerDuplicates.length) console.log(JSON.stringify(ledgerDuplicates.slice(0, 20)));
+
+    console.log("--- 100,000 SCRATCH wins ---");
+    if (scratch100k.length === 0) {
+      console.log("  none found on chain");
+    } else {
+      for (const s of summary.scratch100k) {
+        console.log(
+          `  req=${s.requestId} amount=${s.amount} inLedger=${s.inLedger} tx=${s.txHash}`,
+        );
+      }
+    }
+    console.log(`ledger 100k SCRATCH rows: ${ledger100k.length}`);
+    for (const r of ledger100k) {
+      console.log(`  req=${r.requestId} ts=${r.timestamp} retro=${r.retro}`);
+    }
+    console.log(inSync ? "RESULT: in sync" : "RESULT: drift");
   }
 
-  const ok = missing.length === 0 && extras.length === 0 && ledgerDuplicates.length === 0;
-  console.log(ok ? "RESULT: in sync" : "RESULT: drift");
-  process.exit(ok ? 0 : 2);
+  return summary;
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+async function main() {
+  const summary = await runReconcile({ silent: false });
+  process.exit(summary.inSync ? 0 : 2);
+}
+
+const isDirect =
+  !!process.argv[1] &&
+  import.meta.url === pathToFileURL(resolve(process.argv[1])).href;
+
+if (isDirect) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

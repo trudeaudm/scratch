@@ -38,15 +38,20 @@ After `SelfEntropyProvider` is deployed and wired as ScratchGame's randomness:
 cp .env.example .env   # fill OPERATOR_PRIVATE_KEY + RPC_URL
 # or export the same vars in the shell (shell wins over .env)
 
+# Production host only (Render). Habitual laptop starts refuse without this:
+# I_AM_THE_PRODUCTION_HOST=true npm run watch
+
 npm run watch
 
 # one-shot drain (exits when nextFulfillSeq catches nextSeq):
-# FROM_BLOCK=13390000 CATCH_UP_ONCE=1 npm run catch-up
+# FROM_BLOCK=13390000 CATCH_UP_ONCE=1 I_AM_THE_PRODUCTION_HOST=true npm run catch-up
 ```
 
-`OPERATOR_PRIVATE_KEY` must match on-chain `SelfEntropyProvider.operator()` — mismatch hard-exits at startup. Optional: `WSS_URL`, `FROM_BLOCK`, `CHAIN_FILE`, `POLL_MS` (default 2500), `HEAD_CHECK_MS` (default 60000), `REVEAL_MAX_RETRIES`, `GAME_ADDRESS`, `LEDGER_FILE` (alias `PAYOUT_LEDGER_PATH`). `PRIVATE_KEY` remains a fallback if `OPERATOR_PRIVATE_KEY` is unset.
+`OPERATOR_PRIVATE_KEY` must match on-chain `SelfEntropyProvider.operator()` — mismatch hard-exits at startup. Required on the live host: `I_AM_THE_PRODUCTION_HOST=true` (laptop fail-safe). Optional: `WSS_URL`, `FROM_BLOCK`, `CHAIN_FILE`, `POLL_MS` (default 2500), `HEAD_CHECK_MS` (default 60000), `REVEAL_MAX_RETRIES`, `GAME_ADDRESS`, `LEDGER_FILE` (alias `PAYOUT_LEDGER_PATH`), `STATUS_PORT` + `STATUS_TOKEN` (HTTP status/ledger surface). `PRIVATE_KEY` remains a fallback if `OPERATOR_PRIVATE_KEY` is unset.
 
-**Render:** see [`../DEPLOY-RENDER.md`](../DEPLOY-RENDER.md) for the background-worker migration (`CHAIN_FILE=/data/entropy-state.json`, `LEDGER_FILE=/data/payout-ledger.csv`).
+**Render:** see [`../DEPLOY-RENDER.md`](../DEPLOY-RENDER.md) — operator is a **Web Service** (`CHAIN_FILE=/data/entropy-state.json`, `LEDGER_FILE=/data/payout-ledger.csv`, `STATUS_PORT=$PORT`).
+
+**Laptop CSV is historical-only** after Render cutover. Never reconcile against the checkout `payout-ledger.csv` again — use the Render host `/reconcile` or `/ledger.csv` (authoritative `/data` disk).
 
 If the wallet does not match on-chain `operator()`, the watcher **exits immediately** (reveals would revert). Prefer `OPERATOR_PRIVATE_KEY`.
 
@@ -65,15 +70,16 @@ The watcher:
 CSV columns: `timestamp,requestId,user,tier,rowIndex,asset,symbol,raw_amount,human_amount,price_usd,usd_value,retro`.
 
 - **Live append** (`npm run watch`): `retro=false`; `price_usd` from DexScreener (SCRATCH pair + token address for other assets); USDG pinned at `$1`; 60s in-process cache.
-- **Backfill** missing settlements (e.g. before the ledger existed):
+- **Backfill** missing settlements (e.g. before the ledger existed, or to refresh a laptop copy while Render is the live writer):
 
 ```bash
 export RPC_URL=https://…
 # optional: GAME_ADDRESS, GAME_DEPLOY_BLOCK (default 13138508), LEDGER_FILE
-npm run backfill-ledger
+npm run backfill-ledger          # incremental from last ledger tx
+FULL_BACKFILL=1 npm run backfill-ledger   # full scan from deploy block
 ```
 
-`backfill-ledger` and `reconcile` load `.env` via dotenv (same as `watch`). Backfill prices at *current* market and sets `retro=true` so those rows are distinguishable. Backfill is **strictly additive** (skips requestIds already in the CSV; never rewrites rows).
+`backfill-ledger` and `reconcile` load `.env` via dotenv (same as `watch`). Backfill prices at *current* market and sets `retro=true` so those rows are distinguishable. Backfill is **strictly additive** (skips requestIds already in the CSV; never rewrites rows). The local treasury dashboard also auto-fills CSV gaps when you open Payouts.
 
 Reconcile chain vs CSV:
 
@@ -83,7 +89,7 @@ npm run reconcile
 
 Live-append failures log to console as `LEDGER ERROR:` and append to `ledger-errors.log` (gitignored) without failing the reveal. **Restart `npm run watch` after pulling ledger code** — a watcher started before the hook will keep revealing without writing the CSV.
 
-**VPS note:** When the operator moves to a VPS, the ledger file lives with the bot. The treasury dashboard’s quantity totals come from chain `ScratchSettled` logs and keep working without the CSV; the USD view syncs whenever you pull `payout-ledger.csv` onto the machine running the dashboard (`PAYOUT_LEDGER_PATH`).
+**VPS / Render note:** The authoritative ledger lives with the reveal host on `/data/payout-ledger.csv`. The laptop checkout CSV is **historical-only** — do not reconcile against it after cutover. Pull via `GET /ledger.csv` (Bearer `STATUS_TOKEN`) or open Payouts on the local dashboard after syncing. Quantity totals still come from chain `ScratchSettled` without the CSV.
 
 **Do not** call `registerChain` while requests are still pending unless you intend to orphan them (ScratchGame `rescue` after `rescueDelay`).
 
