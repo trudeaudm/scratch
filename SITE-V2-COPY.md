@@ -75,7 +75,17 @@ Show Y from: `floor(banked * burnBps / 10000 * amount / staked)` (pending should
 | `site/app.js` `MULTI_MAX_BATCH` (~283) | `10` | `20` |
 | QA / picker copy (`site/QA.md`, presets) | `max 10 per batch` / presets 3/5/10 | `max 20 per batch` / presets 3/5/10/20 |
 | `site/_qa_walk.mjs` | asserts max 10 / `MULTI_MAX_BATCH` | assert 20 |
-| On-chain | sequential / EIP-5792 batch of `scratch` | prefer `scratchMany(tier, count)` when available (1..20); keep sequential fallback |
+| On-chain | sequential / EIP-5792 batch of `scratch` | prefer `scratchMany(tier, count)` (1..20); keep sequential fallback |
+
+### Multi-board reveal (batch-native randomness)
+
+v2 `scratchMany` is **one randomness request / one reveal** for the whole batch.
+After the ~3s fulfill, **every card on the multi-board goes READY at once**.
+Keep individual foil uncovering / animation **exactly as-is** — only the readiness
+gate changes (no per-card waiting on sequential VRF).
+
+Off-chain: ledger rows key `requestId:cardIndex`; win-cards `/win/:req` aggregates
+batch wins (`N wins from M scratches +X total`) when `GAME_V2` is set.
 
 ---
 

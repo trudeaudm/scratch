@@ -23,7 +23,9 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 import {
-  SCRATCH_SETTLED_ABI,
+  settledAbi,
+  settlementKey,
+  isGameV2,
   appendLedgerRow,
   defaultGameAddress,
   defaultLedgerPath,
@@ -72,20 +74,21 @@ async function main() {
   if (!rpcUrl) throw new Error("RPC_URL is required");
 
   const game = defaultGameAddress();
+  const v2 = isGameV2(game);
   const deployBlock = Number(process.env.GAME_DEPLOY_BLOCK || DEFAULT_DEPLOY_BLOCK);
   const chunk = Number(process.env.LOG_CHUNK || 9_000);
   const ledgerPath = defaultLedgerPath();
 
   const provider = new JsonRpcProvider(rpcUrl);
-  const contract = new Contract(game, SCRATCH_SETTLED_ABI, provider);
+  const contract = new Contract(game, settledAbi(game), provider);
   const existing = loadLedgerRequestIds(ledgerPath);
   const latest = await provider.getBlockNumber();
   const fromBlock = await resolveFromBlock(provider, ledgerPath, deployBlock);
 
-  console.log(`backfill ScratchSettled on ${game}`);
+  console.log(`backfill ScratchSettled on ${game} (v2=${v2})`);
   console.log(`  blocks ${fromBlock} → ${latest} (chunk ${chunk})`);
   console.log(`  ledger: ${ledgerPath}`);
-  console.log(`  already have ${existing.size} requestId(s)`);
+  console.log(`  already have ${existing.size} key(s)`);
 
   let scanned = 0;
   let appended = 0;
@@ -102,7 +105,18 @@ async function main() {
 
     for (const log of logs) {
       const requestId = log.args.requestId.toString();
-      if (existing.has(requestId)) {
+      const event = {
+        user: log.args.user,
+        requestId,
+        tier: Number(log.args.tier),
+        rowIndex: log.args.rowIndex.toString(),
+        asset: log.args.asset,
+        amount: log.args.amount,
+        txHash: log.transactionHash || "",
+      };
+      if (v2) event.cardIndex = Number(log.args.cardIndex);
+      const key = settlementKey(event);
+      if (existing.has(key)) {
         skipped++;
         continue;
       }
@@ -117,21 +131,13 @@ async function main() {
         /* appendLedgerRow falls back */
       }
 
-      const ok = await appendLedgerRow(
-        provider,
-        {
-          user: log.args.user,
-          requestId,
-          tier: Number(log.args.tier),
-          rowIndex: log.args.rowIndex.toString(),
-          asset: log.args.asset,
-          amount: log.args.amount,
-          txHash: log.transactionHash || "",
-        },
-        { retro: true, timestampIso: iso, txHash: log.transactionHash || "" },
-      );
+      const ok = await appendLedgerRow(provider, event, {
+        retro: true,
+        timestampIso: iso,
+        txHash: log.transactionHash || "",
+      });
       if (ok) {
-        existing.add(requestId);
+        existing.add(key);
         appended++;
       }
     }

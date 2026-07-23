@@ -10,14 +10,60 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const LEDGER_HEADER =
   "timestamp,requestId,user,tier,rowIndex,asset,symbol,raw_amount,human_amount,price_usd,usd_value,retro,tx_hash";
 
-export const SCRATCH_SETTLED_ABI = [
+/** v1 ScratchSettled (no cardIndex). */
+export const SCRATCH_SETTLED_ABI_V1 = [
   "event ScratchSettled(address indexed user, uint256 indexed requestId, uint8 tier, uint256 rowIndex, address asset, uint256 amount)",
 ];
 
-const settledIface = new Interface(SCRATCH_SETTLED_ABI);
-const SETTLED_TOPIC = id(
+/** v2 ScratchSettled — one event per card; cardIndex after requestId. */
+export const SCRATCH_SETTLED_ABI_V2 = [
+  "event ScratchSettled(address indexed user, uint256 indexed requestId, uint8 cardIndex, uint8 tier, uint256 rowIndex, address asset, uint256 amount)",
+];
+
+/** @deprecated use SCRATCH_SETTLED_ABI_V1 or settledAbi() */
+export const SCRATCH_SETTLED_ABI = SCRATCH_SETTLED_ABI_V1;
+
+const settledIfaceV1 = new Interface(SCRATCH_SETTLED_ABI_V1);
+const settledIfaceV2 = new Interface(SCRATCH_SETTLED_ABI_V2);
+const SETTLED_TOPIC_V1 = id(
   "ScratchSettled(address,uint256,uint8,uint256,address,uint256)",
 );
+const SETTLED_TOPIC_V2 = id(
+  "ScratchSettled(address,uint256,uint8,uint8,uint256,address,uint256)",
+);
+
+/**
+ * Gate for v2 ledger parsing. Set GAME_V2=1/true, or set GAME_V2 / GAME_V2_ADDRESS
+ * to the ScratchGameV2 address and point GAME_ADDRESS at it.
+ * Leave unset → v1 pipeline unchanged.
+ */
+export function isGameV2(gameAddress) {
+  const flag = (process.env.GAME_V2 || "").trim().toLowerCase();
+  if (flag === "1" || flag === "true" || flag === "yes") return true;
+  const v2Addr = (
+    process.env.GAME_V2_ADDRESS ||
+    (flag.startsWith("0x") ? flag : "")
+  ).toLowerCase();
+  if (!v2Addr) return false;
+  const game = (gameAddress || defaultGameAddress()).toLowerCase();
+  return game === v2Addr;
+}
+
+export function settledAbi(gameAddress) {
+  return isGameV2(gameAddress) ? SCRATCH_SETTLED_ABI_V2 : SCRATCH_SETTLED_ABI_V1;
+}
+
+export function settledTopic(gameAddress) {
+  return isGameV2(gameAddress) ? SETTLED_TOPIC_V2 : SETTLED_TOPIC_V1;
+}
+
+/** Ledger uniqueness key: requestId (v1) or requestId:cardIndex (v2). */
+export function settlementKey(event) {
+  if (event.cardIndex != null && event.cardIndex !== "") {
+    return `${event.requestId}:${event.cardIndex}`;
+  }
+  return String(event.requestId);
+}
 
 export function defaultLedgerPath() {
   return (
@@ -86,21 +132,25 @@ function logAddress(log) {
 
 /**
  * Parse ScratchSettled logs from a reveal/fulfill receipt.
+ * v2: one row per card (cardIndex present). v1: one row per request.
  */
 export function parseScratchSettledFromReceipt(receipt, gameAddress) {
   const game = (gameAddress || defaultGameAddress()).toLowerCase();
+  const v2 = isGameV2(game);
+  const topic = settledTopic(game);
+  const iface = v2 ? settledIfaceV2 : settledIfaceV1;
   const out = [];
   for (const log of receipt?.logs || []) {
     if (logAddress(log) !== game) continue;
     const topics = log.topics || [];
-    if (topics[0] && topics[0].toLowerCase() !== SETTLED_TOPIC.toLowerCase()) continue;
+    if (topics[0] && topics[0].toLowerCase() !== topic.toLowerCase()) continue;
     try {
-      const parsed = settledIface.parseLog({
+      const parsed = iface.parseLog({
         topics: [...topics],
         data: log.data,
       });
       if (!parsed || parsed.name !== "ScratchSettled") continue;
-      out.push({
+      const row = {
         user: parsed.args.user,
         requestId: parsed.args.requestId.toString(),
         tier: Number(parsed.args.tier),
@@ -108,7 +158,11 @@ export function parseScratchSettledFromReceipt(receipt, gameAddress) {
         asset: parsed.args.asset,
         amount: parsed.args.amount,
         txHash: receipt.hash || receipt.transactionHash || log.transactionHash || "",
-      });
+      };
+      if (v2) {
+        row.cardIndex = Number(parsed.args.cardIndex);
+      }
+      out.push(row);
     } catch (e) {
       logLedgerError("parseLog ScratchSettled failed on receipt log", e);
     }
@@ -121,7 +175,8 @@ export function parseScratchSettledFromReceipt(receipt, gameAddress) {
  */
 export async function fetchSettledByRequest(provider, requestId, opts = {}) {
   const game = opts.gameAddress || defaultGameAddress();
-  const contract = new Contract(game, SCRATCH_SETTLED_ABI, provider);
+  const v2 = isGameV2(game);
+  const contract = new Contract(game, settledAbi(game), provider);
   const tip = await provider.getBlockNumber();
   const fromBlock = Math.max(0, Number(opts.fromBlock ?? tip - 50_000));
   const logs = await contract.queryFilter(
@@ -130,9 +185,8 @@ export async function fetchSettledByRequest(provider, requestId, opts = {}) {
     tip,
   );
   if (!logs.length) return [];
-  const log = logs[logs.length - 1];
-  return [
-    {
+  return logs.map((log) => {
+    const row = {
       user: log.args.user,
       requestId: log.args.requestId.toString(),
       tier: Number(log.args.tier),
@@ -140,8 +194,10 @@ export async function fetchSettledByRequest(provider, requestId, opts = {}) {
       asset: log.args.asset,
       amount: log.args.amount,
       txHash: log.transactionHash || "",
-    },
-  ];
+    };
+    if (v2) row.cardIndex = Number(log.args.cardIndex);
+    return row;
+  });
 }
 
 export function loadLedgerRequestIds(filePath = defaultLedgerPath()) {
@@ -180,6 +236,7 @@ export function splitCsvLine(line) {
 
 /**
  * Append one ledger row. Never throws to caller — logs loudly and returns false.
+ * v2: requestId column stores `requestId:cardIndex` so multi-card batches don't collide.
  */
 export async function appendLedgerRow(
   provider,
@@ -190,10 +247,10 @@ export async function appendLedgerRow(
   try {
     ensureHeader(filePath);
 
-    // Strictly additive: never rewrite an existing requestId.
+    const key = settlementKey(event);
     const existing = loadLedgerRequestIds(filePath);
-    if (existing.has(String(event.requestId))) {
-      console.log(`ledger: skip existing requestId=${event.requestId}`);
+    if (existing.has(key)) {
+      console.log(`ledger: skip existing key=${key}`);
       return false;
     }
 
@@ -231,13 +288,13 @@ export async function appendLedgerRow(
         usdValue = "0";
       }
     } catch (e) {
-      logLedgerError(`price fetch failed req=${event.requestId}`, e);
+      logLedgerError(`price fetch failed key=${key}`, e);
     }
 
     const hash = txHash || event.txHash || "";
     const row = [
       iso,
-      event.requestId,
+      key,
       event.user,
       event.tier,
       event.rowIndex,
@@ -255,7 +312,7 @@ export async function appendLedgerRow(
 
     fs.appendFileSync(filePath, row + "\n", "utf8");
     console.log(
-      `ledger: + ${tok.symbol} ${human || "0"} req=${event.requestId} retro=${retro} file=${filePath}`,
+      `ledger: + ${tok.symbol} ${human || "0"} key=${key} retro=${retro} file=${filePath}`,
     );
     return true;
   } catch (e) {
@@ -276,12 +333,11 @@ export async function recordRevealSettlements(provider, receipt, opts = {}) {
     const game = opts.gameAddress || defaultGameAddress();
     const txHash = receipt.hash || receipt.transactionHash || "";
     console.log(
-      `ledger: recording reveal tx=${txHash || "?"} block=${receipt.blockNumber} game=${game}`,
+      `ledger: recording reveal tx=${txHash || "?"} block=${receipt.blockNumber} game=${game} v2=${isGameV2(game)}`,
     );
 
     let events = parseScratchSettledFromReceipt(receipt, game);
 
-    // Re-fetch receipt if provider stripped internal logs.
     if (events.length === 0 && txHash) {
       try {
         const full = await provider.getTransactionReceipt(txHash);
@@ -292,7 +348,6 @@ export async function recordRevealSettlements(provider, receipt, opts = {}) {
       }
     }
 
-    // Query by requestId if still missing (indexed log scan near tip).
     if (events.length === 0 && opts.requestId != null) {
       try {
         const fromBlock =
@@ -305,7 +360,7 @@ export async function recordRevealSettlements(provider, receipt, opts = {}) {
         });
         if (events.length) {
           console.log(
-            `ledger: recovered ScratchSettled via getLogs requestId=${opts.requestId}`,
+            `ledger: recovered ScratchSettled via getLogs requestId=${opts.requestId} cards=${events.length}`,
           );
         }
       } catch (e) {

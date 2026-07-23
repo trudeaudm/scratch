@@ -106,19 +106,21 @@ Slither did not require contract patches for the 15 findings above. Separately, 
 ### Fixes applied
 
 - `StakingVaultV2.claimUnlocked` — initialize `terminalBurn = 0` (clears `uninitialized-local`).
+- `ScratchGameV2._settleBatch` — initialize `nPay = 0` (clears `uninitialized-local`).
 
 ### Slither findings (triaged)
 
 | # | Detector | Location | Disposition | Justification |
 |---|----------|----------|-------------|---------------|
-| V2-1 | `reentrancy-benign` | `ScratchGameV2._scratchOne` | **ACCEPTED** | Same posture as v1 `scratch`: `nonReentrant` on entrypoints; `requests[requestId]` must follow `requestRandomFor` because the provider assigns the id. |
-| V2-2 | `reentrancy-benign` | `ScratchGameV2.scratchMany` | **ACCEPTED** | Loops `_scratchOne` under the same `nonReentrant` guard; each iteration writes only its own id-keyed request. |
-| V2-3 | `timestamp` | `ScratchGameV2.executeRandomnessSwap` | **ACCEPTED** | Deliberate `RANDOMNESS_SWAP_DELAY` + `RANDOMNESS_SWAP_GRACE` (same as v1). |
-| V2-4 | `timestamp` | `ScratchGameV2.rescue` | **ACCEPTED** | Deliberate `rescueDelay` timelock. |
-| V2-5 | `timestamp` | `StakingVaultV2.requestUnlock` | **ACCEPTED** | Merge uses later-of-two `releaseAt` comparison — intentional unlock-window extension. |
-| V2-6 | `timestamp` | `StakingVaultV2.claimUnlocked` | **ACCEPTED** | Deliberate unlock-period gate before principal release. |
-| V2-7 | `timestamp` | `StakingVaultV2.ticketsOf` | **ACCEPTED** | View accrual / bank-cap headroom; emission is time-based. |
-| V2-8 | `timestamp` | `StakingVaultV2._update` | **ACCEPTED** | MasterChef-style accumulator over `totalWeight`; intentional. |
+| V2-1 | `reentrancy-benign` | `ScratchGameV2._scratch` | **ACCEPTED** | Same posture as v1 `scratch`: `nonReentrant` on entrypoints; `requests[requestId]` must follow `requestRandomFor` because the provider assigns the id. |
+| V2-2 | `calls-loop` | `ScratchGameV2._snapshotBpsBases` | **ACCEPTED** | Deliberate pre-batch `balanceOf` per prize-table row (tiny curated list) so every card sizes against the same vault snapshot. |
+| V2-3 | `calls-loop` | `ScratchGameV2._payoutAggregates` | **ACCEPTED** | At most one `payout` per distinct asset in a batch (`count ≤ 20`); aggregation is the gas win vs per-card payout. |
+| V2-4 | `timestamp` | `ScratchGameV2.executeRandomnessSwap` | **ACCEPTED** | Deliberate `RANDOMNESS_SWAP_DELAY` + `RANDOMNESS_SWAP_GRACE` (same as v1). |
+| V2-5 | `timestamp` | `ScratchGameV2.rescue` | **ACCEPTED** | Deliberate `rescueDelay` timelock. |
+| V2-6 | `timestamp` | `StakingVaultV2.requestUnlock` | **ACCEPTED** | Merge uses later-of-two `releaseAt` comparison — intentional unlock-window extension. |
+| V2-7 | `timestamp` | `StakingVaultV2.claimUnlocked` | **ACCEPTED** | Deliberate unlock-period gate before principal release. |
+| V2-8 | `timestamp` | `StakingVaultV2.ticketsOf` | **ACCEPTED** | View accrual / bank-cap headroom; emission is time-based. |
+| V2-9 | `timestamp` | `StakingVaultV2._update` | **ACCEPTED** | MasterChef-style accumulator over `totalWeight`; intentional. |
 
 ### v2 invariant notes (manual)
 
@@ -127,4 +129,5 @@ Slither did not require contract patches for the 15 findings above. Separately, 
 3. **Terminal burn** — only when `claimUnlocked` leaves `staked == 0`; clears tier for restake.
 4. **Weight conservation** — `totalWeight` tracks eligible `staked × tierMult`; unlocking amount leaves weight immediately.
 5. **Balance conservation** — vault SCRATCH = Σ staked + Σ unlocking (`test_invariant_stakedPlusUnlockingPlusExternal`).
-6. **`scratchMany`** — `1..MAX_BATCH(20)`; contiguous request ids; independent settle/rescue per id.
+6. **`scratchMany` (batch-native)** — one spend, one randomness request, one fulfill; per-card words `keccak256(abi.encode(word, i))`; payouts aggregated per asset; `Request` packed in one slot (`numberOfBytes: 32`).
+7. **Rescue** — refunds `TICKET_COST * count` in one `refundTicket`.

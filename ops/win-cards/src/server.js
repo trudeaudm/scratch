@@ -169,7 +169,10 @@ app.get("/win/:req", async (req, res) => {
 
   if (win?.isWin) {
     title = `scratched ${win.sharePrize} on $SCRATCH`;
-    description = `Request #${reqId} · paid onchain · scratch4663.xyz`;
+    description =
+      win.cardCount > 1
+        ? `Request #${reqId} · ${win.winCount}/${win.cardCount} cards · paid onchain · scratch4663.xyz`
+        : `Request #${reqId} · paid onchain · scratch4663.xyz`;
   } else if (win && !win.isWin) {
     title = `request #${reqId} settled — $SCRATCH`;
     description = "Not this time — same time tomorrow. Odds from the live contract.";

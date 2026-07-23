@@ -10,16 +10,21 @@ import {IRandomness, IRandomnessCallback} from "../interfaces/IRandomness.sol";
 import {ITicketSource} from "../interfaces/ITicketSource.sol";
 
 /// @title ScratchGameV2
-/// @notice Burns one ticket, requests randomness via IRandomness, maps the outcome
-///         onto a cumulative-odds prize table, and instructs PrizeVault to pay.
-///         Identical to v1 (rescue, fallback payout via vault, sweep + randomness
-///         timelocks, no-win skip, `requestRandomFor` user binding) plus
-///         `scratchMany` for one-signature multi-scratch (1..MAX_BATCH).
+/// @notice Burns ticket(s), requests randomness via IRandomness, maps outcomes onto
+///         a cumulative-odds prize table, and instructs PrizeVault to pay.
+///         `scratchMany` is batch-native: one spend, one randomness request, one
+///         reveal → N card outcomes derived from the fulfilled word, with payouts
+///         aggregated per asset.
 /// @dev Each request is exactly one of PENDING → SETTLED or PENDING → RESCUED;
 ///      both transitions are terminal. Late VRF after rescue emits
 ///      `ScratchLateFulfillment` and returns without paying.
+///
+///      Trust: per-card words are `keccak256(abi.encode(word, cardIndex))` where
+///      `word` is already bound on-chain to `(preimage, requestId, requester)` by
+///      the randomness provider. The operator's commitment predates the request
+///      exactly as for singles — batching changes latency, not the trust model.
 contract ScratchGameV2 is IRandomnessCallback, Ownable2Step, ReentrancyGuard {
-    /// @notice Ticket-wei spent per scratch (1 full ticket).
+    /// @notice Ticket-wei spent per scratch card (1 full ticket).
     uint256 public constant TICKET_COST = 1e18;
 
     /// @notice Cumulative-odds denominator (rows validated to end at this value).
@@ -34,7 +39,7 @@ contract ScratchGameV2 is IRandomnessCallback, Ownable2Step, ReentrancyGuard {
     /// @notice Number of tiers (indices 0..TIER_COUNT-1).
     uint8 public constant TIER_COUNT = 2;
 
-    /// @notice Max scratches per `scratchMany` call.
+    /// @notice Max cards per `scratchMany` (and max `Request.count`).
     uint8 public constant MAX_BATCH = 20;
 
     /// @notice Delay between `queueRandomnessSwap` and `executeRandomnessSwap`.
@@ -83,11 +88,14 @@ contract ScratchGameV2 is IRandomnessCallback, Ownable2Step, ReentrancyGuard {
         uint32 cumOdds;
     }
 
+    /// @notice Single-slot packed request (248 bits).
+    ///         user(160) + tier(8) + requestedAt(64) + status(8) + count(8) = 248.
     struct Request {
         address user;
         uint8 tier;
         uint64 requestedAt;
         Status status;
+        uint8 count;
     }
 
     mapping(uint256 => Request) public requests;
@@ -95,10 +103,12 @@ contract ScratchGameV2 is IRandomnessCallback, Ownable2Step, ReentrancyGuard {
     event TicketSourceSet(uint8 indexed tier, address indexed source);
     event PrizeTableSet(uint8 indexed tier, PrizeRow[] table);
     event ScratchRequested(address indexed user, uint256 indexed requestId, uint8 tier);
-    event ScratchBatch(address indexed user, uint8 tier, uint256 count, uint256 firstRequestId);
+    event ScratchBatch(address indexed user, uint8 tier, uint256 count, uint256 requestId);
+    /// @notice Per-card settlement. Singles emit `cardIndex == 0`.
     event ScratchSettled(
         address indexed user,
         uint256 indexed requestId,
+        uint8 cardIndex,
         uint8 tier,
         uint256 rowIndex,
         address asset,
@@ -106,7 +116,7 @@ contract ScratchGameV2 is IRandomnessCallback, Ownable2Step, ReentrancyGuard {
     );
     event ScratchRescued(address indexed user, uint256 indexed requestId, uint8 tier);
     /// @notice VRF arrived after the request was already rescued; no prize paid.
-    event ScratchLateFulfillment(address indexed user, uint256 indexed requestId, uint8 tier);
+    event ScratchLateFulfillment(address indexed user, uint256 indexed requestId, uint8 tier, uint8 count);
     event RandomnessSwapQueued(address indexed newProvider, uint64 eta);
     event RandomnessSwapCancelled(address indexed pendingProvider);
     event RandomnessSwapped(address indexed oldProvider, address indexed newProvider);
@@ -171,8 +181,6 @@ contract ScratchGameV2 is IRandomnessCallback, Ownable2Step, ReentrancyGuard {
     }
 
     /// @notice Queue a randomness-provider swap after `RANDOMNESS_SWAP_DELAY`.
-    /// @dev Runbook: queue → drain all old-provider pendings (settle or rescue) →
-    ///      execute. `rescueDelay` < `RANDOMNESS_SWAP_DELAY` guarantees that window.
     function queueRandomnessSwap(address newProvider) external onlyOwner {
         if (newProvider == address(0)) revert ZeroAddress();
         pendingRandomness = newProvider;
@@ -191,10 +199,6 @@ contract ScratchGameV2 is IRandomnessCallback, Ownable2Step, ReentrancyGuard {
     }
 
     /// @notice Execute a queued swap in `[eta, eta + RANDOMNESS_SWAP_GRACE]`.
-    /// @dev After the grace window the queue expires (`RandomnessSwapExpired`) and
-    ///      must be re-queued. Execute only after all old-provider requests are
-    ///      SETTLED or RESCUED — late fulfills from the old provider revert at
-    ///      `onlyRandomness`.
     function executeRandomnessSwap() external onlyOwner {
         address pending = pendingRandomness;
         if (pending == address(0)) revert NoRandomnessSwapPending();
@@ -209,72 +213,171 @@ contract ScratchGameV2 is IRandomnessCallback, Ownable2Step, ReentrancyGuard {
         emit RandomnessSwapped(oldProvider, pending);
     }
 
-    /// @notice Spend one ticket from `tier`'s source and request randomness.
+    /// @notice Spend one ticket and request randomness (`Request.count = 1`).
     /// @param tier STANDARD (0) or PREMIUM (1).
     function scratch(uint8 tier) external nonReentrant returns (uint256 requestId) {
-        requestId = _scratchOne(tier);
+        requestId = _scratch(tier, 1);
     }
 
-    /// @notice Spend `count` tickets and issue `count` randomness requests atomically.
-    /// @dev `1 ≤ count ≤ MAX_BATCH`. Reverts if tickets < count. Emits per-request
-    ///      `ScratchRequested` plus a single `ScratchBatch`. Each request settles
-    ///      independently via the normal fulfill/rescue paths.
+    /// @notice Spend `count` tickets and issue ONE randomness request for `count` cards.
+    /// @dev `1 ≤ count ≤ MAX_BATCH`. One `spendTickets(TICKET_COST * count)`, one
+    ///      `requestRandomFor`. Emits `ScratchRequested` plus `ScratchBatch`.
     /// @param tier STANDARD (0) or PREMIUM (1).
-    /// @param count Number of scratches (1..20).
-    /// @return firstRequestId Id of the first request in the contiguous batch.
-    function scratchMany(uint8 tier, uint256 count)
-        external
-        nonReentrant
-        returns (uint256 firstRequestId)
-    {
+    /// @param count Number of cards (1..20).
+    /// @return requestId The single batch request id.
+    function scratchMany(uint8 tier, uint256 count) external nonReentrant returns (uint256 requestId) {
         if (count == 0 || count > MAX_BATCH) revert InvalidBatchCount();
-
-        firstRequestId = _scratchOne(tier);
-        for (uint256 i = 1; i < count; i++) {
-            _scratchOne(tier);
-        }
-
-        emit ScratchBatch(msg.sender, tier, count, firstRequestId);
+        requestId = _scratch(tier, uint8(count));
+        emit ScratchBatch(msg.sender, tier, count, requestId);
     }
 
     /// @inheritdoc IRandomnessCallback
-    /// @dev Late fulfillment after rescue: emit `ScratchLateFulfillment` and return —
-    ///      must not revert (breaks the coordinator callback) and must not pay a prize.
-    ///      Terminal no-win (`asset == address(0)`) skips `prizeVault.payout` and emits
-    ///      `ScratchSettled` with `amount == 0`.
+    /// @dev Settles all cards in the request from one `randomWord`. Per-card word:
+    ///      `uint256(keccak256(abi.encode(randomWord, cardIndex)))`. Bps-of-pool
+    ///      rows all size against the pre-batch vault balance (snapshotted on first
+    ///      touch of each asset during this fulfill — never mid-batch depleting).
+    ///      Intended (asset, amount) per card are emitted, then amounts are aggregated
+    ///      per distinct asset and `prizeVault.payout` is called once per asset
+    ///      (vault-internal transfer fallback applies to the aggregate). An all-no-win
+    ///      batch skips payout entirely. Only one status SSTORE (Pending → Settled).
     function fulfill(uint256 requestId, uint256 randomWord) external onlyRandomness nonReentrant {
         Request storage req = requests[requestId];
         if (req.status == Status.None) revert RequestUnknown();
         if (req.status == Status.Rescued) {
-            emit ScratchLateFulfillment(req.user, requestId, req.tier);
+            emit ScratchLateFulfillment(req.user, requestId, req.tier, req.count);
             return;
         }
         if (req.status != Status.Pending) revert NotPending();
 
+        // Single status write for the whole batch.
         req.status = Status.Settled;
 
-        PrizeRow[] storage table = _tables[req.tier];
-        uint256 roll = randomWord % ODDS_DENOM;
-        uint256 rowIndex = _selectRow(table, roll);
-        PrizeRow storage row = table[rowIndex];
-
-        address asset = row.asset;
-        uint256 amount;
-        if (asset == address(0)) {
-            // Terminal no-win: skip vault call (gas + PrizePaid noise).
-            emit ScratchSettled(req.user, requestId, req.tier, rowIndex, asset, 0);
-            return;
-        } else if (row.isBpsOfPool) {
-            amount = (uint256(row.amountOrBps) * prizeVault.balanceOf(asset)) / 10_000;
-        } else {
-            amount = uint256(row.amountOrBps);
-        }
-
-        prizeVault.payout(req.user, asset, amount);
-        emit ScratchSettled(req.user, requestId, req.tier, rowIndex, asset, amount);
+        _settleBatch(requestId, req.user, req.tier, req.count, randomWord);
     }
 
-    /// @notice After `rescueDelay`, anyone may refund the spent ticket and mark
+    /// @dev Transient settle context — keeps `_settleOneCard` under the stack limit.
+    struct BatchCtx {
+        uint256 requestId;
+        address user;
+        uint8 tier;
+        uint256 randomWord;
+        uint256 tableLen;
+    }
+
+    /// @dev Resolve cards + aggregate payouts. Split from `fulfill` to stay under stack limit.
+    ///      Bps-of-pool bases are snapshotted once per table row before any card is resolved
+    ///      so every card sizes against the pre-batch vault balance.
+    function _settleBatch(uint256 requestId, address user, uint8 tier, uint8 count, uint256 randomWord)
+        internal
+    {
+        PrizeRow[] storage table = _tables[tier];
+        BatchCtx memory ctx = BatchCtx({
+            requestId: requestId,
+            user: user,
+            tier: tier,
+            randomWord: randomWord,
+            tableLen: table.length
+        });
+
+        uint256[] memory bpsBase = _snapshotBpsBases(table, ctx.tableLen);
+
+        address[] memory payAssets = new address[](count);
+        uint256[] memory payAmounts = new uint256[](count);
+        uint256 nPay = 0;
+
+        for (uint256 cardIndex = 0; cardIndex < count;) {
+            nPay = _settleOneCard(ctx, table, bpsBase, payAssets, payAmounts, nPay, cardIndex);
+            unchecked {
+                ++cardIndex;
+            }
+        }
+
+        _payoutAggregates(user, payAssets, payAmounts, nPay);
+    }
+
+    function _snapshotBpsBases(PrizeRow[] storage table, uint256 tableLen)
+        internal
+        view
+        returns (uint256[] memory bpsBase)
+    {
+        bpsBase = new uint256[](tableLen);
+        for (uint256 i = 0; i < tableLen;) {
+            PrizeRow storage r = table[i];
+            if (r.isBpsOfPool && r.asset != address(0)) {
+                bpsBase[i] = prizeVault.balanceOf(r.asset);
+            }
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    function _settleOneCard(
+        BatchCtx memory ctx,
+        PrizeRow[] storage table,
+        uint256[] memory bpsBase,
+        address[] memory payAssets,
+        uint256[] memory payAmounts,
+        uint256 nPay,
+        uint256 cardIndex
+    ) internal returns (uint256) {
+        uint256 rowIndex = _selectRow(
+            table, ctx.tableLen, uint256(keccak256(abi.encode(ctx.randomWord, cardIndex))) % ODDS_DENOM
+        );
+        PrizeRow storage row = table[rowIndex];
+        address asset = row.asset;
+        uint256 amount = _rowAmount(row, bpsBase[rowIndex]);
+
+        emit ScratchSettled(ctx.user, ctx.requestId, uint8(cardIndex), ctx.tier, rowIndex, asset, amount);
+
+        if (asset != address(0) && amount != 0) {
+            return _accumulate(payAssets, payAmounts, nPay, asset, amount);
+        }
+        return nPay;
+    }
+
+    function _rowAmount(PrizeRow storage row, uint256 bpsBase) internal view returns (uint256) {
+        if (row.asset == address(0)) return 0;
+        if (row.isBpsOfPool) return (uint256(row.amountOrBps) * bpsBase) / 10_000;
+        return uint256(row.amountOrBps);
+    }
+
+    function _payoutAggregates(address user, address[] memory payAssets, uint256[] memory payAmounts, uint256 nPay)
+        internal
+    {
+        for (uint256 i = 0; i < nPay;) {
+            prizeVault.payout(user, payAssets[i], payAmounts[i]);
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    /// @dev Append-or-add `amount` into the pay aggregate; returns new length.
+    function _accumulate(
+        address[] memory payAssets,
+        uint256[] memory payAmounts,
+        uint256 nPay,
+        address asset,
+        uint256 amount
+    ) internal pure returns (uint256) {
+        for (uint256 j = 0; j < nPay;) {
+            if (payAssets[j] == asset) {
+                payAmounts[j] += amount;
+                return nPay;
+            }
+            unchecked {
+                ++j;
+            }
+        }
+        payAssets[nPay] = asset;
+        payAmounts[nPay] = amount;
+        unchecked {
+            return nPay + 1;
+        }
+    }
+
+    /// @notice After `rescueDelay`, anyone may refund `TICKET_COST * count` and mark
     ///         the request RESCUED. Reverts if already SETTLED (or not PENDING).
     function rescue(uint256 requestId) external nonReentrant {
         Request storage req = requests[requestId];
@@ -283,12 +386,15 @@ contract ScratchGameV2 is IRandomnessCallback, Ownable2Step, ReentrancyGuard {
         if (req.status != Status.Pending) revert NotPending();
         if (block.timestamp < uint256(req.requestedAt) + rescueDelay) revert RescueTooEarly();
 
+        uint8 count = req.count;
+        address user = req.user;
+        uint8 tier = req.tier;
         req.status = Status.Rescued;
 
-        ITicketSource source = ticketSource[req.tier];
-        source.refundTicket(req.user, TICKET_COST);
+        ITicketSource source = ticketSource[tier];
+        source.refundTicket(user, TICKET_COST * uint256(count));
 
-        emit ScratchRescued(req.user, requestId, req.tier);
+        emit ScratchRescued(user, requestId, tier);
     }
 
     /// @notice Number of prize rows for `tier`.
@@ -301,20 +407,22 @@ contract ScratchGameV2 is IRandomnessCallback, Ownable2Step, ReentrancyGuard {
         return _tables[tier][index];
     }
 
-    function _scratchOne(uint8 tier) internal returns (uint256 requestId) {
+    /// @dev One spend + one randomness request; stores `count` on the Request.
+    function _scratch(uint8 tier, uint8 count) internal returns (uint256 requestId) {
         if (tier >= TIER_COUNT) revert InvalidTier();
         ITicketSource source = ticketSource[tier];
         if (address(source) == address(0)) revert TicketSourceNotSet();
         if (_tables[tier].length == 0) revert TableEmpty();
 
-        source.spendTickets(msg.sender, TICKET_COST);
+        source.spendTickets(msg.sender, TICKET_COST * uint256(count));
 
         requestId = randomness.requestRandomFor(msg.sender);
         requests[requestId] = Request({
             user: msg.sender,
             tier: tier,
             requestedAt: uint64(block.timestamp),
-            status: Status.Pending
+            status: Status.Pending,
+            count: count
         });
 
         emit ScratchRequested(msg.sender, requestId, tier);
@@ -335,13 +443,14 @@ contract ScratchGameV2 is IRandomnessCallback, Ownable2Step, ReentrancyGuard {
         if (last.cumOdds != ODDS_DENOM || last.asset != address(0)) revert TableBadTerminal();
     }
 
-    /// @dev First row whose `cumOdds` is strictly greater than `roll`.
-    function _selectRow(PrizeRow[] storage table, uint256 roll) internal view returns (uint256) {
-        uint256 n = table.length;
-        for (uint256 i = 0; i < n; i++) {
+    /// @dev First row whose `cumOdds` is strictly greater than `roll`. `n` cached by caller.
+    function _selectRow(PrizeRow[] storage table, uint256 n, uint256 roll) internal view returns (uint256) {
+        for (uint256 i = 0; i < n;) {
             if (roll < table[i].cumOdds) return i;
+            unchecked {
+                ++i;
+            }
         }
-        // Unreachable when table ends at ODDS_DENOM and roll < ODDS_DENOM.
         return n - 1;
     }
 }

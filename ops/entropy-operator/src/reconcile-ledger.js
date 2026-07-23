@@ -14,7 +14,9 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import dotenv from "dotenv";
 import {
-  SCRATCH_SETTLED_ABI,
+  settledAbi,
+  settlementKey,
+  isGameV2,
   defaultGameAddress,
   defaultLedgerPath,
   loadLedgerRequestIds,
@@ -59,12 +61,13 @@ export async function runReconcile(opts = {}) {
   if (!rpcUrl) throw new Error("RPC_URL is required");
 
   const game = defaultGameAddress();
+  const v2 = isGameV2(game);
   const fromBlock = Number(process.env.GAME_DEPLOY_BLOCK || DEFAULT_DEPLOY_BLOCK);
   const chunk = Number(process.env.LOG_CHUNK || 9_000);
   const ledgerPath = defaultLedgerPath();
 
   const provider = new JsonRpcProvider(rpcUrl);
-  const contract = new Contract(game, SCRATCH_SETTLED_ABI, provider);
+  const contract = new Contract(game, settledAbi(game), provider);
   const latest = await provider.getBlockNumber();
 
   const chainIds = [];
@@ -81,14 +84,20 @@ export async function runReconcile(opts = {}) {
     );
     for (const log of logs) {
       const requestId = log.args.requestId.toString();
-      chainIds.push(requestId);
+      const key = v2
+        ? settlementKey({
+            requestId,
+            cardIndex: Number(log.args.cardIndex),
+          })
+        : requestId;
+      chainIds.push(key);
       const amount = log.args.amount;
       const asset = (log.args.asset || "").toLowerCase();
       const isWin = amount > 0n && asset !== ZERO;
       if (isWin) wins++;
       else noWins++;
-      chainById.set(requestId, {
-        requestId,
+      chainById.set(key, {
+        requestId: key,
         user: log.args.user,
         asset,
         amount: amount.toString(),
@@ -169,10 +178,12 @@ export async function runReconcile(opts = {}) {
 
   if (!silent) {
     console.log("=== payout ledger reconcile ===");
-    console.log(`game:          ${game}`);
+    console.log(`game:          ${game} (v2=${v2})`);
     console.log(`blocks:        ${fromBlock} → ${latest}`);
     console.log(`ledger:        ${ledgerPath}`);
-    console.log(`chain events:  ${chainIds.length} (wins=${wins} no-win=${noWins})`);
+    console.log(
+      `chain ${v2 ? "cards" : "events"}:  ${chainIds.length} (wins=${wins} no-win=${noWins})`,
+    );
     console.log(`ledger rows:   ${ledgerRows.length} (unique ids=${ledgerIds.size})`);
     console.log(`missing ids:   ${missing.length}`);
     if (missing.length) {
