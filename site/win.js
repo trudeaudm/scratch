@@ -2,7 +2,10 @@
  * Public win share page — loads ScratchSettled for ?req=&tier= and renders the card.
  * Bump ASSET_VERSION in sync with win.html ?v=.
  */
-export const ASSET_VERSION = 'mint-tokens-1';
+export const ASSET_VERSION = 'v2-mode-1';
+
+/** Game generation — production stays v1 until cutover. `?gen=2` forces v2 for verify. */
+export const GAME_GENERATION = 1;
 
 import {
   createPublicClient,
@@ -15,6 +18,25 @@ import {
   defineChain,
 } from 'https://esm.sh/viem@2.21.54';
 
+function urlGenerationOverride() {
+  try {
+    const g = new URLSearchParams(location.search).get('gen');
+    if (!g) return null;
+    const v = String(g).toLowerCase();
+    if (v === '2' || v === 'v2') return 2;
+    if (v === '1' || v === 'v1') return 1;
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+function activeGeneration() {
+  return urlGenerationOverride() ?? GAME_GENERATION;
+}
+function isV2() {
+  return activeGeneration() === 2;
+}
+
 const CONFIG = {
   chainId: 4663,
   explorer: 'https://robinhoodchain.blockscout.com',
@@ -23,6 +45,8 @@ const CONFIG = {
     public: 'https://rpc.mainnet.chain.robinhood.com',
   },
   game: '0xBeD604b5AB226134EdF154cc31881d8C93f4C9e6',
+  // v2 game (ScratchGameV2) — filled at migration; used when generation is 2.
+  gameV2: '0xFILL_AT_MIGRATION',
   deployBlock: 13_138_508n,
   logChunkBlocks: 9_000n,
   /** Seeded fallbacks; overwritten by `./tokens.json` at boot. */
@@ -55,9 +79,19 @@ async function loadTokenConfig() {
   }
 }
 
-const EVENT_SCRATCH_SETTLED = parseAbiItem(
-  'event ScratchSettled(address indexed user, uint256 indexed requestId, uint8 tier, uint256 rowIndex, address asset, uint256 amount)',
-);
+const EVENT_SCRATCH_SETTLED = isV2()
+  ? parseAbiItem(
+      'event ScratchSettled(address indexed user, uint256 indexed requestId, uint8 cardIndex, uint8 tier, uint256 rowIndex, address asset, uint256 amount)',
+    )
+  : parseAbiItem(
+      'event ScratchSettled(address indexed user, uint256 indexed requestId, uint8 tier, uint256 rowIndex, address asset, uint256 amount)',
+    );
+
+/** Active game address for the current generation (v2 falls back to v1 if unfilled). */
+function activeGameAddress() {
+  if (isV2() && CONFIG.gameV2 && !/FILL/i.test(CONFIG.gameV2)) return CONFIG.gameV2;
+  return CONFIG.game;
+}
 
 const ABI_ERC20 = [
   { type: 'function', name: 'symbol', stateMutability: 'view', inputs: [], outputs: [{ type: 'string' }] },
@@ -96,18 +130,22 @@ function parseQuery() {
   const q = new URLSearchParams(location.search);
   const reqRaw = (q.get('req') || '').trim();
   const tierRaw = (q.get('tier') || '').trim().toLowerCase();
+  // v2 share links carry `requestId:cardIndex`; v1 is just `requestId`.
   let requestId = null;
-  if (/^\d+$/.test(reqRaw)) {
+  let cardIndex = null;
+  const m = /^(\d+)(?::(\d+))?$/.exec(reqRaw);
+  if (m) {
     try {
-      requestId = BigInt(reqRaw);
+      requestId = BigInt(m[1]);
     } catch {
       requestId = null;
     }
+    if (m[2] != null) cardIndex = Number(m[2]);
   }
   let tierHint = null;
   if (tierRaw === 'prem' || tierRaw === 'premium' || tierRaw === '1') tierHint = 1;
   else if (tierRaw === 'std' || tierRaw === 'standard' || tierRaw === '0') tierHint = 0;
-  return { requestId, tierHint, reqRaw };
+  return { requestId, cardIndex, tierHint, reqRaw };
 }
 
 function showGeneric() {
@@ -160,10 +198,20 @@ async function tokenMeta(asset) {
   }
 }
 
-async function findSettled(requestId) {
+function pickCard(logs, cardIndex) {
+  if (!logs.length) return null;
+  // v2: choose the log for the requested cardIndex; else the last (latest) log.
+  if (cardIndex != null) {
+    const match = logs.find((l) => Number(l.args.cardIndex ?? 0) === cardIndex);
+    if (match) return match;
+  }
+  return logs[logs.length - 1];
+}
+
+async function findSettled(requestId, cardIndex) {
   const tip = await client.getBlockNumber();
   const from = CONFIG.deployBlock;
-  const game = getAddress(CONFIG.game);
+  const game = getAddress(activeGameAddress());
   for (let start = tip; start >= from; ) {
     const chunkFrom =
       start + 1n > CONFIG.logChunkBlocks ? start + 1n - CONFIG.logChunkBlocks : from;
@@ -176,7 +224,7 @@ async function findSettled(requestId) {
         fromBlock: clampedFrom,
         toBlock: start,
       });
-      if (logs.length) return logs[logs.length - 1];
+      if (logs.length) return pickCard(logs, cardIndex);
     } catch {
       /* try older chunk */
     }
@@ -203,7 +251,12 @@ async function renderWin(log, tierHint) {
   applyTierUi(tier ?? 0);
 
   const reqEl = $('winReq');
-  if (reqEl) reqEl.textContent = `REQUEST #${args.requestId.toString()}`;
+  if (reqEl) {
+    reqEl.textContent =
+      args.cardIndex != null
+        ? `REQUEST #${args.requestId.toString()} · card ${Number(args.cardIndex) + 1}`
+        : `REQUEST #${args.requestId.toString()}`;
+  }
 
   const asset = args.asset;
   const amount = args.amount ?? 0n;
@@ -244,7 +297,7 @@ async function renderWin(log, tierHint) {
 
 async function main() {
   await loadTokenConfig();
-  const { requestId, tierHint } = parseQuery();
+  const { requestId, cardIndex, tierHint } = parseQuery();
   if (tierHint != null) applyTierUi(tierHint);
 
   if (requestId == null) {
@@ -252,13 +305,17 @@ async function main() {
     return;
   }
 
-  setText($('winReq'), `REQUEST #${requestId.toString()}`);
+  const reqLabel =
+    cardIndex != null
+      ? `REQUEST #${requestId.toString()} · card ${cardIndex + 1}`
+      : `REQUEST #${requestId.toString()}`;
+  setText($('winReq'), reqLabel);
   setText($('winAmt'), 'Loading…');
   setText($('winLbl'), 'Fetching settlement from chain');
   $('winReceipt').hidden = true;
 
   try {
-    const log = await findSettled(requestId);
+    const log = await findSettled(requestId, cardIndex);
     if (!log) {
       showGeneric();
       setText(

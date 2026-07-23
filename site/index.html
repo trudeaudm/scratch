@@ -166,6 +166,44 @@
   .stake-status,.scratch-status{font-size:12.5px;color:var(--muted);margin-top:8px;min-height:16px}
   .stake-status.warn{color:#9B3B2E;font-weight:600}
   .withdraw-warn{font-size:12.5px;color:#9B3B2E;font-weight:600;margin-top:8px;line-height:1.45}
+
+  /* --- generation gating (v1 vs v2) ---
+     gen-v2-only elements carry the `hidden` attribute by default (production is v1);
+     applyGenerationUi() clears it under ?gen=2 / GAME_GENERATION=2. */
+  [hidden]{display:none!important}
+
+  /* --- v2 tier picker (segmented) --- */
+  .wallet-tier{font-size:12px;font-weight:700;color:var(--green-dark);margin-top:10px;letter-spacing:.02em}
+  .tier-picker{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap}
+  .tier-picker.locked{opacity:.7}
+  .tier-picker button{
+    flex:1 1 140px;display:flex;flex-direction:column;gap:2px;align-items:flex-start;text-align:left;
+    border:1.5px solid var(--line);background:#fff;border-radius:12px;padding:9px 12px;cursor:pointer;
+    font-family:'Inter';color:var(--ink);min-height:44px;
+  }
+  .tier-picker button .t-name{font-size:12.5px;font-weight:800;letter-spacing:.02em}
+  .tier-picker button .t-sub{font-size:11px;font-weight:600;color:var(--muted)}
+  .tier-picker button:hover{border-color:var(--green)}
+  .tier-picker button.active{border-color:var(--green);background:var(--green-tint);color:var(--ink)}
+  .tier-picker button.active .t-sub{color:var(--green-dark)}
+  .tier-picker button:disabled{cursor:default}
+  .tier-picker.locked button:not(.active){opacity:.45}
+  .tier-locked-note{font-size:11.5px;font-weight:700;color:var(--muted);margin-top:6px;letter-spacing:.02em}
+  .upgrade-tier-btn{margin-top:10px;width:100%}
+  .stake-mini .tier-picker{margin-top:0;margin-bottom:8px}
+
+  /* --- v2 unlock flow --- */
+  .unlock-flow{margin-top:12px}
+  .burn-preview{font-size:12px;color:var(--head);margin-top:6px;padding:0 6px;line-height:1.4;min-height:16px}
+  .unlocking-panel{
+    margin-top:12px;padding:12px 14px;border-radius:12px;
+    background:var(--green-tint,#EAF9F3);border:1px solid var(--green);
+  }
+  .unlocking-panel .up-head{font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--green-dark)}
+  .unlocking-panel .up-grid{display:flex;justify-content:space-between;gap:10px;margin-top:6px;font-size:13px;font-weight:700;font-variant-numeric:tabular-nums}
+  .unlocking-panel .up-actions{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+  .unlocking-panel .up-actions .btn{flex:1 1 120px;min-height:40px}
+  .unlock-full-exit-warn{font-size:12px;color:#9B3B2E;font-weight:700;margin-top:8px;line-height:1.45}
   .pending-rescue{
     display:none;margin-top:12px;padding:12px 14px;border-radius:12px;
     background:#FFF4D6;border:1px solid #EAD37E;font-size:13px;
@@ -852,6 +890,13 @@
       Draw still pending past rescue delay.
       <button type="button" class="btn sm" id="rescueBtn" style="margin-top:8px;width:100%">Rescue (refund ticket)</button>
     </div>
+    <div class="wallet-tier gen-v2-only" id="walletTier" hidden>No stake yet</div>
+    <div class="tier-picker gen-v2-only" id="stakeTierPicker" hidden role="group" aria-label="Stake tier">
+      <button type="button" data-tier="1" aria-pressed="true"><span class="t-name">NORMAL</span><span class="t-sub" data-tier-copy="normal">48h unlock · 1.0×</span></button>
+      <button type="button" data-tier="2" aria-pressed="false"><span class="t-name">ENHANCED</span><span class="t-sub" data-tier-copy="enhanced">120h unlock · +20%</span></button>
+    </div>
+    <div class="tier-locked-note gen-v2-only" id="stakeTierLockedNote" hidden></div>
+    <button type="button" class="btn ghost sm upgrade-tier-btn gen-v2-only" id="upgradeTierBtn" hidden>Upgrade to enhanced</button>
     <div class="stake-row">
       <div class="field-wrap">
         <div class="field-meta">
@@ -868,22 +913,61 @@
       <button type="button" class="btn sm" id="stakeBtn">Stake</button>
     </div>
     <div class="stake-status" id="stakeStatus"></div>
-    <div class="withdraw-row">
-      <div class="field-wrap">
-        <div class="field-meta">
-          <span id="withdrawStakedBal">Staked: —</span>
-          <div class="pct-row disabled" id="withdrawPctRow" role="group" aria-label="Withdraw percentage">
-            <button type="button" class="pct-btn" data-pct="25" disabled>25%</button>
-            <button type="button" class="pct-btn" data-pct="50" disabled>50%</button>
-            <button type="button" class="pct-btn" data-pct="75" disabled>75%</button>
-            <button type="button" class="pct-btn" data-pct="100" disabled>MAX</button>
+
+    <!-- v1: instant withdraw (burns all tickets) -->
+    <div id="withdrawFlow" class="gen-v1-only">
+      <div class="withdraw-row">
+        <div class="field-wrap">
+          <div class="field-meta">
+            <span id="withdrawStakedBal">Staked: —</span>
+            <div class="pct-row disabled" id="withdrawPctRow" role="group" aria-label="Withdraw percentage">
+              <button type="button" class="pct-btn" data-pct="25" disabled>25%</button>
+              <button type="button" class="pct-btn" data-pct="50" disabled>50%</button>
+              <button type="button" class="pct-btn" data-pct="75" disabled>75%</button>
+              <button type="button" class="pct-btn" data-pct="100" disabled>MAX</button>
+            </div>
           </div>
+          <input type="text" inputmode="decimal" id="withdrawAmount" placeholder="Amount to withdraw" aria-label="Amount to withdraw">
         </div>
-        <input type="text" inputmode="decimal" id="withdrawAmount" placeholder="Amount to withdraw" aria-label="Amount to withdraw">
+        <button type="button" class="btn ghost sm" id="withdrawBtn">Withdraw</button>
       </div>
-      <button type="button" class="btn ghost sm" id="withdrawBtn">Withdraw</button>
+      <div class="withdraw-warn" id="withdrawWarn"></div>
     </div>
-    <div class="withdraw-warn" id="withdrawWarn"></div>
+
+    <!-- v2: timed unlock (request / claim / cancel) -->
+    <div id="unlockFlow" class="unlock-flow gen-v2-only" hidden>
+      <div class="withdraw-row">
+        <div class="field-wrap">
+          <div class="field-meta">
+            <span id="withdrawStakedBalV2">Staked: —</span>
+            <div class="pct-row disabled" id="unlockPctRow" role="group" aria-label="Unlock percentage">
+              <button type="button" class="pct-btn" data-pct="25" disabled>25%</button>
+              <button type="button" class="pct-btn" data-pct="50" disabled>50%</button>
+              <button type="button" class="pct-btn" data-pct="75" disabled>75%</button>
+              <button type="button" class="pct-btn" data-pct="100" disabled>MAX</button>
+            </div>
+          </div>
+          <input type="text" inputmode="decimal" id="unlockAmount" placeholder="Amount to unlock" aria-label="Amount to unlock">
+        </div>
+        <button type="button" class="btn ghost sm" id="requestUnlockBtn">Request unlock</button>
+      </div>
+      <div class="burn-preview" id="unlockBurnPreview"></div>
+
+      <div class="unlocking-panel" id="unlockingPanel" hidden>
+        <div class="up-head">Unlocking</div>
+        <div class="up-grid">
+          <span id="unlockingAmount">—</span>
+          <span>unlocks in <b id="unlockCountdown">—</b></span>
+        </div>
+        <div class="up-actions">
+          <button type="button" class="btn sm" id="unlockClaimBtn" disabled>Claim unlocked</button>
+          <button type="button" class="btn ghost sm" id="unlockCancelBtn">Cancel unlock</button>
+        </div>
+        <div class="unlock-full-exit-warn" id="unlockFullExitWarn" hidden></div>
+      </div>
+
+      <div class="withdraw-warn" id="unlockWarn">Warning: each unlock request burns tickets proportionally (currently 50% × fraction unlocked). Canceling re-stakes principal but does not restore burned tickets.</div>
+    </div>
   </div>
   </div><!-- /.hero-card -->
 
@@ -898,10 +982,11 @@
           <button type="button" data-n="3">3</button>
           <button type="button" data-n="5">5</button>
           <button type="button" data-n="10">10</button>
+          <button type="button" data-n="20" class="gen-v2-only" hidden>20</button>
         </div>
         <div class="multi-count-row">
           <input type="number" id="multiCountInput" inputmode="numeric" min="2" max="10" value="3" aria-label="Number of tickets">
-          <span class="multi-cap-note">max 10 per batch</span>
+          <span class="multi-cap-note" id="multiCapNote">max 10 per batch</span>
         </div>
         <div class="multi-fallback-note" id="multiFallbackNote" role="status">
           <strong>One approval per ticket</strong>
@@ -995,6 +1080,10 @@
       <div class="rate" id="minStakeRate">Stake at least <b id="minStakeAmount">…</b> $SCRATCH <span class="usd-live" data-scratch-amount="0"></span> · your share of <b>65%</b> of emissions · <b>no lockup</b></div>
       <div class="prize-list" id="prizeListPrem">
         <div class="prize-row"><span class="p muted">Loading live odds…</span><span class="o">…</span></div>
+      </div>
+      <div class="tier-picker gen-v2-only" id="stakeTierPickerPath" hidden role="group" aria-label="Stake tier">
+        <button type="button" data-tier="1" aria-pressed="true"><span class="t-name">NORMAL</span><span class="t-sub" data-tier-copy="normal">48h unlock · 1.0×</span></button>
+        <button type="button" data-tier="2" aria-pressed="false"><span class="t-name">ENHANCED</span><span class="t-sub" data-tier-copy="enhanced">120h unlock · +20%</span></button>
       </div>
       <div class="stake-mini">
         <input type="text" inputmode="decimal" id="stakeAmountPath" placeholder="Amount to stake" aria-label="Amount to stake">
@@ -1153,6 +1242,6 @@
 <div class="toast-host" id="toastHost" aria-live="polite" aria-relevant="additions"></div>
 
 <!-- Bump ?v= to the short commit hash on every site/ ship so Render/CDN cannot serve stale app.js -->
-<script type="module" src="./app.js?v=share-og-1"></script>
+<script type="module" src="./app.js?v=v2-mode-1"></script>
 </body>
 </html>

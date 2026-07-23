@@ -3,7 +3,14 @@
  * Wire from index.html: <script type="module" src="./app.js?v=…"></script>
  * Bump ASSET_VERSION (and the index.html ?v=) on every site/ commit.
  */
-export const ASSET_VERSION = 'share-og-1';
+export const ASSET_VERSION = 'v2-mode-1';
+
+/**
+ * Game generation flag. Production stays on v1 (StakingVault + ScratchGame) until
+ * this is flipped to 2 (StakingVaultV2 + ScratchGameV2). The flip commit sets this
+ * to 2 and fills CONFIG.v2.addresses. Local verify can force v2 via `?gen=2`.
+ */
+export const GAME_GENERATION = 1;
 
 import {
   createPublicClient,
@@ -48,13 +55,65 @@ export const CONFIG = {
   refreshMs: 30_000,
   logChunkBlocks: 2000n,
   winsLookbackSec: 24 * 60 * 60,
+  /**
+   * v2 stack (StakingVaultV2 + ScratchGameV2). Addresses are FILL_AT_MIGRATION until
+   * the cutover commit — for local rehearsal verify, override via `?gen=2` and point
+   * these at rehearsal deployments (never commit rehearsal addresses as production).
+   */
+  v2: {
+    addresses: {
+      GAME: '0xFILL_AT_MIGRATION',
+      STAKING_VAULT: '0xFILL_AT_MIGRATION',
+      PRIZE_VAULT: '0xFILL_AT_MIGRATION',
+      STANDARD_SOURCE: '0xFILL_AT_MIGRATION',
+      // SCRATCH/USDG/SPCX reuse the main addresses in production (same token); FILL here
+      // means "reuse main". For rehearsal verify, SCRATCH is a throwaway.
+      SCRATCH: '0xFILL_AT_MIGRATION',
+    },
+    // Defaults match SITE-V2-COPY / Deploy3 env; live values are read from chain when connected.
+    unlockNormalSec: 172800, // 48h
+    unlockEnhancedSec: 432000, // 120h
+    boostBps: 2000, // +20% weight for ENHANCED
+    burnBps: 5000, // 50% of banked × fraction unlocked burned on requestUnlock
+    maxBatch: 20,
+  },
 };
+
+/* -------------------------------------------------------------------------- */
+/* Generation flag (v1 vs v2) — URL ?gen=2/?gen=v2 forces v2 for local verify   */
+/* -------------------------------------------------------------------------- */
+
+function urlGenerationOverride() {
+  try {
+    const g = new URLSearchParams(location.search).get('gen');
+    if (!g) return null;
+    const v = String(g).toLowerCase();
+    if (v === '2' || v === 'v2') return 2;
+    if (v === '1' || v === 'v1') return 1;
+  } catch {
+    /* no location (non-browser) — fall through */
+  }
+  return null;
+}
+
+/** Active game generation: URL override wins for local verify, else the committed flag. */
+export function activeGeneration() {
+  return urlGenerationOverride() ?? GAME_GENERATION;
+}
+
+/** True when the v2 stack (StakingVaultV2 + ScratchGameV2) is active. */
+export function isV2() {
+  return activeGeneration() === 2;
+}
+
+/** Tier ids for the staking vault (v2 deposit(amount, tier)). */
+const STAKE_TIER = { NORMAL: 1, ENHANCED: 2 };
 
 /* -------------------------------------------------------------------------- */
 /* Minimal ABIs (inlined — static hosting may not resolve JSON imports)        */
 /* -------------------------------------------------------------------------- */
 
-const ABI_GAME = [
+const ABI_GAME_V1 = [
   {
     type: 'function',
     name: 'getPrizeRow',
@@ -117,7 +176,7 @@ const ABI_GAME = [
   },
 ];
 
-const ABI_STAKING = [
+const ABI_STAKING_V1 = [
   {
     type: 'function',
     name: 'deposit',
@@ -172,6 +231,212 @@ const ABI_STAKING = [
     stateMutability: 'view',
   },
 ];
+
+/* --- v2 ABIs (ScratchGameV2 + StakingVaultV2) --- */
+
+const ABI_GAME_V2 = [
+  {
+    type: 'function',
+    name: 'getPrizeRow',
+    inputs: [
+      { name: 'tier', type: 'uint8' },
+      { name: 'index', type: 'uint256' },
+    ],
+    outputs: [
+      {
+        type: 'tuple',
+        components: [
+          { name: 'asset', type: 'address' },
+          { name: 'amountOrBps', type: 'uint96' },
+          { name: 'isBpsOfPool', type: 'bool' },
+          { name: 'cumOdds', type: 'uint32' },
+        ],
+      },
+    ],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'tableLength',
+    inputs: [{ name: 'tier', type: 'uint8' }],
+    outputs: [{ type: 'uint256' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'MAX_BATCH',
+    inputs: [],
+    outputs: [{ type: 'uint8' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'scratch',
+    inputs: [{ name: 'tier', type: 'uint8' }],
+    outputs: [{ name: 'requestId', type: 'uint256' }],
+    stateMutability: 'nonpayable',
+  },
+  {
+    type: 'function',
+    name: 'scratchMany',
+    inputs: [
+      { name: 'tier', type: 'uint8' },
+      { name: 'count', type: 'uint256' },
+    ],
+    outputs: [{ name: 'requestId', type: 'uint256' }],
+    stateMutability: 'nonpayable',
+  },
+  {
+    type: 'function',
+    name: 'requests',
+    inputs: [{ type: 'uint256' }],
+    outputs: [
+      { name: 'user', type: 'address' },
+      { name: 'tier', type: 'uint8' },
+      { name: 'requestedAt', type: 'uint64' },
+      { name: 'status', type: 'uint8' },
+      { name: 'count', type: 'uint8' },
+    ],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'rescue',
+    inputs: [{ name: 'requestId', type: 'uint256' }],
+    outputs: [],
+    stateMutability: 'nonpayable',
+  },
+  {
+    type: 'function',
+    name: 'rescueDelay',
+    inputs: [],
+    outputs: [{ type: 'uint64' }],
+    stateMutability: 'view',
+  },
+];
+
+const ABI_STAKING_V2 = [
+  {
+    type: 'function',
+    name: 'deposit',
+    inputs: [
+      { name: 'amount', type: 'uint256' },
+      { name: 'tier', type: 'uint8' },
+    ],
+    outputs: [],
+    stateMutability: 'nonpayable',
+  },
+  {
+    type: 'function',
+    name: 'requestUnlock',
+    inputs: [{ name: 'amount', type: 'uint256' }],
+    outputs: [],
+    stateMutability: 'nonpayable',
+  },
+  {
+    type: 'function',
+    name: 'claimUnlocked',
+    inputs: [],
+    outputs: [],
+    stateMutability: 'nonpayable',
+  },
+  {
+    type: 'function',
+    name: 'cancelUnlock',
+    inputs: [],
+    outputs: [],
+    stateMutability: 'nonpayable',
+  },
+  {
+    type: 'function',
+    name: 'upgradeTier',
+    inputs: [],
+    outputs: [],
+    stateMutability: 'nonpayable',
+  },
+  {
+    type: 'function',
+    name: 'minStake',
+    inputs: [],
+    outputs: [{ type: 'uint256' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'emissionRate',
+    inputs: [],
+    outputs: [{ type: 'uint256' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'totalWeight',
+    inputs: [],
+    outputs: [{ type: 'uint256' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'ticketsOf',
+    inputs: [{ name: 'user', type: 'address' }],
+    outputs: [{ type: 'uint256' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'boostBps',
+    inputs: [],
+    outputs: [{ type: 'uint16' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'burnBps',
+    inputs: [],
+    outputs: [{ type: 'uint16' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'unlockNormal',
+    inputs: [],
+    outputs: [{ type: 'uint64' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'unlockEnhanced',
+    inputs: [],
+    outputs: [{ type: 'uint64' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'unlocking',
+    inputs: [{ type: 'address' }],
+    outputs: [
+      { name: 'amount', type: 'uint256' },
+      { name: 'releaseAt', type: 'uint64' },
+    ],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'users',
+    inputs: [{ type: 'address' }],
+    outputs: [
+      { name: 'staked', type: 'uint256' },
+      { name: 'debt', type: 'uint256' },
+      { name: 'banked', type: 'uint256' },
+      { name: 'tier', type: 'uint8' },
+    ],
+    stateMutability: 'view',
+  },
+];
+
+/** Runtime-active ABIs, selected by generation (see isV2()). */
+const ABI_GAME = isV2() ? ABI_GAME_V2 : ABI_GAME_V1;
+const ABI_STAKING = isV2() ? ABI_STAKING_V2 : ABI_STAKING_V1;
 
 const EVENT_TRANSFER = parseAbiItem(
   'event Transfer(address indexed from, address indexed to, uint256 value)',
@@ -261,9 +526,29 @@ const ABI_ERC20 = [
 const EVENT_SCRATCH_REQUESTED = parseAbiItem(
   'event ScratchRequested(address indexed user, uint256 indexed requestId, uint8 tier)',
 );
-const EVENT_SCRATCH_SETTLED = parseAbiItem(
+const EVENT_SCRATCH_SETTLED_V1 = parseAbiItem(
   'event ScratchSettled(address indexed user, uint256 indexed requestId, uint8 tier, uint256 rowIndex, address asset, uint256 amount)',
 );
+const EVENT_SCRATCH_SETTLED_V2 = parseAbiItem(
+  'event ScratchSettled(address indexed user, uint256 indexed requestId, uint8 cardIndex, uint8 tier, uint256 rowIndex, address asset, uint256 amount)',
+);
+/** Generation-appropriate ScratchSettled signature (v2 adds cardIndex). */
+const EVENT_SCRATCH_SETTLED = isV2()
+  ? EVENT_SCRATCH_SETTLED_V2
+  : EVENT_SCRATCH_SETTLED_V1;
+
+/**
+ * Feed/dedup id for a ScratchSettled log.
+ * v1 keys by requestId; v2 keys by `requestId:cardIndex` (batch = one requestId, many cards).
+ */
+function settledLogId(log) {
+  const rid = log?.args?.requestId;
+  if (rid == null) return null;
+  if (isV2() && log.args.cardIndex != null) {
+    return `${rid.toString()}:${Number(log.args.cardIndex)}`;
+  }
+  return rid.toString();
+}
 
 const STATUS = { None: 0, Pending: 1, Settled: 2, Rescued: 3 };
 const TIER_STD = 0;
@@ -280,7 +565,8 @@ const PHASE = {
   MULTI: 'multi',
 };
 
-const MULTI_MAX_BATCH = 10;
+/** Batch cap: 10 on v1, 20 on v2 (ScratchGameV2.MAX_BATCH). */
+const MULTI_MAX_BATCH = isV2() ? CONFIG.v2.maxBatch : 10;
 
 const DEMO_STORAGE_KEY = 'scratch_demo_tickets_v1';
 
@@ -306,15 +592,59 @@ const publicClient = createPublicClient({
   transport: fallback([http(CONFIG.rpc.alchemy), http(CONFIG.rpc.public)]),
 });
 
+/** True for an unfilled migration placeholder (or empty) address. */
+function isFillAddress(a) {
+  return !a || /FILL/i.test(String(a));
+}
+
+function safeChecksum(a) {
+  try {
+    return getAddress(a);
+  } catch {
+    return null;
+  }
+}
+
 const addr = {
-  game: getAddress(CONFIG.addresses.GAME),
-  staking: getAddress(CONFIG.addresses.STAKING_VAULT),
-  prizeVault: getAddress(CONFIG.addresses.PRIZE_VAULT),
-  standard: getAddress(CONFIG.addresses.STANDARD_SOURCE),
-  scratch: getAddress(CONFIG.addresses.SCRATCH),
-  usdg: getAddress(CONFIG.addresses.USDG),
-  spcx: getAddress(CONFIG.addresses.SPCX),
+  game: null,
+  staking: null,
+  prizeVault: null,
+  standard: null,
+  scratch: null,
+  usdg: null,
+  spcx: null,
 };
+
+/**
+ * Resolve `addr` for the active generation. On v2, contract addresses come from
+ * CONFIG.v2.addresses; unfilled FILL_AT_MIGRATION placeholders resolve to null so
+ * reads fail gracefully (UI chrome still renders). Token addresses (SCRATCH/USDG/SPCX)
+ * reuse the main config when the v2 slot is FILL (same token in production).
+ */
+function applyAddrGeneration() {
+  if (isV2()) {
+    const v = CONFIG.v2.addresses;
+    addr.game = isFillAddress(v.GAME) ? null : safeChecksum(v.GAME);
+    addr.staking = isFillAddress(v.STAKING_VAULT) ? null : safeChecksum(v.STAKING_VAULT);
+    addr.prizeVault = isFillAddress(v.PRIZE_VAULT) ? null : safeChecksum(v.PRIZE_VAULT);
+    addr.standard = isFillAddress(v.STANDARD_SOURCE) ? null : safeChecksum(v.STANDARD_SOURCE);
+    addr.scratch = isFillAddress(v.SCRATCH)
+      ? safeChecksum(CONFIG.addresses.SCRATCH)
+      : safeChecksum(v.SCRATCH);
+    addr.usdg = safeChecksum(CONFIG.addresses.USDG);
+    addr.spcx = safeChecksum(CONFIG.addresses.SPCX);
+  } else {
+    addr.game = getAddress(CONFIG.addresses.GAME);
+    addr.staking = getAddress(CONFIG.addresses.STAKING_VAULT);
+    addr.prizeVault = getAddress(CONFIG.addresses.PRIZE_VAULT);
+    addr.standard = getAddress(CONFIG.addresses.STANDARD_SOURCE);
+    addr.scratch = getAddress(CONFIG.addresses.SCRATCH);
+    addr.usdg = getAddress(CONFIG.addresses.USDG);
+    addr.spcx = getAddress(CONFIG.addresses.SPCX);
+  }
+}
+
+applyAddrGeneration();
 
 /* -------------------------------------------------------------------------- */
 /* Shared token config (site/tokens.json)                                      */
@@ -349,9 +679,8 @@ async function loadTokenConfig() {
     }
   }
   KNOWN_TOKENS = next;
-  addr.scratch = getAddress(CONFIG.addresses.SCRATCH);
-  addr.usdg = getAddress(CONFIG.addresses.USDG);
-  addr.spcx = getAddress(CONFIG.addresses.SPCX);
+  // tokens.json may have updated SCRATCH/USDG/SPCX — re-resolve for the active generation.
+  applyAddrGeneration();
 }
 
 /* -------------------------------------------------------------------------- */
@@ -458,6 +787,44 @@ function ticketCount(raw) {
   return Number(raw / CONFIG.ticketCost);
 }
 
+/* -------------------------------------------------------------------------- */
+/* v2 helpers — tier / unlock labels + burn preview                            */
+/* -------------------------------------------------------------------------- */
+
+/** Unlock window in seconds for a tier key ('normal' | 'enhanced'). */
+function unlockSecFor(tierKey) {
+  return tierKey === 'enhanced' ? state.unlockEnhancedSec : state.unlockNormalSec;
+}
+
+/** Human hours label for an unlock window, e.g. "48h". */
+function unlockHoursLabel(tierKey) {
+  const sec = unlockSecFor(tierKey);
+  const hours = Math.round(Number(sec) / 3600);
+  return `${hours}h`;
+}
+
+/** Unlock seconds for the user's current stake tier (defaults to NORMAL). */
+function userUnlockSec() {
+  return state.userTier === STAKE_TIER.ENHANCED
+    ? state.unlockEnhancedSec
+    : state.unlockNormalSec;
+}
+
+function tierName(tier) {
+  return Number(tier) === STAKE_TIER.ENHANCED ? 'ENHANCED' : 'NORMAL';
+}
+
+/**
+ * Client-side unlock burn preview (ticket-wei) for unlocking `amount` of `staked`.
+ * floor(banked × burnBps / 10000 × amount / staked). Uses users.banked; callers may
+ * fall back to ticketsOf (banked+pending) with an "up to" label.
+ */
+function previewUnlockBurn(bankedWei, amountWei, stakedWei) {
+  if (stakedWei <= 0n || amountWei <= 0n || bankedWei <= 0n) return 0n;
+  const capped = amountWei > stakedWei ? stakedWei : amountWei;
+  return (bankedWei * state.burnBps * capped) / (10000n * stakedWei);
+}
+
 /** Format ticket-wei as whole.fraction (e.g. 2.45) with whole part emphasized in HTML. */
 function formatTicketBalanceHtml(raw) {
   const n = Number(formatUnits(raw ?? 0n, 18));
@@ -473,6 +840,10 @@ function formatTicketBalanceHtml(raw) {
 function updateStakedTicketsTip() {
   const tip = $('stakedTicketsTipText');
   if (!tip) return;
+  if (isV2()) {
+    tip.textContent = `Tickets accrue continuously while you stake ${minStakePretty()}+. Whole tickets are scratchable. Requesting an unlock burns tickets in proportion to the amount unlocked; remaining tickets stay scratchable during the unlock window. A completed full exit burns any tickets left.`;
+    return;
+  }
   tip.textContent = `Tickets accrue continuously while you stake ${minStakePretty()}+. Whole tickets are scratchable. All staking tickets are burned if you withdraw any stake.`;
 }
 
@@ -519,6 +890,18 @@ const state = {
   totalStaked: 0n,
   userStaked: 0n,
   scratchBalance: 0n,
+  /* --- v2 staking state (StakingVaultV2) --- */
+  userTier: 0, // 0 = none/not deposited, 1 = NORMAL, 2 = ENHANCED
+  userBanked: 0n, // banked ticket-wei (users.banked)
+  userWeight: 0n, // client-computed weight (staked × tier boost)
+  totalWeight: 0n, // vault totalWeight()
+  unlocking: { amount: 0n, releaseAt: 0n }, // pending unlock slot
+  burnBps: BigInt(CONFIG.v2.burnBps),
+  boostBps: BigInt(CONFIG.v2.boostBps),
+  unlockNormalSec: CONFIG.v2.unlockNormalSec,
+  unlockEnhancedSec: CONFIG.v2.unlockEnhancedSec,
+  /** Selected deposit tier in the picker before first deposit (1 = NORMAL, 2 = ENHANCED). */
+  selectedStakeTier: STAKE_TIER.NORMAL,
   prices: {
     scratchUsd: null,
     ethUsd: null,
@@ -1294,7 +1677,10 @@ async function refreshMinStake() {
 
     const rate = $('minStakeRate');
     if (rate) {
-      rate.innerHTML = `Stake at least <b id="minStakeAmount">${pretty}</b> $SCRATCH <span class="usd-live" data-scratch-amount="${human}"></span> · your share of <b>65%</b> of emissions · <b>no lockup</b>`;
+      const lockCopy = isV2()
+        ? `<b>timed unlock (${unlockHoursLabel('normal')} / ${unlockHoursLabel('enhanced')})</b>`
+        : '<b>no lockup</b>';
+      rate.innerHTML = `Stake at least <b id="minStakeAmount">${pretty}</b> $SCRATCH <span class="usd-live" data-scratch-amount="${human}"></span> · your share of <b>65%</b> of emissions · ${lockCopy}`;
     }
 
     const live = $('minStakeLive');
@@ -1312,6 +1698,31 @@ async function refreshMinStake() {
     }
   } catch {
     /* keep previous */
+  }
+}
+
+/**
+ * Read v2 vault params (burn/boost bps + unlock windows) once for live copy.
+ * No-ops on v1 or when the v2 staking address is unfilled.
+ */
+async function refreshV2Params() {
+  if (!isV2() || !addr.staking) return;
+  try {
+    const [burnBps, boostBps, unlockNormal, unlockEnhanced] = await Promise.all([
+      publicClient.readContract({ address: addr.staking, abi: ABI_STAKING, functionName: 'burnBps' }),
+      publicClient.readContract({ address: addr.staking, abi: ABI_STAKING, functionName: 'boostBps' }),
+      publicClient.readContract({ address: addr.staking, abi: ABI_STAKING, functionName: 'unlockNormal' }),
+      publicClient.readContract({ address: addr.staking, abi: ABI_STAKING, functionName: 'unlockEnhanced' }),
+    ]);
+    state.burnBps = BigInt(burnBps);
+    state.boostBps = BigInt(boostBps);
+    state.unlockNormalSec = Number(unlockNormal);
+    state.unlockEnhancedSec = Number(unlockEnhanced);
+    // Refresh any copy that bakes in these numbers.
+    renderTierPickerCopy();
+    updateStakedTicketsTip();
+  } catch {
+    /* keep defaults from CONFIG.v2 */
   }
 }
 
@@ -1344,7 +1755,9 @@ function mergeSettledLog(log, newIds) {
   if (!log.args.amount || log.args.amount === 0n) return;
   const requestId = log.args.requestId;
   if (requestId == null) return;
-  const id = requestId.toString();
+  // v1 keys by requestId; v2 keys by requestId:cardIndex (batch → one requestId, many cards).
+  const id = settledLogId(log);
+  if (id == null) return;
   const prev = state.winsFeed.byId.get(id);
   if (!prev) newIds.add(id);
   state.winsFeed.byId.set(id, {
@@ -1353,6 +1766,7 @@ function mergeSettledLog(log, newIds) {
     amount: log.args.amount,
     blockNumber: log.blockNumber,
     requestId,
+    cardIndex: log.args.cardIndex != null ? Number(log.args.cardIndex) : null,
     ageSec: prev?.ageSec ?? 0,
     prizeLabel: prev?.prizeLabel,
   });
@@ -1459,6 +1873,12 @@ async function loadRecentWins() {
  * Sync DOM to winsFeed.byId without clearing the list first.
  * New rows (by requestId) are prepended with a short entrance animation.
  */
+/** Stable feed/DOM id for a stored win row (v2 keys by requestId:cardIndex). */
+function winFeedId(w) {
+  if (isV2() && w.cardIndex != null) return `${w.requestId.toString()}:${w.cardIndex}`;
+  return w.requestId.toString();
+}
+
 async function paintRecentWins({ animateNew = false, newIds = new Set() } = {}) {
   const el = $('recentWins');
   if (!el) return;
@@ -1496,7 +1916,7 @@ async function paintRecentWins({ animateNew = false, newIds = new Set() } = {}) 
     byDom.set(node.dataset.requestId, node);
   }
 
-  const keepIds = new Set(wins.map((w) => w.requestId.toString()));
+  const keepIds = new Set(wins.map((w) => winFeedId(w)));
   for (const [id, node] of byDom) {
     if (!keepIds.has(id)) {
       node.remove();
@@ -1506,7 +1926,7 @@ async function paintRecentWins({ animateNew = false, newIds = new Set() } = {}) 
 
   for (let i = 0; i < wins.length; i++) {
     const w = wins[i];
-    const id = w.requestId.toString();
+    const id = winFeedId(w);
     let node = byDom.get(id);
     if (!node) {
       node = document.createElement('div');
@@ -1769,6 +2189,14 @@ function renderPostRevealAction() {
 /* Share win → X + win-card PNG                                                */
 /* -------------------------------------------------------------------------- */
 
+/** Share `req` param: v2 encodes requestId:cardIndex so win.html resolves a single card. */
+function winReqParam(requestId, cardIndex) {
+  if (requestId == null) return '';
+  const rid = requestId.toString();
+  if (isV2() && cardIndex != null) return `${rid}:${Number(cardIndex)}`;
+  return rid;
+}
+
 function buildWinShareText(win) {
   const prize = win.sharePrize || '+?';
   const req = encodeURIComponent(win.requestId || '');
@@ -1975,8 +2403,11 @@ function updateStakeFormBalances() {
   if (!state.account) {
     if (walletEl) walletEl.textContent = 'Wallet: —';
     if (stakedEl) stakedEl.textContent = 'Staked: —';
+    const stakedElV2Empty = $('withdrawStakedBalV2');
+    if (stakedElV2Empty) stakedElV2Empty.textContent = 'Staked: —';
     setPctRowEnabled('stakePctRow', false);
     setPctRowEnabled('withdrawPctRow', false);
+    setPctRowEnabled('unlockPctRow', false);
     return;
   }
   if (walletEl) {
@@ -1985,8 +2416,13 @@ function updateStakeFormBalances() {
   if (stakedEl) {
     stakedEl.textContent = `Staked: ${formatScratchWhole(state.userStaked)} SCRATCH`;
   }
+  const stakedElV2 = $('withdrawStakedBalV2');
+  if (stakedElV2) {
+    stakedElV2.textContent = `Staked: ${formatScratchWhole(state.userStaked)} SCRATCH`;
+  }
   setPctRowEnabled('stakePctRow', state.scratchBalance > 0n);
   setPctRowEnabled('withdrawPctRow', state.userStaked > 0n);
+  setPctRowEnabled('unlockPctRow', state.userStaked > 0n);
 }
 
 function setPctRowEnabled(rowId, enabled) {
@@ -2031,8 +2467,152 @@ function applyWithdrawPctFill(pct) {
   fillPctAmount('withdrawAmount', state.userStaked, pct);
 }
 
+function applyUnlockPctFill(pct) {
+  fillPctAmount('unlockAmount', state.userStaked, pct);
+  updateUnlockBurnPreview();
+}
+
 function updateScratchButtons() {
   applySessionView();
+}
+
+/* -------------------------------------------------------------------------- */
+/* v2 tier picker + unlock UI                                                  */
+/* -------------------------------------------------------------------------- */
+
+/** Tier is fixed client-side once the user holds a live stake with a set tier. */
+function stakeTierLocked() {
+  return isV2() && state.userTier > 0 && state.userStaked > 0n;
+}
+
+/** The tier that a deposit would use right now (locked tier, else picker selection). */
+function currentSelectableTier() {
+  if (stakeTierLocked()) return state.userTier;
+  return state.selectedStakeTier || STAKE_TIER.NORMAL;
+}
+
+function setSelectedStakeTier(tier) {
+  if (stakeTierLocked()) return;
+  state.selectedStakeTier =
+    Number(tier) === STAKE_TIER.ENHANCED ? STAKE_TIER.ENHANCED : STAKE_TIER.NORMAL;
+  syncTierPickerButtons();
+}
+
+function syncTierPickerButtons() {
+  if (!isV2()) return;
+  const locked = stakeTierLocked();
+  const active = currentSelectableTier();
+  for (const id of ['stakeTierPicker', 'stakeTierPickerPath']) {
+    const picker = $(id);
+    if (!picker) continue;
+    picker.classList.toggle('locked', locked);
+    picker.querySelectorAll('button[data-tier]').forEach((btn) => {
+      const t = Number(btn.dataset.tier);
+      btn.classList.toggle('active', t === active);
+      btn.disabled = locked;
+      btn.setAttribute('aria-pressed', t === active ? 'true' : 'false');
+    });
+  }
+}
+
+/** Live unlock-window / boost copy inside the tier segmented control. */
+function renderTierPickerCopy() {
+  if (!isV2()) return;
+  const normalLbl = `${unlockHoursLabel('normal')} unlock · 1.0×`;
+  const boostPct = Math.round(Number(state.boostBps) / 100);
+  const enhancedLbl = `${unlockHoursLabel('enhanced')} unlock · +${boostPct}%`;
+  document
+    .querySelectorAll('[data-tier-copy="normal"]')
+    .forEach((el) => (el.textContent = normalLbl));
+  document
+    .querySelectorAll('[data-tier-copy="enhanced"]')
+    .forEach((el) => (el.textContent = enhancedLbl));
+}
+
+function renderV2StakeUi() {
+  if (!isV2()) return;
+  syncTierPickerButtons();
+  renderTierPickerCopy();
+
+  const hasStake = state.userTier > 0 && state.userStaked > 0n;
+  const tierLine = $('walletTier');
+  if (tierLine) {
+    tierLine.textContent = hasStake ? `Your tier: ${tierName(state.userTier)}` : 'No stake yet';
+  }
+  const lockedNote = $('stakeTierLockedNote');
+  if (lockedNote) {
+    lockedNote.hidden = !hasStake;
+    lockedNote.textContent = hasStake ? `Tier locked: ${tierName(state.userTier)}` : '';
+  }
+  const upgradeBtn = $('upgradeTierBtn');
+  if (upgradeBtn) {
+    const canUpgrade = hasStake && state.userTier === STAKE_TIER.NORMAL;
+    upgradeBtn.hidden = !canUpgrade;
+    const boostPct = Math.round(Number(state.boostBps) / 100);
+    upgradeBtn.textContent = `Upgrade to ENHANCED (+${boostPct}% weight, ${unlockHoursLabel(
+      'enhanced',
+    )} unlock)`;
+  }
+
+  renderUnlockPanel();
+  updateUnlockBurnPreview();
+}
+
+function renderUnlockPanel() {
+  const panel = $('unlockingPanel');
+  const active = isV2() && state.unlocking && state.unlocking.amount > 0n;
+  if (panel) show(panel, !!active);
+  if (!active) return;
+  setText($('unlockingAmount'), `${formatHuman(state.unlocking.amount)} SCRATCH`);
+  const now = Math.floor(Date.now() / 1000);
+  const release = Number(state.unlocking.releaseAt);
+  const remain = release > now ? release - now : 0;
+  const cd = $('unlockCountdown');
+  if (cd) cd.textContent = remain > 0 ? formatCountdown(remain) : 'Ready to claim';
+  const claimBtn = $('unlockClaimBtn');
+  if (claimBtn) claimBtn.disabled = remain > 0;
+
+  const warnEl = $('unlockFullExitWarn');
+  if (warnEl) {
+    const wouldFullExit =
+      state.unlocking.amount >= state.userStaked && state.userStaked > 0n && state.userBanked > 0n;
+    warnEl.hidden = !wouldFullExit;
+    if (wouldFullExit) {
+      warnEl.textContent = `Claiming your full exit burns your ${formatScratchWhole(
+        state.userBanked,
+      )} remaining tickets — scratch them first.`;
+    }
+  }
+}
+
+/** Live burn preview under the unlock amount input. */
+function updateUnlockBurnPreview() {
+  const preview = $('unlockBurnPreview');
+  if (!preview) return;
+  if (!isV2()) {
+    preview.textContent = '';
+    return;
+  }
+  const input = $('unlockAmount');
+  const raw = (input?.value || '').trim();
+  const staked = state.userStaked;
+  if (!raw || Number(raw) <= 0 || staked <= 0n) {
+    preview.textContent = '';
+    return;
+  }
+  let amount;
+  try {
+    amount = parseUnits(raw, 18);
+  } catch {
+    preview.textContent = '';
+    return;
+  }
+  if (amount > staked) amount = staked;
+  const burn = previewUnlockBurn(state.userBanked, amount, staked);
+  const pct = staked > 0n ? Math.round((Number(amount) / Number(staked)) * 100) : 0;
+  preview.textContent = `Unlocking ${pct}% burns ${formatScratchWhole(
+    burn,
+  )} of ${formatScratchWhole(state.userBanked)} tickets now; the rest stay scratchable.`;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -2826,7 +3406,8 @@ async function refreshWalletPanel(opts = {}) {
     return;
   }
   try {
-    const [user, stdTickets, premTickets, expiry, scratchBal, emissionRate, totalStaked] =
+    const v2 = isV2();
+    const [user, stdTickets, premTickets, expiry, scratchBal, emissionRate, totalStakedOrWeight, unlockSlot] =
       await Promise.all([
         publicClient.readContract({
           address: addr.staking,
@@ -2866,20 +3447,51 @@ async function refreshWalletPanel(opts = {}) {
         publicClient.readContract({
           address: addr.staking,
           abi: ABI_STAKING,
-          functionName: 'totalStaked',
+          functionName: v2 ? 'totalWeight' : 'totalStaked',
         }),
+        v2
+          ? publicClient.readContract({
+              address: addr.staking,
+              abi: ABI_STAKING,
+              functionName: 'unlocking',
+              args: [state.account],
+            })
+          : Promise.resolve(null),
       ]);
 
     state.liveTickets.std = stdTickets;
     state.liveTickets.prem = premTickets;
     state.userExpiry = BigInt(expiry);
     state.emissionRate = emissionRate;
-    state.totalStaked = totalStaked;
     state.scratchBalance = scratchBal;
-    reconcileOptimisticSpend();
 
     const staked = user.staked ?? user[0];
     state.userStaked = staked;
+
+    if (v2) {
+      state.totalWeight = totalStakedOrWeight;
+      state.userBanked = user.banked ?? user[2] ?? 0n;
+      state.userTier = Number(user.tier ?? user[3] ?? 0);
+      // weight = staked × (ENHANCED ? 1+boost : 1); keep totalStaked mirroring weight for accrual math.
+      state.userWeight =
+        state.userTier === STAKE_TIER.ENHANCED
+          ? (staked * (10000n + state.boostBps)) / 10000n
+          : staked;
+      state.totalStaked = totalStakedOrWeight;
+      if (unlockSlot) {
+        state.unlocking = {
+          amount: unlockSlot.amount ?? unlockSlot[0] ?? 0n,
+          releaseAt: BigInt(unlockSlot.releaseAt ?? unlockSlot[1] ?? 0n),
+        };
+      }
+      if (state.userTier && Number(staked) > 0) {
+        state.selectedStakeTier = state.userTier;
+      }
+    } else {
+      state.totalStaked = totalStakedOrWeight;
+    }
+    reconcileOptimisticSpend();
+
     const now = Math.floor(Date.now() / 1000);
     const expSec = Number(expiry);
     const remain = expSec > now ? expSec - now : 0;
@@ -2893,6 +3505,7 @@ async function refreshWalletPanel(opts = {}) {
     setText($('walletExpiry'), remain > 0 ? formatCountdown(remain) : '—');
     updateStakedTicketsTip();
     updateStakeFormBalances();
+    if (v2) renderV2StakeUi();
 
     if (!opts.skipStage && sessionPhase() === PHASE.IDLE) {
       renderTier();
@@ -3106,7 +3719,7 @@ async function enterReadyUI(asset, amount, opts = {}) {
     const sharePrize =
       meta.symbol === 'SCRATCH' ? `+${human} $SCRATCH` : `+${human} ${meta.symbol}`;
     state.lastWin = {
-      requestId: req != null ? req.toString() : '',
+      requestId: winReqParam(req, opts.cardIndex),
       txHash: opts.txHash || null,
       sharePrize,
       cardPrize: `+${human} ${meta.symbol}`,
@@ -3196,6 +3809,7 @@ async function pollRequest(requestId) {
         let asset = zeroAddress;
         let amount = 0n;
         let txHash = null;
+        let cardIndex = null;
         const tip = await publicClient.getBlockNumber();
         const lookback = 900_000n;
         const from = tip > lookback ? tip - lookback : 0n;
@@ -3218,6 +3832,7 @@ async function pollRequest(requestId) {
               asset = settled.args.asset;
               amount = settled.args.amount;
               txHash = settled.transactionHash || null;
+              cardIndex = settled.args.cardIndex ?? null;
               break;
             }
           } catch {
@@ -3226,7 +3841,7 @@ async function pollRequest(requestId) {
           if (clampedFrom <= from) break;
           start = clampedFrom - 1n;
         }
-        await applySettledPrize(asset, amount, { txHash, requestId });
+        await applySettledPrize(asset, amount, { txHash, requestId, cardIndex });
         await refreshWalletPanel({ skipStage: true });
         return;
       }
@@ -3285,6 +3900,7 @@ async function pollRequest(requestId) {
             await applySettledPrize(log.args.asset, log.args.amount, {
               txHash: log.transactionHash || null,
               requestId: log.args.requestId ?? requestId,
+              cardIndex: log.args.cardIndex ?? null,
             });
             await refreshWalletPanel({ skipStage: true });
           }
@@ -3397,6 +4013,21 @@ async function refreshWalletBatchCapability() {
 
 /** Picker + entry button copy when wallet must approve each ticket. */
 function applyMultiPickerSigningMode() {
+  // v2 always does a single scratchMany confirm — no per-ticket approvals.
+  if (isV2()) {
+    $('multiFallbackNote')?.classList.remove('show');
+    const n = clampMultiCount($('multiCountInput')?.value || 3) || multiBatchCap();
+    const goBtn = $('multiGoBtn');
+    if (goBtn) goBtn.textContent = n >= 2 ? `Scratch ${n} · one reveal` : 'Scratch';
+    for (const id of ['multiScratchOpen', 'scratchBtnMulti']) {
+      const b = $(id);
+      if (b) {
+        b.classList.remove('one-by-one');
+        b.textContent = 'Scratch multiple';
+      }
+    }
+    return;
+  }
   const sequential = state.walletSupportsBatch === false;
   const note = $('multiFallbackNote');
   note?.classList.toggle('show', sequential);
@@ -4024,6 +4655,7 @@ function enterMultiBoardUI(tier, tierKey, count) {
       index: i,
       phase: PHASE.PICKED,
       requestId: null,
+      cardIndex: null, // v2: index within the shared scratchMany requestId
       txHash: null,
       requestedAt: 0n,
       asset: null,
@@ -4110,7 +4742,7 @@ async function applyMultiSettled(card, asset, amount, opts = {}) {
     const sharePrize =
       meta.symbol === 'SCRATCH' ? `+${human} $SCRATCH` : `+${human} ${meta.symbol}`;
     card.win = {
-      requestId: card.requestId != null ? card.requestId.toString() : '',
+      requestId: winReqParam(card.requestId, card.cardIndex),
       txHash: opts.txHash || null,
       sharePrize,
       cardPrize: `+${human} ${meta.symbol}`,
@@ -4390,6 +5022,206 @@ async function runSequentialMultiApprovals(tier, n) {
   void pollMultiBoard();
 }
 
+/**
+ * v2 batch: submit one `scratchMany(tier, count)` (single wallet confirm), bind the
+ * shared requestId to every card (cardIndex = board index), then flip the whole board
+ * READY together once the single reveal settles.
+ */
+async function runScratchManyBatch(tier, n) {
+  const multi = state.session.multi;
+  if (!multi) return;
+  multi.batchSupported = true;
+  setMultiProgress('Confirm the reveal in your wallet…');
+  setText($('prompt'), 'Confirm reveal…');
+  try {
+    await ensureChain();
+    const hash = await state.walletClient.writeContract({
+      address: addr.game,
+      abi: ABI_GAME,
+      functionName: 'scratchMany',
+      args: [tier, BigInt(n)],
+      account: state.account,
+      chain: robinhoodChain,
+    });
+    bumpOptimistic(n);
+    setMultiProgress('Reveal submitted — printing your board…');
+    for (const card of multi.cards) {
+      card.txHash = hash;
+      card.phase = 'submitted';
+      const { ticketNo, lbl } = multiCardEls(card);
+      if (ticketNo) ticketNo.textContent = 'Submitted…';
+      if (lbl) lbl.textContent = 'Waiting for confirmation';
+      lockMultiFoil(card);
+    }
+    updateMultiSummary();
+
+    const receipt = await publicClient.waitForTransactionReceipt({ hash });
+    let requestId = extractRequestId(receipt);
+    if (requestId == null) {
+      try {
+        const logs = await publicClient.getLogs({
+          address: addr.game,
+          event: EVENT_SCRATCH_REQUESTED,
+          args: { user: state.account },
+          fromBlock: receipt.blockNumber,
+          toBlock: receipt.blockNumber,
+        });
+        if (logs.length) requestId = logs[logs.length - 1].args.requestId;
+      } catch {
+        /* fall through */
+      }
+    }
+    if (requestId == null) {
+      setSessionNote(
+        'Reveal submitted but the request id was not found — check your wallet activity.',
+        'cancel',
+      );
+      showToast('Could not find the batch request — check your wallet activity.', {
+        kind: 'error',
+      });
+      state.session.multi.submitting = false;
+      return;
+    }
+
+    // One requestId shared by all cards; distinguish by cardIndex.
+    for (const card of multi.cards) {
+      card.requestId = requestId;
+      card.cardIndex = card.index;
+      card.phase = PHASE.PENDING;
+      const { ticketNo, lbl } = multiCardEls(card);
+      if (ticketNo) {
+        ticketNo.textContent = `Request #${requestId.toString()} · card ${card.index + 1}`;
+      }
+      if (lbl) lbl.textContent = 'One reveal — printing…';
+      lockMultiFoil(card);
+    }
+    state.session.requestId = requestId;
+    setMultiProgress('');
+    setText($('prompt'), 'one reveal printing…');
+    state.session.multi.submitting = false;
+    await refreshWalletPanel({ skipStage: true });
+    await pollScratchManyBoard(requestId, n);
+  } catch (err) {
+    const msg = err?.shortMessage || err?.message || String(err);
+    if (isUserRejection(err)) {
+      resetSessionToIdle({ cancelNote: 'Cancelled — tickets unspent.' });
+      showToast(WALLET_REJECT_TOAST, { kind: 'warn', duration: 9000 });
+      return;
+    }
+    if (state.session.multi?.cards?.some((c) => c.requestId != null || c.txHash != null)) {
+      setSessionNote(`Batch interrupted: ${msg}`, 'cancel');
+      state.session.multi.submitting = false;
+      void pollScratchManyBoard(state.session.requestId, n);
+      showToast(`Multi-scratch interrupted: ${msg}`, { kind: 'error' });
+      return;
+    }
+    resetSessionToIdle({ cancelNote: `Multi-scratch failed: ${msg}` });
+    showToast(`Multi-scratch failed: ${msg}`, { kind: 'error' });
+  }
+}
+
+/** Poll/watch the single shared requestId; apply each card by cardIndex, all at once. */
+async function pollScratchManyBoard(requestId, n) {
+  clearInterval(state.pollTimer);
+  if (requestId == null) return;
+
+  const applyAllFromLogs = async () => {
+    if (!isMultiSession()) return false;
+    const tip = await publicClient.getBlockNumber();
+    const from = tip > 900_000n ? tip - 900_000n : 0n;
+    let logs = [];
+    try {
+      logs = await publicClient.getLogs({
+        address: addr.game,
+        event: EVENT_SCRATCH_SETTLED,
+        args: { requestId },
+        fromBlock: from,
+        toBlock: tip,
+      });
+    } catch {
+      return false;
+    }
+    if (!logs.length) return false;
+    const byIndex = new Map();
+    for (const log of logs) {
+      const ci = log.args.cardIndex != null ? Number(log.args.cardIndex) : 0;
+      byIndex.set(ci, log);
+    }
+    let applied = 0;
+    for (const card of state.session.multi.cards) {
+      const log = byIndex.get(card.index);
+      if (!log) continue;
+      if (card.phase === PHASE.READY || card.phase === PHASE.REVEALED) {
+        applied++;
+        continue;
+      }
+      await applyMultiSettled(card, log.args.asset, log.args.amount, {
+        txHash: log.transactionHash || null,
+        requestId,
+      });
+      applied++;
+    }
+    return applied >= state.session.multi.cards.length;
+  };
+
+  const check = async () => {
+    if (!isMultiSession()) return;
+    try {
+      const req = await publicClient.readContract({
+        address: addr.game,
+        abi: ABI_GAME,
+        functionName: 'requests',
+        args: [requestId],
+      });
+      const status = Number(req.status ?? req[3]);
+      if (status === STATUS.Settled) {
+        const done = await applyAllFromLogs();
+        if (done) {
+          clearInterval(state.pollTimer);
+          state.pollTimer = null;
+        }
+      } else if (status === STATUS.Rescued) {
+        clearInterval(state.pollTimer);
+        state.pollTimer = null;
+        for (const card of state.session.multi.cards) {
+          if (card.phase === PHASE.READY || card.phase === PHASE.REVEALED) continue;
+          card.phase = PHASE.REVEALED;
+          card.revealed = true;
+          const { amt, lbl } = multiCardEls(card);
+          if (amt) amt.textContent = 'Rescued';
+          if (lbl) lbl.textContent = 'Tickets refunded';
+        }
+        updateMultiSummary();
+        await refreshWalletPanel({ skipStage: true });
+      }
+    } catch {
+      /* keep polling */
+    }
+  };
+
+  await check();
+  state.pollTimer = setInterval(check, 2000);
+
+  try {
+    state.eventUnwatch = publicClient.watchContractEvent({
+      address: addr.game,
+      abi: [EVENT_SCRATCH_SETTLED],
+      eventName: 'ScratchSettled',
+      args: { requestId },
+      onLogs: async () => {
+        if (!isMultiSession()) return;
+        const done = await applyAllFromLogs();
+        if (done) {
+          clearInterval(state.pollTimer);
+          state.pollTimer = null;
+        }
+      },
+    });
+  } catch {
+    /* polling is enough */
+  }
+}
+
 async function startMultiScratch(count) {
   if (sessionPhase() !== PHASE.IDLE) return;
 
@@ -4414,6 +5246,12 @@ async function startMultiScratch(count) {
   }
 
   enterMultiBoardUI(tier, tierKey, n);
+
+  // v2: one on-chain call (scratchMany) → one requestId → one reveal for the whole board.
+  if (isV2()) {
+    await runScratchManyBatch(tier, n);
+    return;
+  }
 
   try {
     await ensureChain();
@@ -4616,6 +5454,7 @@ async function rehydratePendingSession() {
               requestId,
               tier: Number(req.tier ?? req[1]),
               requestedAt: BigInt(req.requestedAt ?? req[2]),
+              count: isV2() ? Number(req.count ?? req[4] ?? 1) : 1,
             });
           }
         } catch {
@@ -4625,6 +5464,47 @@ async function rehydratePendingSession() {
     }
 
     if (!pending.length) return;
+
+    // v2: a batch is ONE requestId whose `count` says how many cards to render.
+    if (isV2()) {
+      pending.sort((a, b) => (a.requestId < b.requestId ? -1 : 1));
+      const newest = pending[pending.length - 1];
+      const gTier = newest.tier === TIER_PREM ? TIER_PREM : TIER_STD;
+      const tKey = gTier === TIER_PREM ? 'prem' : 'std';
+      state.tier = tKey;
+      state.session.tier = gTier;
+      state.session.tierKey = tKey;
+      const cnt = Math.max(1, newest.count || 1);
+      if (cnt === 1) {
+        const stage = $('stage');
+        stage?.classList.toggle('premium', tKey === 'prem');
+        $('scratchCardEl')?.classList.toggle('premium', tKey === 'prem');
+        enterPendingUI(newest.requestId, newest.requestedAt);
+        setSessionNote('Resumed a pending draw from your wallet.');
+        await pollRequest(newest.requestId);
+        return;
+      }
+      enterMultiBoardUI(gTier, tKey, cnt);
+      state.session.multi.submitting = false;
+      state.session.optimisticDelta = cnt;
+      state.session.requestId = newest.requestId;
+      for (const card of state.session.multi.cards) {
+        card.requestId = newest.requestId;
+        card.cardIndex = card.index;
+        card.requestedAt = newest.requestedAt;
+        card.phase = PHASE.PENDING;
+        const { ticketNo, lbl } = multiCardEls(card);
+        if (ticketNo) {
+          ticketNo.textContent = `Request #${newest.requestId.toString()} · card ${card.index + 1}`;
+        }
+        if (lbl) lbl.textContent = 'One reveal — printing…';
+        lockMultiFoil(card);
+      }
+      setText($('prompt'), 'one reveal printing…');
+      setSessionNote(`Resumed a pending batch of ${cnt} from your wallet.`);
+      await pollScratchManyBoard(newest.requestId, cnt);
+      return;
+    }
 
     // Prefer the tier with the most pending (cap 10); ties → higher requestId.
     const byTier = { 0: [], 1: [] };
@@ -4725,11 +5605,13 @@ async function doStake() {
       await publicClient.waitForTransactionReceipt({ hash: approveHash });
     }
     setStatus(status, 'Confirm stake in wallet…');
+    // v2 deposit takes a tier (1 = NORMAL, 2 = ENHANCED); an existing tier is forced.
+    const depositArgs = isV2() ? [amount, currentSelectableTier()] : [amount];
     const hash = await state.walletClient.writeContract({
       address: addr.staking,
       abi: ABI_STAKING,
       functionName: 'deposit',
-      args: [amount],
+      args: depositArgs,
       account: state.account,
       chain: robinhoodChain,
     });
@@ -4740,7 +5622,193 @@ async function doStake() {
     if (pathInput) pathInput.value = '';
     await refreshWalletPanel();
   } catch (err) {
+    if (isV2() && /TierMismatch/i.test(`${err?.shortMessage || ''} ${err?.message || ''}`)) {
+      setStatus(
+        status,
+        `Your stake is locked to ${tierName(state.userTier)}. Depositing keeps your current tier — use “Upgrade to enhanced” to change it.`,
+      );
+      status?.classList.add('warn');
+      await refreshWalletPanel();
+      return;
+    }
     setStatus(status, err?.shortMessage || err?.message || String(err));
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* v2 stake actions — upgrade tier + unlock (request / claim / cancel)         */
+/* -------------------------------------------------------------------------- */
+
+async function upgradeTier() {
+  if (!isV2()) return;
+  const status = $('stakeStatus');
+  if (!state.account) {
+    await connectWallet();
+    if (!state.account) return;
+  }
+  try {
+    await ensureChain();
+    status?.classList.remove('warn');
+    setStatus(status, 'Confirm upgrade in wallet…');
+    const hash = await state.walletClient.writeContract({
+      address: addr.staking,
+      abi: ABI_STAKING,
+      functionName: 'upgradeTier',
+      account: state.account,
+      chain: robinhoodChain,
+    });
+    setStatus(status, 'Upgrading…');
+    await publicClient.waitForTransactionReceipt({ hash });
+    setStatus(status, 'Upgraded to ENHANCED ✓ — instant, principal untouched.');
+    await refreshWalletPanel();
+  } catch (err) {
+    if (isUserRejection(err)) {
+      showToast(WALLET_REJECT_TOAST, { kind: 'warn', duration: 9000 });
+      setStatus(status, '');
+      return;
+    }
+    setStatus(status, err?.shortMessage || err?.message || String(err));
+  }
+}
+
+async function doRequestUnlock() {
+  const input = $('unlockAmount');
+  const warn = $('unlockWarn');
+  if (!input) return;
+  if (!state.account) {
+    await connectWallet();
+    if (!state.account) return;
+  }
+  const raw = (input.value || '').trim();
+  if (!raw || Number(raw) <= 0) {
+    if (warn) warn.textContent = 'Enter an amount';
+    return;
+  }
+  let amount;
+  try {
+    amount = parseUnits(raw, 18);
+  } catch {
+    if (warn) warn.textContent = 'Enter a valid amount';
+    return;
+  }
+  const staked = state.userStaked;
+  if (staked <= 0n) {
+    if (warn) warn.textContent = 'Nothing staked to unlock.';
+    return;
+  }
+  if (amount > staked) amount = staked;
+  const pct = Math.round((Number(amount) / Number(staked)) * 100);
+  const burnWhole = formatScratchWhole(previewUnlockBurn(state.userBanked, amount, staked));
+  const unlockLabel = unlockHoursLabel(
+    state.userTier === STAKE_TIER.ENHANCED ? 'enhanced' : 'normal',
+  );
+  const confirmMsg = `Unlocking ${pct}% of your stake will burn ~${burnWhole} tickets now; the rest stay scratchable. Principal unlocks after ${unlockLabel}. Continue?`;
+  if (!confirm(confirmMsg)) return;
+  try {
+    await ensureChain();
+    if (warn) warn.textContent = 'Confirm unlock in wallet…';
+    const hash = await state.walletClient.writeContract({
+      address: addr.staking,
+      abi: ABI_STAKING,
+      functionName: 'requestUnlock',
+      args: [amount],
+      account: state.account,
+      chain: robinhoodChain,
+    });
+    if (warn) warn.textContent = 'Requesting unlock…';
+    await publicClient.waitForTransactionReceipt({ hash });
+    if (warn) warn.textContent = `Unlock requested — principal unlocks after ${unlockLabel}.`;
+    input.value = '';
+    updateUnlockBurnPreview();
+    await refreshWalletPanel();
+  } catch (err) {
+    if (isUserRejection(err)) {
+      showToast(WALLET_REJECT_TOAST, { kind: 'warn', duration: 9000 });
+      if (warn) warn.textContent = '';
+      return;
+    }
+    if (warn) warn.textContent = err?.shortMessage || err?.message || String(err);
+  }
+}
+
+async function doClaimUnlocked() {
+  const warn = $('unlockWarn');
+  if (!state.account) {
+    await connectWallet();
+    if (!state.account) return;
+  }
+  const wouldFullExit =
+    state.unlocking.amount >= state.userStaked &&
+    state.userStaked > 0n &&
+    state.userBanked > 0n;
+  if (wouldFullExit) {
+    const remaining = formatScratchWhole(state.userBanked);
+    if (
+      !confirm(
+        `Claiming your full exit burns your ${remaining} remaining tickets — scratch them first. Claim anyway?`,
+      )
+    ) {
+      return;
+    }
+  }
+  try {
+    await ensureChain();
+    if (warn) warn.textContent = 'Confirm claim in wallet…';
+    const hash = await state.walletClient.writeContract({
+      address: addr.staking,
+      abi: ABI_STAKING,
+      functionName: 'claimUnlocked',
+      account: state.account,
+      chain: robinhoodChain,
+    });
+    if (warn) warn.textContent = 'Claiming…';
+    await publicClient.waitForTransactionReceipt({ hash });
+    if (warn) warn.textContent = 'Claimed ✓ — principal returned to your wallet.';
+    await refreshWalletPanel();
+  } catch (err) {
+    if (isUserRejection(err)) {
+      showToast(WALLET_REJECT_TOAST, { kind: 'warn', duration: 9000 });
+      if (warn) warn.textContent = '';
+      return;
+    }
+    if (warn) warn.textContent = err?.shortMessage || err?.message || String(err);
+  }
+}
+
+async function doCancelUnlock() {
+  const warn = $('unlockWarn');
+  if (!state.account) {
+    await connectWallet();
+    if (!state.account) return;
+  }
+  if (
+    !confirm(
+      'Cancel unlock and re-stake the full principal? Tickets already burned are not restored. Continue?',
+    )
+  ) {
+    return;
+  }
+  try {
+    await ensureChain();
+    if (warn) warn.textContent = 'Confirm cancel in wallet…';
+    const hash = await state.walletClient.writeContract({
+      address: addr.staking,
+      abi: ABI_STAKING,
+      functionName: 'cancelUnlock',
+      account: state.account,
+      chain: robinhoodChain,
+    });
+    if (warn) warn.textContent = 'Cancelling…';
+    await publicClient.waitForTransactionReceipt({ hash });
+    if (warn) warn.textContent = 'Unlock cancelled — principal re-staked (burned tickets not restored).';
+    await refreshWalletPanel();
+  } catch (err) {
+    if (isUserRejection(err)) {
+      showToast(WALLET_REJECT_TOAST, { kind: 'warn', duration: 9000 });
+      if (warn) warn.textContent = '';
+      return;
+    }
+    if (warn) warn.textContent = err?.shortMessage || err?.message || String(err);
   }
 }
 
@@ -4814,6 +5882,11 @@ async function refreshPublic() {
     /* ignore */
   }
   try {
+    await refreshV2Params();
+  } catch {
+    /* ignore */
+  }
+  try {
     await Promise.all([loadPrizeTable(0), loadPrizeTable(1)]);
     await Promise.all([
       renderPrizeList(0, 'prizeListStd'),
@@ -4844,6 +5917,49 @@ async function refreshPublic() {
 /* -------------------------------------------------------------------------- */
 /* Init                                                                        */
 /* -------------------------------------------------------------------------- */
+
+/**
+ * Boot-time generation gate: sets the html/body data-gen attribute, toggles
+ * .gen-v1-only / .gen-v2-only chrome, and applies v2 multi cap / tier copy.
+ */
+function applyGenerationUi() {
+  const gen = activeGeneration();
+  const v2 = isV2();
+  document.documentElement.dataset.gen = String(gen);
+  if (document.body) document.body.dataset.gen = String(gen);
+
+  document.querySelectorAll('.gen-v2-only').forEach((el) => {
+    el.hidden = !v2;
+  });
+  document.querySelectorAll('.gen-v1-only').forEach((el) => {
+    el.hidden = v2;
+  });
+
+  const capNote = $('multiCapNote');
+  if (capNote) {
+    capNote.textContent = v2
+      ? '20 cards, one reveal, scratch at your pace'
+      : 'max 10 per batch';
+  }
+  const input = $('multiCountInput');
+  if (input) input.max = String(MULTI_MAX_BATCH);
+
+  updateStakedTicketsTip();
+
+  // v2: kill the static "no lockup" copy immediately (refreshMinStake re-renders on chain read).
+  if (v2) {
+    const rate = $('minStakeRate');
+    if (rate && /no lockup/i.test(rate.innerHTML)) {
+      rate.innerHTML = rate.innerHTML.replace(
+        /<b>\s*no lockup\s*<\/b>/i,
+        `<b>timed unlock (${unlockHoursLabel('normal')} / ${unlockHoursLabel('enhanced')})</b>`,
+      );
+    }
+    renderTierPickerCopy();
+    syncTierPickerButtons();
+    renderV2StakeUi();
+  }
+}
 
 function wireUi() {
   $('tabStd')?.addEventListener('click', () => {
@@ -4915,6 +6031,25 @@ function wireUi() {
     const btn = e.target.closest('button[data-pct]');
     if (!btn || btn.disabled) return;
     applyWithdrawPctFill(Number(btn.dataset.pct));
+  });
+
+  /* --- v2: tier picker + upgrade + unlock (request / claim / cancel) --- */
+  const onTierPick = (e) => {
+    const btn = e.target.closest('button[data-tier]');
+    if (!btn || btn.disabled) return;
+    setSelectedStakeTier(Number(btn.dataset.tier));
+  };
+  $('stakeTierPicker')?.addEventListener('click', onTierPick);
+  $('stakeTierPickerPath')?.addEventListener('click', onTierPick);
+  $('upgradeTierBtn')?.addEventListener('click', upgradeTier);
+  $('requestUnlockBtn')?.addEventListener('click', doRequestUnlock);
+  $('unlockClaimBtn')?.addEventListener('click', doClaimUnlocked);
+  $('unlockCancelBtn')?.addEventListener('click', doCancelUnlock);
+  $('unlockAmount')?.addEventListener('input', updateUnlockBurnPreview);
+  $('unlockPctRow')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-pct]');
+    if (!btn || btn.disabled) return;
+    applyUnlockPctFill(Number(btn.dataset.pct));
   });
 
   $('scratchBtnStd')?.addEventListener('click', () => {
@@ -5021,6 +6156,16 @@ function wireUi() {
       setText($('walletExpiry'), remain > 0 ? formatCountdown(remain) : '—');
     }
 
+    // v2: live unlock countdown + Claim enable at releaseAt.
+    if (isV2() && state.account && state.unlocking && state.unlocking.amount > 0n) {
+      const now = Math.floor(Date.now() / 1000);
+      const remain = Math.max(0, Number(state.unlocking.releaseAt) - now);
+      const cd = $('unlockCountdown');
+      if (cd) cd.textContent = remain > 0 ? formatCountdown(remain) : 'Ready to claim';
+      const claimBtn = $('unlockClaimBtn');
+      if (claimBtn) claimBtn.disabled = remain > 0;
+    }
+
     if (activeTierTickets() > 0) {
       if (state._stakeNextSecs != null) {
         state._stakeNextSecs = null;
@@ -5053,6 +6198,7 @@ async function init() {
   }
   wireCanvas();
   wireUi();
+  applyGenerationUi();
   setMode('live');
   // Hide again button in live by default
   const again = $('againBtn');
