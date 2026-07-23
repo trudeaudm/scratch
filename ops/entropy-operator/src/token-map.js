@@ -1,29 +1,34 @@
 /**
  * Known prize assets for ledger symbol / decimals.
- * Addresses lowercase. Unknown assets fall back to symbol=asset.slice(0,10) decimals=18.
+ * Loaded from site/tokens.json (same source as the dashboard).
+ * Unknown assets fall back to symbol=asset.slice(0,10) decimals=18.
  */
-export const TOKEN_MAP = {
-  "0xf5e5f4d3c34a14b2fdfd59584fe555cd5e21f196": {
-    symbol: "SCRATCH",
-    decimals: 18,
-    price: "scratch",
-  },
-  "0x5fc5360d0400a0fd4f2af552add042d716f1d168": {
-    symbol: "USDG",
-    decimals: 6,
-    price: "usdg",
-  },
-  "0x0bd7d308f8e1639fab988df18a8011f41eacad73": {
-    symbol: "WETH",
-    decimals: 18,
-    price: "dex",
-  },
-  "0x4a0e65a3eccec6dbe60ae065f2e7bb85fae35eea": {
-    symbol: "SPCX",
-    decimals: 18,
-    price: "dex",
-  },
-};
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const TOKENS_JSON = path.resolve(__dirname, "../../../site/tokens.json");
+
+function loadTokenMap() {
+  const raw = JSON.parse(fs.readFileSync(TOKENS_JSON, "utf8"));
+  if (!Array.isArray(raw)) throw new Error("tokens.json must be an array");
+  /** @type {Record<string, { symbol: string, decimals: number, price: string }>} */
+  const map = {};
+  for (const t of raw) {
+    if (!t?.address || !t?.symbol) continue;
+    const key = String(t.address).toLowerCase();
+    map[key] = {
+      // Stocks: prefer underlying ticker for brokerage-style ledger labels.
+      symbol: (t.kind === "stock" && t.ticker ? t.ticker : t.symbol) || t.symbol,
+      decimals: Number(t.decimals) || 18,
+      price: t.price || "dex",
+    };
+  }
+  return map;
+}
+
+export const TOKEN_MAP = loadTokenMap();
 
 export const ZERO = "0x0000000000000000000000000000000000000000";
 
