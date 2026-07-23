@@ -131,6 +131,8 @@ const STAKING_ABI = [
   "function unlockEnhanced() view returns (uint64)",
   "event UnlockRequested(address indexed user, uint256 amount, uint256 ticketsBurned, uint64 releaseAt)",
   "event UnlockClaimed(address indexed user, uint256 amount, uint256 terminalTicketsBurned)",
+  "event TicketsSpent(address indexed user, uint256 amount)",
+  "event TicketsRefunded(address indexed user, uint256 amount)",
 ];
 
 const PRIZE_PAID_ABI = [
@@ -1286,32 +1288,92 @@ async function drillV6(env, state) {
     const staking = new Contract(state.addresses.stakingVault, STAKING_ABI, user);
     const game = new Contract(state.addresses.game, GAME_ABI, user);
     const iface = new Interface(GAME_ABI);
+    const stakingIface = new Interface(STAKING_ABI);
 
-    await waitUntilTickets(staking, user.address, TICKET_COST * 5n, 300_000);
-    const ticketsBefore = await staking.ticketsOf(user.address);
-    const { receipt } = await sendAndLog(id, withGasBuffer(game, "scratchMany", [PREMIUM, 5]), "scratchMany(_,5) watcher dead");
-    const requestId = parseRequestId(receipt, iface);
-    const ticketsAfterScratch = await staking.ticketsOf(user.address);
-    if (ticketsBefore - ticketsAfterScratch !== TICKET_COST * 5n) {
-      throw new Error(`expected spend 5 tickets, delta=${ticketsBefore - ticketsAfterScratch}`);
+    let requestId = state.drills.V6?.requestId ? BigInt(state.drills.V6.requestId) : null;
+
+    if (requestId != null) {
+      const existing = await game.requests(requestId);
+      if (Number(existing.status) === STATUS.Pending && Number(existing.count) === 5) {
+        logDrill(id, `resume: pending batch requestId=${requestId} count=5`);
+      } else if (Number(existing.status) === STATUS.Rescued) {
+        logDrill(id, `resume: requestId=${requestId} already Rescued — skip to late-fulfill check`);
+      } else {
+        requestId = null;
+      }
     }
 
-    logDrill(id, `waiting ${RESCUE_DELAY + 10}s for rescue…`);
-    await sleep((RESCUE_DELAY + 10) * 1000);
-    const mid = await staking.ticketsOf(user.address);
-    await sendAndLog(id, withGasBuffer(game, "rescue", [requestId]), "rescue batch");
-    const after = await staking.ticketsOf(user.address);
-    if (after - mid !== TICKET_COST * 5n) {
-      throw new Error(`rescue refund ${(after - mid).toString()} != 5e18`);
+    if (requestId == null) {
+      await waitUntilTickets(staking, user.address, TICKET_COST * 5n, 300_000);
+      const { receipt } = await sendAndLog(
+        id,
+        withGasBuffer(game, "scratchMany", [PREMIUM, 5]),
+        "scratchMany(_,5) watcher dead",
+      );
+      requestId = parseRequestId(receipt, iface);
+      if (requestId == null) throw new Error("no requestId from scratchMany");
+
+      let spent = null;
+      for (const log of receipt.logs) {
+        try {
+          const p = stakingIface.parseLog(log);
+          if (p?.name === "TicketsSpent" && getAddress(p.args.user) === getAddress(user.address)) {
+            spent = BigInt(p.args.amount);
+            break;
+          }
+        } catch {
+          /* skip */
+        }
+      }
+      if (spent !== TICKET_COST * 5n) {
+        throw new Error(`expected TicketsSpent 5e18, got ${spent}`);
+      }
+      logDrill(id, `TicketsSpent=${spent} requestId=${requestId}`);
+      recordDrill(state, id, {
+        status: "IN_PROGRESS",
+        requestId: requestId.toString(),
+        spent: spent.toString(),
+      });
     }
-    const req = await game.requests(requestId);
+
+    let req = await game.requests(requestId);
+    if (Number(req.status) === STATUS.Pending) {
+      const requestedAt = Number(req.requestedAt);
+      const now = (await provider.getBlock("latest")).timestamp;
+      const waitS = Math.max(0, requestedAt + RESCUE_DELAY + 10 - now);
+      logDrill(id, `waiting ${waitS}s for rescue (RESCUE_DELAY=${RESCUE_DELAY})…`);
+      await sleep(waitS * 1000);
+
+      const { receipt: rescueReceipt } = await sendAndLog(
+        id,
+        withGasBuffer(game, "rescue", [requestId]),
+        "rescue batch",
+      );
+      let refunded = null;
+      for (const log of rescueReceipt.logs) {
+        try {
+          const p = stakingIface.parseLog(log);
+          if (p?.name === "TicketsRefunded" && getAddress(p.args.user) === getAddress(user.address)) {
+            refunded = BigInt(p.args.amount);
+            break;
+          }
+        } catch {
+          /* skip */
+        }
+      }
+      if (refunded !== TICKET_COST * 5n) {
+        throw new Error(`rescue refund ${refunded} != 5e18`);
+      }
+      logDrill(id, `TicketsRefunded=${refunded}`);
+    }
+
+    req = await game.requests(requestId);
     if (Number(req.status) !== STATUS.Rescued) throw new Error("not rescued");
     if (Number(req.count) !== 5) throw new Error(`count=${req.count}`);
 
     await startWatcher(env, state);
     await sleep(3_000);
 
-    // Late fulfill: poll for ScratchLateFulfillment(count=5); no payout / status stays Rescued
     const lateTopic = ethId("ScratchLateFulfillment(address,uint256,uint8,uint8)");
     const fromBlock = Math.max(0, (await provider.getBlockNumber()) - 50);
     let late = null;
@@ -1324,7 +1386,6 @@ async function drillV6(env, state) {
         toBlock: tip,
         topics: [lateTopic],
       });
-      const iface = new Interface(GAME_ABI);
       for (const log of logs) {
         try {
           const p = iface.parseLog(log);
@@ -1361,7 +1422,11 @@ async function drillV6(env, state) {
     });
     logDrill(id, "PASS");
   } catch (e) {
-    recordDrill(state, id, { status: "FAIL", error: e.message });
+    recordDrill(state, id, {
+      status: "FAIL",
+      error: e.message,
+      requestId: state.drills.V6?.requestId,
+    });
     logDrill(id, `FAIL ${e.message}`);
     try {
       await startWatcher(env, state);
