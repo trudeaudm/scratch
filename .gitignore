@@ -16,12 +16,18 @@ lib/
 .env.rehearsal
 rehearsal/.env.rehearsal
 rehearsal/state.json
+rehearsal/state-v2.json
 rehearsal/entropy-state.json
 rehearsal/entropy-state-*.json
 rehearsal/watcher.pid
 rehearsal/watcher.log
+rehearsal/watcher-v2.pid
+rehearsal/watcher-v2.log
 rehearsal/node_modules/
 rehearsal/drill-logs/
+rehearsal/drill-logs-v2/
+rehearsal/*.log
+
 
 # SelfEntropy operator state (contains chain secret)
 ops/entropy-operator/.env

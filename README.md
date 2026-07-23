@@ -13,7 +13,7 @@ Daily onchain scratch-offs on Robinhood Chain (4663). Robinhood retired the scra
 | `docs/launch-routes.md` | Launch route analysis. **Decision made: Route B self-deploy, manual LP.** Kept for the gate-check details. |
 | `site/mockup-v2.html` | The full site mockup (two-tier scratch UI, referral flow, pool health). Starting point for the real frontend; placeholder stats and the demo-reset button are intentional. |
 | `brand/` | X profile assets (pfp + banner). Handle @scratch4663 · domain scratch4663.xyz · location "Chain 4663". |
-| `rehearsal/` | Buildspec §9 mainnet rehearsal harness (`run.mjs` / `run.sh`). Throwaway burners + SelfEntropy; see `rehearsal/.env.rehearsal.example`. |
+| `rehearsal/` | Buildspec §9 mainnet rehearsal harness. v1: `run.mjs` / `run.sh` (Deploy2). v2: `run-v2.mjs` / `run-v2.sh` (Deploy3 + StakingVaultV2 / ScratchGameV2). Same `.env.rehearsal` shape; see `.env.rehearsal.example`. |
 
 ## Tests (Foundry)
 
@@ -72,7 +72,7 @@ Live VRF fulfillment is **not** covered here — that is buildspec §9 mainnet r
 2. ☐ Human read of StakingVault diff after prompt 2
 3. ☐ `forge coverage` + external adversarial review pass after prompt 7
 4. ☐ Gates: VRF coordinator on 4663 (Chainlink), Safe on 4663 (treasury) — ask in parallel with the build
-5. ☐ Mainnet rehearsal per buildspec §9 — `rehearsal/run.sh all` (throwaway deploy, live SelfEntropy loop, failure drills D1–D8) — no testnet stage
+5. ☐ Mainnet rehearsal per buildspec §9 — `rehearsal/run.sh all` (v1) / `rehearsal/run-v2.sh all` (v2 Deploy3) — throwaway deploy, live SelfEntropy, drills; no testnet stage
 6. ☐ Legal read of prize/chance/consideration structure before the vault holds value
 7. ☐ Production token + LP launch per `scratch-deploy/README-deploy.md`
 8. ☐ Production game deploy, treasury ownership, 20% prize seed in, prize table set

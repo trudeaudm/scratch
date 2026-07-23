@@ -9,6 +9,7 @@
   },
   "scripts": {
     "rehearsal": "node run.mjs",
+    "rehearsal:v2": "node --use-system-ca run-v2.mjs",
     "start": "node run.mjs all"
   },
   "dependencies": {
