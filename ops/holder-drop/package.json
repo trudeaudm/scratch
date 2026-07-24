@@ -6,6 +6,7 @@
   "description": "Daily holder-tier StandardTicketSource granter for $SCRATCH",
   "scripts": {
     "drop": "node --use-system-ca src/run.js",
+    "regrant-v1": "node --use-system-ca regrant-v1.js",
     "test": "node --test test/filter.test.js"
   },
   "engines": {
