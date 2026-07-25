@@ -639,7 +639,8 @@ async function loadVesting(pc: ReturnType<typeof client>): Promise<VestingVitals
 }
 
 async function loadGame(pc: ReturnType<typeof client>): Promise<GameVitals | null> {
-  const addr = contracts.scratchGame.address;
+  // v2 cutover: game vitals track ScratchGameV2 (v1 drain is watched via cast/operator).
+  const addr = contracts.scratchGameV2.address;
   if (!isConfigured(addr)) return null;
 
   const [randomness, pendingRandomness, randomnessSwapEta, rescueDelay] = await Promise.all([
@@ -738,7 +739,8 @@ async function loadGame(pc: ReturnType<typeof client>): Promise<GameVitals | nul
 async function loadPrizeTables(
   pc: ReturnType<typeof client>,
 ): Promise<PrizeTableSnapshot[] | null> {
-  const addr = contracts.scratchGame.address;
+  // v2 cutover: tables panel reads/edits ScratchGameV2.
+  const addr = contracts.scratchGameV2.address;
   if (!isConfigured(addr)) return null;
 
   const out: PrizeTableSnapshot[] = [];

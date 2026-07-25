@@ -2,10 +2,10 @@
  * Public win share page — loads ScratchSettled for ?req=&tier= and renders the card.
  * Bump ASSET_VERSION in sync with win.html ?v=.
  */
-export const ASSET_VERSION = 'v2-mode-1';
+export const ASSET_VERSION = 'v2-live-1';
 
 /** Game generation — production stays v1 until cutover. `?gen=2` forces v2 for verify. */
-export const GAME_GENERATION = 1;
+export const GAME_GENERATION = 2;
 
 import {
   createPublicClient,
@@ -45,8 +45,8 @@ const CONFIG = {
     public: 'https://rpc.mainnet.chain.robinhood.com',
   },
   game: '0xBeD604b5AB226134EdF154cc31881d8C93f4C9e6',
-  // v2 game (ScratchGameV2) — filled at migration; used when generation is 2.
-  gameV2: '0xFILL_AT_MIGRATION',
+  // v2 game (ScratchGameV2) — production Deploy3; used when generation is 2.
+  gameV2: '0xe6BA601710aFd1297114D738CA201D1D84eb3Da1',
   deployBlock: 13_138_508n,
   logChunkBlocks: 9_000n,
   /** Seeded fallbacks; overwritten by `./tokens.json` at boot. */

@@ -3,14 +3,14 @@
  * Wire from index.html: <script type="module" src="./app.js?v=…"></script>
  * Bump ASSET_VERSION (and the index.html ?v=) on every site/ commit.
  */
-export const ASSET_VERSION = 'v2-mode-1';
+export const ASSET_VERSION = 'v2-live-1';
 
 /**
  * Game generation flag. Production stays on v1 (StakingVault + ScratchGame) until
  * this is flipped to 2 (StakingVaultV2 + ScratchGameV2). The flip commit sets this
  * to 2 and fills CONFIG.v2.addresses. Local verify can force v2 via `?gen=2`.
  */
-export const GAME_GENERATION = 1;
+export const GAME_GENERATION = 2;
 
 import {
   createPublicClient,
@@ -62,10 +62,11 @@ export const CONFIG = {
    */
   v2: {
     addresses: {
-      GAME: '0xFILL_AT_MIGRATION',
-      STAKING_VAULT: '0xFILL_AT_MIGRATION',
-      PRIZE_VAULT: '0xFILL_AT_MIGRATION',
-      STANDARD_SOURCE: '0xFILL_AT_MIGRATION',
+      // Production Deploy3 (2026-07-24, chain 4663).
+      GAME: '0xe6BA601710aFd1297114D738CA201D1D84eb3Da1',
+      STAKING_VAULT: '0x3D8Ec3a0D98e2a5015C502b4D40a5167f378dB7c',
+      PRIZE_VAULT: '0xAfbEa86784f9DbD31573B74e68133C3B2b21247E',
+      STANDARD_SOURCE: '0x6C7CC31d5eC5899c7f5019516cFA3629167B2fd8',
       // SCRATCH/USDG/SPCX reuse the main addresses in production (same token); FILL here
       // means "reuse main". For rehearsal verify, SCRATCH is a throwaway.
       SCRATCH: '0xFILL_AT_MIGRATION',

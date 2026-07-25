@@ -103,34 +103,55 @@ export const contracts = {
     label: "PrizeVault (v1)",
     address: "0x86Ade8b30D481bBd9D2897d20931b107e776Ba52",
   } satisfies ContractEntry,
-  /**
-   * Fresh PrizeVault from Deploy3 (v2 stack). Zero until cutover — fill after
-   * Deploy3; never commit rehearsal addresses as production.
-   */
+  /** Production Deploy3 PrizeVault (v2 stack, 2026-07-24). */
   prizeVaultV2: {
     key: "prizeVaultV2",
     label: "PrizeVault (v2)",
-    address: Z,
+    address: "0xAfbEa86784f9DbD31573B74e68133C3B2b21247E",
   } satisfies ContractEntry,
   stakingVault: {
     key: "stakingVault",
-    label: "StakingVault",
+    label: "StakingVault (v1)",
     address: "0x577Cecbe33d1B2F7f4DF7E0D8Bf03690C2b17eD6",
+  } satisfies ContractEntry,
+  /** Production Deploy3 StakingVaultV2. NOTE: no `totalStaked` getter (v2 uses totalWeight). */
+  stakingVaultV2: {
+    key: "stakingVaultV2",
+    label: "StakingVaultV2",
+    address: "0x3D8Ec3a0D98e2a5015C502b4D40a5167f378dB7c",
   } satisfies ContractEntry,
   standardTicketSource: {
     key: "standardTicketSource",
-    label: "StandardTicketSource",
+    label: "StandardTicketSource (v1)",
     address: "0xC94894Cd3986E2D0f85616a0Dc59914f1057f003",
+  } satisfies ContractEntry,
+  /** Production Deploy3 StandardTicketSource (v2). Crediter must be re-added here. */
+  standardTicketSourceV2: {
+    key: "standardTicketSourceV2",
+    label: "StandardTicketSource (v2)",
+    address: "0x6C7CC31d5eC5899c7f5019516cFA3629167B2fd8",
   } satisfies ContractEntry,
   scratchGame: {
     key: "scratchGame",
-    label: "ScratchGame",
+    label: "ScratchGame (v1)",
     address: "0xBeD604b5AB226134EdF154cc31881d8C93f4C9e6",
+  } satisfies ContractEntry,
+  /** Production Deploy3 ScratchGameV2 — game vitals + prize-table editor target. */
+  scratchGameV2: {
+    key: "scratchGameV2",
+    label: "ScratchGameV2",
+    address: "0xe6BA601710aFd1297114D738CA201D1D84eb3Da1",
   } satisfies ContractEntry,
   selfEntropyProvider: {
     key: "selfEntropyProvider",
-    label: "SelfEntropyProvider",
+    label: "SelfEntropyProvider (v1)",
     address: "0xd305290DaF2b14b60FE3aaE7281C4A001B973aB0",
+  } satisfies ContractEntry,
+  /** Production Deploy3 SelfEntropyProvider (v2) — Render operator swap target. */
+  selfEntropyProviderV2: {
+    key: "selfEntropyProviderV2",
+    label: "SelfEntropyProvider (v2)",
+    address: "0x5B765d373C97EedD52f9Bc8741B17F7167dEDd36",
   } satisfies ContractEntry,
   /** Ops VestingWallet — DeployOpsVesting.s.sol. */
   vestingWallet: {
@@ -161,8 +182,11 @@ export const sendTargets: ContractEntry[] = [
   contracts.prizeVault,
   contracts.prizeVaultV2,
   contracts.stakingVault,
+  contracts.stakingVaultV2,
   contracts.standardTicketSource,
+  contracts.standardTicketSourceV2,
   contracts.scratchGame,
+  contracts.scratchGameV2,
   contracts.vestingWallet,
   contracts.treasury,
 ];
@@ -172,7 +196,9 @@ export const balanceHolders: ContractEntry[] = [
   contracts.prizeVault,
   contracts.prizeVaultV2,
   contracts.stakingVault,
+  contracts.stakingVaultV2,
   contracts.standardTicketSource,
+  contracts.standardTicketSourceV2,
   contracts.vestingWallet,
   contracts.treasury,
 ];

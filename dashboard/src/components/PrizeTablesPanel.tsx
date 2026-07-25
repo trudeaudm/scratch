@@ -290,8 +290,8 @@ export function PrizeTablesPanel({
 
   async function submit() {
     setErr(null);
-    if (!isConfigured(contracts.scratchGame.address)) {
-      setErr("ScratchGame address not set");
+    if (!isConfigured(contracts.scratchGameV2.address)) {
+      setErr("ScratchGameV2 address not set");
       return;
     }
     const blocking = blockingIssues(draft.issues);
@@ -315,7 +315,8 @@ export function PrizeTablesPanel({
     reset();
     try {
       await writeContractAsync({
-        address: contracts.scratchGame.address,
+        // v2 cutover: table edits target ScratchGameV2.
+        address: contracts.scratchGameV2.address,
         abi: scratchGameAbiTyped,
         functionName: "setPrizeTable",
         args: [
