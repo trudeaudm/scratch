@@ -54,4 +54,25 @@ assert(!html.includes('Next ticket in'), 'HTML has no Next ticket in placeholder
 assert(!/Banked/i.test(html) || !/walletBanked/.test(html), 'HTML has no banked row id');
 assert(!html.includes('walletBanked'), 'HTML no walletBanked');
 
+/* v1 legacy withdraw — in-app wallet safety */
+assert(src.includes('ensureLiveWalletForWrite'), 'live EIP-6963/injected wallet rebuild');
+assert(src.includes('readV1StakedLive'), 'v1 balance read live at click/send');
+assert(src.includes('ABI_STAKING_V1'), 'v1 staking ABI present');
+assert(src.includes('cancelV1LegacyWithdraw'), 'in-panel cancel for v1 withdraw');
+assert(html.includes('id="v1LegacyCancelBtn"'), 'v1 cancel button in HTML');
+assert(html.includes('app.js?v=v2-live-3') || /app\.js\?v=v2-live-3/.test(html), 'asset version bumped');
+assert(src.includes("ASSET_VERSION = 'v2-live-3'"), 'ASSET_VERSION matches index.html');
+{
+  const fnStart = src.indexOf('async function doV1LegacyWithdrawAll');
+  const fnEnd = src.indexOf('function cancelV1LegacyWithdraw', fnStart);
+  assert(fnStart > 0 && fnEnd > fnStart, 'doV1LegacyWithdrawAll bounded');
+  const body = src.slice(fnStart, fnEnd);
+  assert(!/\bconfirm\s*\(/.test(body), 'v1 withdraw does not use window.confirm');
+  assert(body.includes('ensureLiveWalletForWrite'), 'v1 withdraw rebuilds live wallet');
+  assert(body.includes('readV1StakedLive'), 'v1 withdraw re-reads balance');
+  assert(body.includes('formatSiteWriteError'), 'v1 withdraw surfaces formatted errors');
+  assert(body.includes('ABI_STAKING_V1'), 'v1 withdraw uses v1 ABI');
+  assert(body.includes('functionName: \'withdraw\''), 'v1 withdraw calls withdraw');
+}
+
 console.log(process.exitCode ? '\nMatrix walk: FAIL' : '\nMatrix walk: PASS');

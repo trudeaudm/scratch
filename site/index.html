@@ -892,6 +892,7 @@
     <div class="v1-legacy-amt" id="v1LegacyStaked">—</div>
     <p class="v1-legacy-copy">v1 has been retired — withdraw instantly (v1 tickets no longer settle), then restake below to pick your tier</p>
     <button type="button" class="btn sm" id="v1LegacyWithdrawBtn">Withdraw all from v1</button>
+    <button type="button" class="btn ghost sm" id="v1LegacyCancelBtn" hidden>Cancel</button>
     <div class="v1-legacy-status" id="v1LegacyStatus"></div>
     <div class="v1-legacy-nudge" id="v1LegacyNudge" hidden>
       <span>Withdrawn. Restake below to pick NORMAL or ENHANCED.</span>
@@ -1278,6 +1279,6 @@
 <div class="toast-host" id="toastHost" aria-live="polite" aria-relevant="additions"></div>
 
 <!-- Bump ?v= to the short commit hash on every site/ ship so Render/CDN cannot serve stale app.js -->
-<script type="module" src="./app.js?v=v2-live-2"></script>
+<script type="module" src="./app.js?v=v2-live-3"></script>
 </body>
 </html>

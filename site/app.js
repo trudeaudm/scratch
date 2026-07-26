@@ -3,7 +3,7 @@
  * Wire from index.html: <script type="module" src="./app.js?v=…"></script>
  * Bump ASSET_VERSION (and the index.html ?v=) on every site/ commit.
  */
-export const ASSET_VERSION = 'v2-live-2';
+export const ASSET_VERSION = 'v2-live-3';
 
 /**
  * Game generation flag. Production stays on v1 (StakingVault + ScratchGame) until
@@ -717,12 +717,44 @@ function showToast(message, opts = {}) {
   setTimeout(dismiss, ms);
 }
 
+/** Extract a human-readable message from viem/wallet errors (never empty). */
+function formatSiteWriteError(err, fallback) {
+  if (err == null) return fallback || 'Unknown write error';
+  if (typeof err === 'string') return err.trim() || fallback || 'Unknown write error';
+  if (typeof err === 'object') {
+    if (typeof err.walk === 'function') {
+      try {
+        let found = null;
+        err.walk((e) => {
+          if (e && typeof e === 'object' && typeof e.shortMessage === 'string' && e.shortMessage.trim()) {
+            found = e.shortMessage.trim();
+            return true;
+          }
+          return false;
+        });
+        if (found) return found;
+      } catch {
+        /* fall through */
+      }
+    }
+    if (typeof err.shortMessage === 'string' && err.shortMessage.trim()) return err.shortMessage.trim();
+    if (typeof err.message === 'string' && err.message.trim()) return err.message.trim();
+    if (typeof err.details === 'string' && err.details.trim()) return err.details.trim();
+    if (err.cause != null && err.cause !== err) {
+      const nested = formatSiteWriteError(err.cause);
+      if (nested && nested !== 'Unknown write error') return nested;
+    }
+  }
+  if (err instanceof Error && err.message.trim()) return err.message.trim();
+  return fallback || String(err);
+}
+
 function toastWalletError(err, fallback) {
   if (isUserRejection(err)) {
     showToast(WALLET_REJECT_TOAST, { kind: 'warn', duration: 9000 });
     return;
   }
-  const msg = err?.shortMessage || err?.message || fallback || String(err);
+  const msg = formatSiteWriteError(err, fallback);
   showToast(msg, { kind: 'error' });
 }
 
@@ -5862,7 +5894,7 @@ async function doWithdraw() {
     input.value = '';
     await refreshWalletPanel();
   } catch (err) {
-    if (warn) warn.textContent = err?.shortMessage || err?.message || String(err);
+    if (warn) warn.textContent = formatSiteWriteError(err);
   }
 }
 
@@ -5884,27 +5916,132 @@ function v1StakingAddress() {
  * before any write. Mirrors the dashboard account-mismatch guard.
  */
 async function assertActiveAccountMatchesSession(expectedRole = 'your wallet') {
-  if (!state.account) {
+  const { account } = await ensureLiveWalletForWrite(expectedRole);
+  return account;
+}
+
+/**
+ * Re-run EIP-6963 + legacy injected discovery, pick a provider that still
+ * exposes the session account, rebuild walletClient, and ensure chain.
+ * In-app browsers (Uniswap/Base/MetaMask mobile) often re-inject — never trust
+ * a stale selectedWallet / walletClient alone, and never hardcode window.ethereum.
+ *
+ * @returns {Promise<{ account: string, provider: object, walletClient: object }>}
+ */
+async function ensureLiveWalletForWrite(expectedRole = 'your wallet') {
+  const session = state.account;
+  if (!session) {
     throw new Error(`Wallet not connected — reconnect as ${expectedRole}`);
   }
-  const provider = getActiveProvider();
-  if (!provider?.request) {
-    throw new Error(`No active wallet — reconnect as ${expectedRole}`);
-  }
-  let accounts;
+
+  await startWalletDiscovery();
   try {
-    accounts = await provider.request({ method: 'eth_accounts' });
-  } catch (e) {
-    throw new Error(e?.shortMessage || e?.message || `Wallet read failed — reconnect as ${expectedRole}`);
+    window.dispatchEvent(new Event('eip6963:requestProvider'));
+  } catch {
+    /* ignore */
+  }
+  captureLegacyEthereum();
+
+  const providers = listDiscoveredWallets();
+  if (providers.length === 0) {
+    throw new Error(NO_WALLET_MSG);
+  }
+
+  async function readAccounts(provider) {
+    try {
+      return await provider.request({ method: 'eth_accounts' });
+    } catch (e) {
+      throw new Error(
+        formatSiteWriteError(e, `Wallet read failed — reconnect as ${expectedRole}`),
+      );
+    }
+  }
+
+  const sessionKey = session.toLowerCase();
+  let detail = null;
+
+  // Prefer the session-selected provider if it still announces our account.
+  if (selectedWallet?.provider) {
+    const still =
+      providers.find((p) => p.provider === selectedWallet.provider) || selectedWallet;
+    try {
+      const accs = await readAccounts(still.provider);
+      if (accs?.length && getAddress(accs[0]).toLowerCase() === sessionKey) {
+        detail = still;
+      }
+    } catch {
+      /* try other discovered providers */
+    }
+  }
+
+  if (!detail) {
+    for (const d of providers) {
+      try {
+        const accs = await readAccounts(d.provider);
+        if (accs?.length && getAddress(accs[0]).toLowerCase() === sessionKey) {
+          detail = d;
+          break;
+        }
+      } catch {
+        /* next */
+      }
+    }
+  }
+
+  // Single injected provider (typical in-app browser) — use it, then mismatch-guard.
+  if (!detail && providers.length === 1) {
+    detail = providers[0];
+  }
+
+  if (!detail?.provider?.request) {
+    throw new Error(
+      `No active wallet matching ${shortAddr(session)} — reconnect as ${expectedRole}`,
+    );
+  }
+
+  selectedWallet = detail;
+  bindProviderEvents(detail.provider);
+  await ensureChain();
+
+  let accounts = await readAccounts(detail.provider);
+  if (!accounts?.length) {
+    // Some in-app browsers need an explicit permission nudge after re-inject.
+    try {
+      accounts = await detail.provider.request({ method: 'eth_requestAccounts' });
+    } catch (e) {
+      throw new Error(
+        formatSiteWriteError(e, `No active account — reconnect as ${expectedRole}`),
+      );
+    }
   }
   if (!accounts?.length) {
     throw new Error(`No active account — reconnect as ${expectedRole}`);
   }
+
   const active = getAddress(accounts[0]);
-  if (active.toLowerCase() !== state.account.toLowerCase()) {
+  if (active.toLowerCase() !== sessionKey) {
     throw new Error(`connected wallet changed — reconnect as ${expectedRole}`);
   }
-  return active;
+
+  const walletClient = createWalletClient({
+    account: active,
+    chain: robinhoodChain,
+    transport: custom(detail.provider),
+  });
+  state.account = active;
+  state.walletClient = walletClient;
+  return { account: active, provider: detail.provider, walletClient };
+}
+
+/** In-panel confirm arm for v1 withdraw — avoids window.confirm (broken in many in-app WebViews). */
+let v1WithdrawConfirm = null;
+
+function resetV1WithdrawConfirm() {
+  v1WithdrawConfirm = null;
+  const btn = $('v1LegacyWithdrawBtn');
+  const cancel = $('v1LegacyCancelBtn');
+  if (btn) btn.textContent = 'Withdraw all from v1';
+  if (cancel) cancel.hidden = true;
 }
 
 function renderV1LegacyExit(opts = {}) {
@@ -5924,7 +6061,10 @@ function renderV1LegacyExit(opts = {}) {
   // Hide entirely at zero stake, except while the post-withdraw restake nudge is up.
   const show = isV2() && !!state.account && (staked > 0n || nudgeOpen || !!opts.forceNudge);
   card.hidden = !show;
-  if (!show) return;
+  if (!show) {
+    resetV1WithdrawConfirm();
+    return;
+  }
   if (amtEl) {
     amtEl.textContent =
       staked > 0n
@@ -5932,6 +6072,7 @@ function renderV1LegacyExit(opts = {}) {
         : '0 SCRATCH on v1';
   }
   if (btn) btn.hidden = staked <= 0n;
+  if (staked <= 0n) resetV1WithdrawConfirm();
   if (opts.forceNudge && nudge) nudge.hidden = false;
 }
 
@@ -5979,76 +6120,127 @@ function scrollToV2StakeForm() {
   }
 }
 
-async function doV1LegacyWithdrawAll() {
+async function readV1StakedLive(account) {
+  const v1 = v1StakingAddress();
+  if (!v1) throw new Error('v1 StakingVault address missing');
+  if (!account) throw new Error('Wallet not connected — reconnect as your wallet');
+  const user = await publicClient.readContract({
+    address: v1,
+    abi: ABI_STAKING_V1,
+    functionName: 'users',
+    args: [account],
+  });
+  return { v1, amount: user.staked ?? user[0] ?? 0n };
+}
+
+function setV1LegacyStatus(msg, { ok = false } = {}) {
   const status = $('v1LegacyStatus');
+  if (!status) return;
+  status.classList.toggle('ok', !!ok);
+  status.textContent = msg || '';
+}
+
+async function doV1LegacyWithdrawAll() {
   const nudge = $('v1LegacyNudge');
   const btn = $('v1LegacyWithdrawBtn');
-  if (!isV2()) return;
-  if (!state.account) {
-    await connectWallet();
-    if (!state.account) return;
-  }
-  await refreshV1LegacyStake({ keepNudge: true });
-  const amount = state.v1LegacyStaked ?? 0n;
-  if (amount <= 0n) {
-    if (status) {
-      status.classList.remove('ok');
-      status.textContent = 'No v1 stake to withdraw.';
-    }
-    renderV1LegacyExit({ clearNudge: true });
-    return;
-  }
-  const pretty = formatHuman(amount);
-  const warning = `Withdraw all ${pretty} SCRATCH from the retired v1 vault? v1 tickets no longer settle and any remaining v1 tickets will burn. Then restake below on v2 to pick your tier.`;
-  if (status) {
-    status.classList.remove('ok');
-    status.textContent = warning;
-  }
-  if (!confirm(warning)) {
-    if (status) status.textContent = '';
-    return;
-  }
+  const cancel = $('v1LegacyCancelBtn');
+
   try {
-    await ensureChain();
-    const active = await assertActiveAccountMatchesSession('your wallet');
-    const v1 = v1StakingAddress();
-    if (!v1) throw new Error('v1 StakingVault address missing');
+    if (!isV2()) {
+      setV1LegacyStatus('v1 withdraw is only available on the v2 site.');
+      return;
+    }
+    if (!state.account) {
+      await connectWallet();
+      if (!state.account) {
+        setV1LegacyStatus(NO_WALLET_MSG);
+        return;
+      }
+    }
+
+    // Live balance for the confirm arm (not a stale cache).
+    const preview = await readV1StakedLive(state.account);
+    state.v1LegacyStaked = preview.amount;
+    renderV1LegacyExit();
+
+    if (preview.amount <= 0n) {
+      resetV1WithdrawConfirm();
+      setV1LegacyStatus('No v1 stake to withdraw.');
+      renderV1LegacyExit({ clearNudge: true });
+      return;
+    }
+
+    const pretty = formatHuman(preview.amount);
+    const warning =
+      `Withdraw all ${pretty} SCRATCH from the retired v1 vault? ` +
+      `v1 tickets no longer settle and any remaining v1 tickets will burn. ` +
+      `Then restake below on v2 to pick your tier.`;
+
+    // In-panel confirm — window.confirm is silently auto-cancelled in many wallet WebViews.
+    if (!v1WithdrawConfirm || v1WithdrawConfirm.amount !== preview.amount) {
+      v1WithdrawConfirm = { amount: preview.amount, pretty };
+      setV1LegacyStatus(`${warning} Tap Confirm to continue.`);
+      if (btn) btn.textContent = 'Confirm withdraw';
+      if (cancel) cancel.hidden = false;
+      return;
+    }
+
     if (btn) btn.disabled = true;
-    if (status) status.textContent = 'Confirm withdraw in wallet…';
-    const hash = await state.walletClient.writeContract({
-      address: v1,
+    if (cancel) cancel.hidden = true;
+    setV1LegacyStatus('Preparing wallet…');
+
+    const { account: active, walletClient } = await ensureLiveWalletForWrite('your wallet');
+
+    // Re-read full balance at send time against the live active account.
+    const live = await readV1StakedLive(active);
+    state.v1LegacyStaked = live.amount;
+    if (live.amount <= 0n) {
+      resetV1WithdrawConfirm();
+      setV1LegacyStatus('No v1 stake to withdraw.');
+      renderV1LegacyExit({ clearNudge: true });
+      return;
+    }
+
+    setV1LegacyStatus(
+      `Confirm withdraw of ${formatHuman(live.amount)} SCRATCH from v1 in wallet…`,
+    );
+    const hash = await walletClient.writeContract({
+      address: live.v1,
       abi: ABI_STAKING_V1,
       functionName: 'withdraw',
-      args: [amount],
+      args: [live.amount],
       account: active,
       chain: robinhoodChain,
     });
-    if (status) status.textContent = 'Withdrawing from v1…';
+    setV1LegacyStatus('Withdrawing from v1…');
     await publicClient.waitForTransactionReceipt({ hash });
-    if (status) {
-      status.classList.add('ok');
-      status.textContent = 'Withdrawn from v1 ✓ — restake below to pick your tier.';
-    }
+    resetV1WithdrawConfirm();
+    setV1LegacyStatus('Withdrawn from v1 ✓ — restake below to pick your tier.', { ok: true });
     if (nudge) nudge.hidden = false;
     await refreshWalletPanel({ keepV1Nudge: true });
     renderV1LegacyExit({ forceNudge: true });
     scrollToV2StakeForm();
   } catch (err) {
+    const msg = formatSiteWriteError(err);
+    setV1LegacyStatus(msg);
+    // Keep Confirm armed only for wallet rejections so a retry is one tap;
+    // other failures (chain/provider/sim) reset so the amount is re-checked.
     if (isUserRejection(err)) {
-      if (status) {
-        status.classList.remove('ok');
-        status.textContent = '';
-      }
       showToast(WALLET_REJECT_TOAST, { kind: 'warn', duration: 9000 });
-      return;
-    }
-    if (status) {
-      status.classList.remove('ok');
-      status.textContent = err?.shortMessage || err?.message || String(err);
+      if (btn) btn.textContent = 'Confirm withdraw';
+      if (cancel) cancel.hidden = false;
+    } else {
+      resetV1WithdrawConfirm();
+      showToast(msg, { kind: 'error' });
     }
   } finally {
     if (btn) btn.disabled = false;
   }
+}
+
+function cancelV1LegacyWithdraw() {
+  resetV1WithdrawConfirm();
+  setV1LegacyStatus('');
 }
 
 /* -------------------------------------------------------------------------- */
@@ -6219,6 +6411,9 @@ function wireUi() {
   $('withdrawBtn')?.addEventListener('click', doWithdraw);
   $('v1LegacyWithdrawBtn')?.addEventListener('click', () => {
     void doV1LegacyWithdrawAll();
+  });
+  $('v1LegacyCancelBtn')?.addEventListener('click', () => {
+    cancelV1LegacyWithdraw();
   });
   $('v1LegacyScrollBtn')?.addEventListener('click', () => {
     scrollToV2StakeForm();
