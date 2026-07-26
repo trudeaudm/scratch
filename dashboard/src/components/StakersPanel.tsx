@@ -20,9 +20,10 @@ import { countdown, fmtToken, shortAddr } from "@/utils/format";
 import { CopyAddress } from "@/components/CopyAddress";
 
 const VAULT = contracts.stakingVaultV2.address;
-/** Max blocks per getLogs window (≤2k per buildspec / RPC limits). */
-const LOG_CHUNK_SIZE = 2000;
+/** Alchemy / common RPC eth_getLogs cap is 10k blocks — stay under it. */
+const LOG_CHUNK_SIZE = 9000;
 const READ_BATCH = 40;
+const STORAGE_KEY = "scratch-dashboard:stakers-v2-snapshot";
 
 const depositedEvent = parseAbiItem(
   "event Deposited(address indexed user, uint256 amount, uint8 tier)",
@@ -61,6 +62,24 @@ type Snapshot = {
 
 type SortKey = "address" | "staked" | "tier" | "tickets" | "unlock";
 
+type StoredRow = {
+  address: Address;
+  staked: string;
+  tier: TierLabel;
+  tickets: string;
+  unlockingAmount: string;
+  releaseAt: number;
+};
+
+type StoredSnapshot = {
+  takenAt: number;
+  rows: StoredRow[];
+  warnings: string[];
+  addressesFound: number;
+  chunksScanned: number;
+  chunksFailed: number;
+};
+
 function client(): PublicClient {
   return createPublicClient({
     chain: robinhoodChain,
@@ -75,6 +94,10 @@ function tierLabel(tier: number): TierLabel {
   if (tier === TIER_NORMAL) return "NORMAL";
   if (tier === TIER_ENHANCED) return "ENHANCED";
   return "UNSET";
+}
+
+function isActive(row: StakerRow): boolean {
+  return row.staked > BigInt(0);
 }
 
 function compareUnlock(a: StakerRow, b: StakerRow): number {
@@ -93,7 +116,68 @@ function csvEscape(s: string): string {
   return s;
 }
 
-function downloadCsv(snapshot: Snapshot): void {
+function serializeSnapshot(snapshot: Snapshot): StoredSnapshot {
+  return {
+    takenAt: snapshot.takenAt,
+    warnings: snapshot.warnings,
+    addressesFound: snapshot.addressesFound,
+    chunksScanned: snapshot.chunksScanned,
+    chunksFailed: snapshot.chunksFailed,
+    rows: snapshot.rows.map((r) => ({
+      address: r.address,
+      staked: r.staked.toString(),
+      tier: r.tier,
+      tickets: r.tickets.toString(),
+      unlockingAmount: r.unlockingAmount.toString(),
+      releaseAt: r.releaseAt,
+    })),
+  };
+}
+
+function deserializeSnapshot(raw: StoredSnapshot): Snapshot | null {
+  if (!raw || typeof raw.takenAt !== "number" || !Array.isArray(raw.rows)) return null;
+  try {
+    return {
+      takenAt: raw.takenAt,
+      warnings: raw.warnings ?? [],
+      addressesFound: raw.addressesFound ?? raw.rows.length,
+      chunksScanned: raw.chunksScanned ?? 0,
+      chunksFailed: raw.chunksFailed ?? 0,
+      rows: raw.rows.map((r) => ({
+        address: r.address,
+        staked: BigInt(r.staked),
+        tier: r.tier,
+        tickets: BigInt(r.tickets),
+        unlockingAmount: BigInt(r.unlockingAmount),
+        releaseAt: r.releaseAt,
+      })),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function loadStoredSnapshot(): Snapshot | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    return deserializeSnapshot(JSON.parse(raw) as StoredSnapshot);
+  } catch {
+    return null;
+  }
+}
+
+function persistSnapshot(snapshot: Snapshot): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(serializeSnapshot(snapshot)));
+  } catch {
+    /* quota / private mode */
+  }
+}
+
+function downloadCsv(rows: StakerRow[], takenAt: number): void {
   const header = [
     "address",
     "staked",
@@ -105,7 +189,7 @@ function downloadCsv(snapshot: Snapshot): void {
   ];
   const now = Math.floor(Date.now() / 1000);
   const lines = [header.join(",")];
-  for (const r of snapshot.rows) {
+  for (const r of rows) {
     let unlockStatus = "—";
     if (r.unlockingAmount > BigInt(0)) {
       unlockStatus = now >= r.releaseAt ? "claimable" : `unlocking until ${r.releaseAt}`;
@@ -127,7 +211,7 @@ function downloadCsv(snapshot: Snapshot): void {
   const blob = new Blob([lines.join("\n") + "\n"], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
-  const ts = new Date(snapshot.takenAt).toISOString().replace(/[:.]/g, "-");
+  const ts = new Date(takenAt).toISOString().replace(/[:.]/g, "-");
   a.href = url;
   a.download = `staking-v2-stakers-${ts}.csv`;
   a.click();
@@ -238,7 +322,6 @@ async function readStakerStates(
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       warnings.push(`Multicall batch @${i} failed: ${msg}`);
-      // Degrade: try one-by-one for this batch
       for (const addr of batch) {
         try {
           const [user, unlock, tickets] = await Promise.all([
@@ -309,16 +392,28 @@ function UnlockCell({ row, now }: { row: StakerRow; now: number }) {
 
 export function StakersPanel() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
+  const [hydrated, setHydrated] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [progressLabel, setProgressLabel] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>("staked");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const [showHistorical, setShowHistorical] = useState(false);
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
+
+  useEffect(() => {
+    setSnapshot(loadStoredSnapshot());
+    setHydrated(true);
+  }, []);
 
   useEffect(() => {
     const id = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 1000);
     return () => clearInterval(id);
+  }, []);
+
+  const commitSnapshot = useCallback((next: Snapshot) => {
+    setSnapshot(next);
+    persistSnapshot(next);
   }, []);
 
   const refresh = useCallback(async () => {
@@ -336,7 +431,7 @@ export function StakersPanel() {
       const latest = await pc.getBlockNumber();
       const from = stakingV2DeployBlock();
       if (from > latest) {
-        setSnapshot({
+        commitSnapshot({
           takenAt: Date.now(),
           rows: [],
           warnings: ["Deploy block is ahead of chain tip"],
@@ -369,7 +464,7 @@ export function StakersPanel() {
       );
       warnings.push(...stateWarnings);
 
-      setSnapshot({
+      commitSnapshot({
         takenAt: Date.now(),
         rows,
         warnings,
@@ -380,26 +475,39 @@ export function StakersPanel() {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setError(msg);
-      // Keep prior snapshot if any — never blank the table on a failed refresh
-      setSnapshot((prev) =>
-        prev ?? {
+      setSnapshot((prev) => {
+        if (prev) return prev;
+        const empty: Snapshot = {
           takenAt: Date.now(),
           rows: [],
           warnings: [msg],
           addressesFound: 0,
           chunksScanned: 0,
           chunksFailed: 0,
-        },
-      );
+        };
+        persistSnapshot(empty);
+        return empty;
+      });
     } finally {
       setScanning(false);
       setProgressLabel(null);
     }
-  }, []);
+  }, [commitSnapshot]);
+
+  const activeRows = useMemo(
+    () => (snapshot?.rows ?? []).filter(isActive),
+    [snapshot],
+  );
+  const historicalRows = useMemo(
+    () => (snapshot?.rows ?? []).filter((r) => !isActive(r)),
+    [snapshot],
+  );
+  const visibleRows = showHistorical
+    ? [...activeRows, ...historicalRows]
+    : activeRows;
 
   const sorted = useMemo(() => {
-    if (!snapshot) return [];
-    const rows = [...snapshot.rows];
+    const rows = [...visibleRows];
     const dir = sortDir === "asc" ? 1 : -1;
     rows.sort((a, b) => {
       let cmp = 0;
@@ -423,10 +531,11 @@ export function StakersPanel() {
       return cmp * dir;
     });
     return rows;
-  }, [snapshot, sortKey, sortDir]);
+  }, [visibleRows, sortKey, sortDir]);
 
   const summary = useMemo(() => {
-    const rows = snapshot?.rows ?? [];
+    // Headline stats always from current stakers (staked > 0).
+    const rows = activeRows;
     let totalStaked = BigInt(0);
     let normalCount = 0;
     let normalStaked = BigInt(0);
@@ -457,8 +566,9 @@ export function StakersPanel() {
       enhancedStaked,
       unlockCount,
       totalUnlocking,
+      historicalCount: historicalRows.length,
     };
-  }, [snapshot]);
+  }, [activeRows, historicalRows.length]);
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) {
@@ -490,8 +600,8 @@ export function StakersPanel() {
           <p className="section-note" style={{ marginBottom: 0 }}>
             Manual snapshot of {contracts.stakingVaultV2.label} (
             <CopyAddress address={VAULT} />
-            ). No on-chain enumeration — click Refresh to scan Deposit logs. Cached in this session
-            only.
+            ). Scan Deposit logs from deploy block, keep current stakers (staked &gt; 0). Persisted in
+            browser localStorage until the next Refresh.
           </p>
         </div>
         <div className="row" style={{ marginBottom: 0, gap: 8 }}>
@@ -499,8 +609,8 @@ export function StakersPanel() {
             <button
               type="button"
               className="btn secondary"
-              disabled={!snapshot.rows.length}
-              onClick={() => downloadCsv(snapshot)}
+              disabled={!visibleRows.length}
+              onClick={() => downloadCsv(visibleRows, snapshot.takenAt)}
             >
               Export CSV
             </button>
@@ -534,7 +644,7 @@ export function StakersPanel() {
         </div>
       ) : null}
 
-      {!snapshot && !scanning ? (
+      {hydrated && !snapshot && !scanning ? (
         <p className="empty">No snapshot yet — click Refresh stakers to scan from deploy block.</p>
       ) : null}
 
@@ -550,7 +660,7 @@ export function StakersPanel() {
               <strong className="mono">{takenLabel}</strong>
             </span>
             <span>
-              <span className="label">Stakers</span>
+              <span className="label">Current stakers</span>
               <strong className="mono">{summary.totalStakers}</strong>
             </span>
             <span>
@@ -577,10 +687,32 @@ export function StakersPanel() {
             </span>
           </div>
 
+          <label
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 8,
+              marginBottom: 12,
+              fontSize: "0.85rem",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={showHistorical}
+              onChange={(e) => setShowHistorical(e.target.checked)}
+            />
+            Show historical (staked=0)
+            {summary.historicalCount > 0 ? (
+              <span className="muted">· {summary.historicalCount}</span>
+            ) : null}
+          </label>
+
           {sorted.length === 0 ? (
             <p className="empty">
-              No depositors found
-              {snapshot.chunksFailed > 0 ? " (scan had failures — try again)" : ""}.
+              {showHistorical
+                ? "No depositors found"
+                : "No current stakers (staked = 0 for all scanned addresses)"}
+              {snapshot.chunksFailed > 0 ? " — scan had failures; try again" : ""}.
             </p>
           ) : (
             <div className="table-scroll">
@@ -606,7 +738,7 @@ export function StakersPanel() {
                 </thead>
                 <tbody>
                   {sorted.map((r) => (
-                    <tr key={r.address}>
+                    <tr key={r.address} className={!isActive(r) ? "muted" : undefined}>
                       <td>
                         <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
                           <CopyAddress address={r.address} />

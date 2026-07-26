@@ -324,13 +324,7 @@ function VaultSweepSection({
                 <td>
                   {row.symbol} <CopyAddress address={row.asset} />
                 </td>
-                <td className="num">
-                  {fmtToken(
-                    row.balance,
-                    saleTokens.find((t) => t.address.toLowerCase() === row.asset.toLowerCase())
-                      ?.decimals ?? 18,
-                  )}
-                </td>
+                <td className="num">{fmtToken(row.balance, row.decimals)}</td>
               </tr>
             ))
           )}

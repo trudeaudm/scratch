@@ -14,6 +14,8 @@ import {
   configuredPrizeVaults,
   contracts,
   activeScratchGame,
+  activeStakingVault,
+  activeStandardTicketSource,
   findTokenConfig,
   isConfigured,
   tokens,
@@ -96,9 +98,20 @@ export type SweepHistoryRow = {
   blockNumber: bigint;
 };
 
+export type PrizeVaultInventoryRow = {
+  asset: Address;
+  balance: bigint;
+  symbol: string;
+  decimals: number;
+  usd: number | null;
+  verified: boolean;
+  kind: "crypto" | "stock";
+  ticker?: string;
+};
+
 export type PrizeVaultVitals = {
   config: ContractEntry;
-  inventory: { asset: Address; balance: bigint; symbol: string }[];
+  inventory: PrizeVaultInventoryRow[];
   sweeps: SweepRow[];
   history: SweepHistoryRow[];
   sweepDelay: number;
@@ -106,7 +119,11 @@ export type PrizeVaultVitals = {
 };
 
 export type StakingVitals = {
+  config: ContractEntry;
+  /** v1: totalStaked. v2: totalWeight (eligible weight pool). */
   totalStaked: bigint;
+  /** Display label for the primary total metric. */
+  totalLabel: "totalStaked" | "totalWeight";
   emissionRate: bigint;
   accTicketsPerShare: bigint;
 };
@@ -455,22 +472,104 @@ async function loadSweepHistory(
 async function loadPrizeVault(
   pc: ReturnType<typeof client>,
   config: ContractEntry,
+  discovered: Map<string, DiscoveredBag[]>,
+  prices: PriceMap,
 ): Promise<PrizeVaultVitals | null> {
   const addr = config.address;
   if (!isConfigured(addr)) return null;
 
-  const [assets, balances] = (await pc.readContract({
-    address: addr,
-    abi: prizeVaultAbiTyped,
-    functionName: "inventory",
-  })) as [Address[], bigint[]];
+  /**
+   * Same merge as Balances holders: on-chain inventory() (tracked via fund) +
+   * every config token's ERC-20 balanceOf(vault) + Blockscout tokenlist extras.
+   * inventory() alone misses assets transferred in without fund().
+   */
+  const byAddr = new Map<string, PrizeVaultInventoryRow>();
 
-  const inventory = [];
-  for (let i = 0; i < assets.length; i++) {
-    const asset = assets[i];
-    const symbol = await resolveAssetSymbol(pc, asset);
-    inventory.push({ asset, balance: balances[i], symbol });
+  try {
+    const [assets, balances] = (await pc.readContract({
+      address: addr,
+      abi: prizeVaultAbiTyped,
+      functionName: "inventory",
+    })) as [Address[], bigint[]];
+    for (let i = 0; i < assets.length; i++) {
+      const asset = assets[i];
+      const cfg = findTokenConfig(asset);
+      const decimals = cfg?.decimals ?? 18;
+      const symbol = cfg
+        ? cfg.kind === "stock" && cfg.ticker
+          ? cfg.ticker
+          : cfg.symbol
+        : await resolveAssetSymbol(pc, asset);
+      const unit = unitPriceFor(asset, prices);
+      byAddr.set(asset.toLowerCase(), {
+        asset,
+        balance: balances[i],
+        symbol,
+        decimals,
+        usd: amountUsd(balances[i], decimals, unit),
+        verified: Boolean(cfg),
+        kind: cfg?.kind ?? "crypto",
+        ticker: cfg?.ticker,
+      });
+    }
+  } catch {
+    /* continue with config + discovery */
   }
+
+  const configuredTokens = tokens.filter((t) => isConfigured(t.address));
+  await Promise.all(
+    configuredTokens.map(async (t) => {
+      const key = t.address.toLowerCase();
+      let balance = 0n;
+      try {
+        balance = (await pc.readContract({
+          address: addr,
+          abi: prizeVaultAbiTyped,
+          functionName: "balanceOf",
+          args: [t.address],
+        })) as bigint;
+      } catch {
+        return;
+      }
+      const unit = unitPriceFor(t.address, prices);
+      const symbol = t.kind === "stock" && t.ticker ? t.ticker : t.symbol;
+      const prev = byAddr.get(key);
+      // Prefer live balanceOf; keep the higher of inventory vs balanceOf if both exist.
+      const merged = prev && prev.balance > balance ? prev.balance : balance;
+      byAddr.set(key, {
+        asset: t.address,
+        balance: merged,
+        symbol,
+        decimals: t.decimals,
+        usd: amountUsd(merged, t.decimals, unit),
+        verified: true,
+        kind: t.kind ?? "crypto",
+        ticker: t.ticker,
+      });
+    }),
+  );
+
+  for (const d of discovered.get(addr.toLowerCase()) ?? []) {
+    const key = d.address.toLowerCase();
+    if (byAddr.has(key)) continue;
+    const unit = unitPriceFor(d.address, prices);
+    byAddr.set(key, {
+      asset: d.address,
+      balance: d.balance,
+      symbol: d.symbol,
+      decimals: d.decimals,
+      usd: amountUsd(d.balance, d.decimals, unit),
+      verified: false,
+      kind: "crypto",
+    });
+  }
+
+  const inventory = [...byAddr.values()]
+    .filter((r) => r.balance > 0n)
+    .sort((a, b) => {
+      if (a.verified !== b.verified) return a.verified ? -1 : 1;
+      return a.symbol.localeCompare(b.symbol);
+    });
 
   let sweepDelay = SWEEP_DELAY_DEFAULT;
   let sweepGrace = SWEEP_GRACE_DEFAULT;
@@ -535,29 +634,82 @@ async function loadPrizeVault(
 
 async function loadAllPrizeVaults(
   pc: ReturnType<typeof client>,
+  discovered: Map<string, DiscoveredBag[]>,
+  prices: PriceMap,
 ): Promise<PrizeVaultVitals[]> {
   const configs = configuredPrizeVaults();
-  const results = await Promise.all(configs.map((c) => loadPrizeVault(pc, c)));
+  const results = await Promise.all(
+    configs.map((c) => loadPrizeVault(pc, c, discovered, prices)),
+  );
   return results.filter((v): v is PrizeVaultVitals => v !== null);
 }
 
 async function loadStaking(pc: ReturnType<typeof client>): Promise<StakingVitals | null> {
-  const addr = contracts.stakingVault.address;
+  const config = activeStakingVault();
+  const addr = config.address;
   if (!isConfigured(addr)) return null;
+
+  if (config.key === "stakingVaultV2") {
+    // StakingVault.json is v1 — read v2 surface via minimal ABI fragments.
+    const v2Abi = [
+      parseAbiItem("function totalWeight() view returns (uint256)"),
+      parseAbiItem("function emissionRate() view returns (uint256)"),
+      parseAbiItem("function accTicketsPerShare() view returns (uint256)"),
+    ] as const;
+    const [totalWeight, emissionRate, accTicketsPerShare] = await Promise.all([
+      pc.readContract({
+        address: addr,
+        abi: v2Abi,
+        functionName: "totalWeight",
+      }) as Promise<bigint>,
+      pc.readContract({
+        address: addr,
+        abi: v2Abi,
+        functionName: "emissionRate",
+      }) as Promise<bigint>,
+      pc.readContract({
+        address: addr,
+        abi: v2Abi,
+        functionName: "accTicketsPerShare",
+      }) as Promise<bigint>,
+    ]);
+    return {
+      config,
+      totalStaked: totalWeight,
+      totalLabel: "totalWeight",
+      emissionRate,
+      accTicketsPerShare,
+    };
+  }
+
   const [totalStaked, emissionRate, accTicketsPerShare] = await Promise.all([
-    pc.readContract({ address: addr, abi: stakingVaultAbiTyped, functionName: "totalStaked" }) as Promise<bigint>,
-    pc.readContract({ address: addr, abi: stakingVaultAbiTyped, functionName: "emissionRate" }) as Promise<bigint>,
+    pc.readContract({
+      address: addr,
+      abi: stakingVaultAbiTyped,
+      functionName: "totalStaked",
+    }) as Promise<bigint>,
+    pc.readContract({
+      address: addr,
+      abi: stakingVaultAbiTyped,
+      functionName: "emissionRate",
+    }) as Promise<bigint>,
     pc.readContract({
       address: addr,
       abi: stakingVaultAbiTyped,
       functionName: "accTicketsPerShare",
     }) as Promise<bigint>,
   ]);
-  return { totalStaked, emissionRate, accTicketsPerShare };
+  return {
+    config,
+    totalStaked,
+    totalLabel: "totalStaked",
+    emissionRate,
+    accTicketsPerShare,
+  };
 }
 
 async function loadTickets(pc: ReturnType<typeof client>): Promise<TicketSourceVitals | null> {
-  const addr = contracts.standardTicketSource.address;
+  const addr = activeStandardTicketSource().address;
   if (!isConfigured(addr)) return null;
   const [grantDailyCap, grantUsedToday, grantDayBucket] = await Promise.all([
     pc.readContract({
@@ -811,28 +963,33 @@ async function resolveGamePrizeVault(
 async function loadVaultAssets(
   pc: ReturnType<typeof client>,
   vault: Address | null,
+  discovered: Map<string, DiscoveredBag[]>,
 ): Promise<VaultAssetMeta[]> {
   if (!vault || !isConfigured(vault)) return [];
 
   const metas: VaultAssetMeta[] = [];
   const seen = new Set<string>();
 
-  const inventory = (await pc.readContract({
-    address: vault,
-    abi: prizeVaultAbiTyped,
-    functionName: "inventory",
-  })) as [Address[], bigint[]];
-
-  for (let i = 0; i < inventory[0].length; i++) {
-    const asset = inventory[0][i];
-    seen.add(asset.toLowerCase());
-    const fallbackRate = (await pc.readContract({
+  try {
+    const inventory = (await pc.readContract({
       address: vault,
       abi: prizeVaultAbiTyped,
-      functionName: "fallbackRate",
-      args: [asset],
-    })) as bigint;
-    metas.push({ asset, balance: inventory[1][i], fallbackRate });
+      functionName: "inventory",
+    })) as [Address[], bigint[]];
+
+    for (let i = 0; i < inventory[0].length; i++) {
+      const asset = inventory[0][i];
+      seen.add(asset.toLowerCase());
+      const fallbackRate = (await pc.readContract({
+        address: vault,
+        abi: prizeVaultAbiTyped,
+        functionName: "fallbackRate",
+        args: [asset],
+      })) as bigint;
+      metas.push({ asset, balance: inventory[1][i], fallbackRate });
+    }
+  } catch {
+    /* config + discovery still apply */
   }
 
   for (const t of tokens) {
@@ -851,7 +1008,26 @@ async function loadVaultAssets(
         args: [t.address],
       }) as Promise<bigint>,
     ]);
+    seen.add(t.address.toLowerCase());
     metas.push({ asset: t.address, balance, fallbackRate });
+  }
+
+  for (const d of discovered.get(vault.toLowerCase()) ?? []) {
+    const key = d.address.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    let fallbackRate = 0n;
+    try {
+      fallbackRate = (await pc.readContract({
+        address: vault,
+        abi: prizeVaultAbiTyped,
+        functionName: "fallbackRate",
+        args: [d.address],
+      })) as bigint;
+    } catch {
+      /* */
+    }
+    metas.push({ asset: d.address, balance: d.balance, fallbackRate });
   }
 
   return metas;
@@ -877,13 +1053,13 @@ export function useTreasuryData() {
         const [holders, prizeVaults, staking, tickets, vesting, game, prizeTables, vaultAssets] =
           await Promise.all([
             loadHolders(pc, prices, discovery.byHolder),
-            loadAllPrizeVaults(pc),
+            loadAllPrizeVaults(pc, discovery.byHolder, prices),
             loadStaking(pc),
             loadTickets(pc),
             loadVesting(pc),
             loadGame(pc),
             loadPrizeTables(pc),
-            loadVaultAssets(pc, gamePrizeVault),
+            loadVaultAssets(pc, gamePrizeVault, discovery.byHolder),
           ]);
         const prizeVault =
           (gamePrizeVault

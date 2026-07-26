@@ -8,24 +8,29 @@ import {
   type Address,
   zeroAddress,
 } from "viem";
-import { EXPLORER_BASE, contracts, findTokenConfig, tokens } from "@/config/addresses";
+import {
+  EXPLORER_BASE,
+  activeGameDeployBlock,
+  activeScratchGame,
+} from "@/config/addresses";
 import { robinhoodChain } from "@/config/chain";
 import { defaultLedgerPath, readLedgerFile, type LedgerRow } from "@/utils/payoutLedger";
 import { syncMissingLedgerRows } from "@/utils/syncLedger";
+import { resolveTokenMetaBatch, type TokenMeta } from "@/utils/tokenMeta";
 
 const PUBLIC_RPC = "https://rpc.mainnet.chain.robinhood.com";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 const SCRATCH_SETTLED = parseAbiItem(
   "event ScratchSettled(address indexed user, uint256 indexed requestId, uint8 tier, uint256 rowIndex, address asset, uint256 amount)",
 );
 
-const DEFAULT_DEPLOY_BLOCK = 13_138_508n;
-const LOG_CHUNK = 9_000n;
-const CHAIN_CACHE_TTL_MS = 60_000;
+const LOG_CHUNK = BigInt(9000);
+/** Soft TTL only used to skip duplicate work within the same second; state is incremental. */
+const CHAIN_CACHE_TTL_MS = 15_000;
 const STALE_MS = 5 * 60 * 1000;
 
 type AssetAgg = {
@@ -55,23 +60,142 @@ type ChainAgg = {
   newestTxHash: `0x${string}` | null;
   settlements: ChainSettlement[];
   error: string | null;
+  scannedThrough: bigint | null;
 };
 
-let chainCache: { at: number; value: ChainAgg } | null = null;
+/**
+ * Incremental settlement cache — full history once per process, then only
+ * getLogs(scannedThrough+1 → latest). Avoids 60–80s full rescans that caused
+ * the local ledger to lag Render by hours.
+ */
+let chainState: {
+  game: Address;
+  at: number;
+  scannedThrough: bigint;
+  byRequestId: Map<string, ChainSettlement>;
+  wins: number;
+  noWins: number;
+  rawByAsset: Map<string, bigint>;
+  newestBlock: bigint | null;
+  newestTxHash: `0x${string}` | null;
+} | null = null;
 
-function resolveSymbol(asset: string): { symbol: string; decimals: number } {
-  const key = asset.toLowerCase();
-  if (key === zeroAddress) return { symbol: "NO_WIN", decimals: 18 };
-  const cfg =
-    findTokenConfig(asset as Address) ??
-    tokens.find((t) => t.address.toLowerCase() === key);
-  if (cfg) {
-    // Stocks: show underlying ticker (ledger may have stale truncated CA labels).
-    const symbol =
-      cfg.kind === "stock" && cfg.ticker?.trim() ? cfg.ticker.trim() : cfg.symbol;
-    return { symbol, decimals: cfg.decimals };
+function emptyRawByAsset(): Map<string, bigint> {
+  return new Map();
+}
+
+function applySettlement(
+  state: NonNullable<typeof chainState>,
+  s: ChainSettlement,
+): void {
+  if (state.byRequestId.has(s.requestId)) return;
+  state.byRequestId.set(s.requestId, s);
+  if (state.newestBlock == null || s.blockNumber > state.newestBlock) {
+    state.newestBlock = s.blockNumber;
+    state.newestTxHash = s.txHash;
   }
-  return { symbol: key.slice(0, 10), decimals: 18 };
+  if (s.amount === BigInt(0) || s.asset === zeroAddress) {
+    state.noWins += 1;
+  } else {
+    state.wins += 1;
+    state.rawByAsset.set(s.asset, (state.rawByAsset.get(s.asset) ?? BigInt(0)) + s.amount);
+  }
+}
+
+async function loadChainAgg(): Promise<ChainAgg> {
+  if (chainState && Date.now() - chainState.at < CHAIN_CACHE_TTL_MS) {
+    return {
+      wins: chainState.wins,
+      noWins: chainState.noWins,
+      rawByAsset: new Map(chainState.rawByAsset),
+      newestBlock: chainState.newestBlock,
+      newestTxHash: chainState.newestTxHash,
+      settlements: [...chainState.byRequestId.values()],
+      error: null,
+      scannedThrough: chainState.scannedThrough,
+    };
+  }
+
+  const deployBlock = activeGameDeployBlock();
+  const game = activeScratchGame().address;
+  const primary = process.env.NEXT_PUBLIC_RPC_URL ?? PUBLIC_RPC;
+  const urls = primary === PUBLIC_RPC ? [PUBLIC_RPC] : [primary, PUBLIC_RPC];
+
+  const client = createPublicClient({
+    chain: robinhoodChain,
+    transport: fallback(urls.map((url) => http(url, { timeout: 20_000 }))),
+  });
+
+  if (chainState && chainState.game.toLowerCase() !== game.toLowerCase()) {
+    chainState = null;
+  }
+
+  if (!chainState) {
+    chainState = {
+      game,
+      at: 0,
+      scannedThrough: deployBlock - BigInt(1),
+      byRequestId: new Map(),
+      wins: 0,
+      noWins: 0,
+      rawByAsset: emptyRawByAsset(),
+      newestBlock: null,
+      newestTxHash: null,
+    };
+  }
+
+  let error: string | null = null;
+  try {
+    const latest = await client.getBlockNumber();
+    let start = chainState.scannedThrough + BigInt(1);
+    if (start > latest) {
+      chainState.at = Date.now();
+    } else {
+      for (; start <= latest; start += LOG_CHUNK) {
+        const end = start + LOG_CHUNK - BigInt(1) > latest ? latest : start + LOG_CHUNK - BigInt(1);
+        const logs = await client.getLogs({
+          address: game,
+          event: SCRATCH_SETTLED,
+          fromBlock: start,
+          toBlock: end,
+        });
+        for (const log of logs) {
+          const amount = log.args.amount ?? BigInt(0);
+          const asset = (log.args.asset ?? zeroAddress).toLowerCase() as Address;
+          const requestId = (log.args.requestId ?? BigInt(0)).toString();
+          const user = (log.args.user ?? zeroAddress) as Address;
+          const tier = Number(log.args.tier ?? 0);
+          const rowIndex = (log.args.rowIndex ?? BigInt(0)).toString();
+          const txHash = log.transactionHash;
+          applySettlement(chainState, {
+            requestId,
+            user,
+            tier,
+            rowIndex,
+            asset,
+            amount,
+            txHash,
+            blockNumber: log.blockNumber,
+          });
+        }
+        chainState.scannedThrough = end;
+      }
+      chainState.at = Date.now();
+    }
+  } catch (e) {
+    error = e instanceof Error ? e.message : String(e);
+  }
+
+  return {
+    wins: chainState.wins,
+    noWins: chainState.noWins,
+    rawByAsset: new Map(chainState.rawByAsset),
+    newestBlock: chainState.newestBlock,
+    newestTxHash: chainState.newestTxHash,
+    settlements: [...chainState.byRequestId.values()],
+    error,
+    scannedThrough: chainState.scannedThrough,
+  };
 }
 
 function isWinRow(symbol: string, humanAmount: string, asset: string): boolean {
@@ -81,88 +205,13 @@ function isWinRow(symbol: string, humanAmount: string, asset: string): boolean {
   return Number.isFinite(n) && n > 0;
 }
 
-async function loadChainAgg(): Promise<ChainAgg> {
-  if (chainCache && Date.now() - chainCache.at < CHAIN_CACHE_TTL_MS) {
-    return chainCache.value;
-  }
-
-  const deployBlock = BigInt(process.env.GAME_DEPLOY_BLOCK || DEFAULT_DEPLOY_BLOCK.toString());
-  const game = contracts.scratchGame.address;
-  const primary = process.env.NEXT_PUBLIC_RPC_URL ?? PUBLIC_RPC;
-  const urls = primary === PUBLIC_RPC ? [PUBLIC_RPC] : [primary, PUBLIC_RPC];
-
-  const client = createPublicClient({
-    chain: robinhoodChain,
-    transport: fallback(urls.map((url) => http(url, { timeout: 20_000 }))),
-  });
-
-  let wins = 0;
-  let noWins = 0;
-  const rawByAsset = new Map<string, bigint>();
-  const settlements: ChainSettlement[] = [];
-  let newestBlock: bigint | null = null;
-  let newestTxHash: `0x${string}` | null = null;
-  let error: string | null = null;
-
-  try {
-    const latest = await client.getBlockNumber();
-    for (let start = deployBlock; start <= latest; start += LOG_CHUNK) {
-      const end = start + LOG_CHUNK - 1n > latest ? latest : start + LOG_CHUNK - 1n;
-      const logs = await client.getLogs({
-        address: game,
-        event: SCRATCH_SETTLED,
-        fromBlock: start,
-        toBlock: end,
-      });
-      for (const log of logs) {
-        const amount = log.args.amount ?? 0n;
-        const asset = (log.args.asset ?? zeroAddress).toLowerCase() as Address;
-        const requestId = (log.args.requestId ?? 0n).toString();
-        const user = (log.args.user ?? zeroAddress) as Address;
-        const tier = Number(log.args.tier ?? 0);
-        const rowIndex = (log.args.rowIndex ?? 0n).toString();
-        const txHash = log.transactionHash;
-        settlements.push({
-          requestId,
-          user,
-          tier,
-          rowIndex,
-          asset,
-          amount,
-          txHash,
-          blockNumber: log.blockNumber,
-        });
-        if (newestBlock == null || log.blockNumber > newestBlock) {
-          newestBlock = log.blockNumber;
-          newestTxHash = txHash;
-        }
-        if (amount === 0n || asset === zeroAddress) {
-          noWins++;
-          continue;
-        }
-        wins++;
-        rawByAsset.set(asset, (rawByAsset.get(asset) ?? 0n) + amount);
-      }
-    }
-  } catch (e) {
-    error = e instanceof Error ? e.message : String(e);
-  }
-
-  const value: ChainAgg = {
-    wins,
-    noWins,
-    rawByAsset,
-    newestBlock,
-    newestTxHash,
-    settlements,
-    error,
-  };
-  if (!error) chainCache = { at: Date.now(), value };
-  return value;
+function metaFor(asset: string, metaByAsset: Map<string, TokenMeta>): TokenMeta {
+  const key = (asset || zeroAddress).toLowerCase();
+  return metaByAsset.get(key) ?? { symbol: "NO_WIN", decimals: 18, source: "config" };
 }
 
-function serializeLedgerRow(r: LedgerRow) {
-  const { symbol } = resolveSymbol(r.asset || zeroAddress);
+function serializeLedgerRow(r: LedgerRow, metaByAsset: Map<string, TokenMeta>) {
+  const { symbol } = metaFor(r.asset || zeroAddress, metaByAsset);
   return {
     timestamp: r.timestamp,
     requestId: r.requestId,
@@ -187,15 +236,15 @@ export async function GET() {
   const chain = await loadChainAgg();
 
   // Local CSV is not the live Render writer — fill gaps from chain logs we already scanned.
+  // Sync even on partial chain.error so progress isn't discarded after a mid-scan RPC blip.
   let sync: { appended: number; skipped: number; error: string | null } | null = null;
-  if (!chain.error && chain.settlements.length > 0) {
+  if (chain.settlements.length > 0) {
     const have = new Set(ledger.rows.map((r) => r.requestId));
     const missing = chain.settlements.filter((s) => !have.has(s.requestId));
     if (missing.length > 0) {
       sync = await syncMissingLedgerRows(missing, ledgerPath);
       if (sync.appended > 0) {
         ledger = readLedgerFile(ledgerPath);
-        // Chain cache is fine; ledger-derived USD maps must refresh.
       }
     }
   }
@@ -210,9 +259,16 @@ export async function GET() {
     usdByRequest.set(row.requestId, v);
   }
 
+  const assetKeys = [
+    ...chain.rawByAsset.keys(),
+    ...ledger.rows.map((r) => r.asset || zeroAddress),
+    ...chain.settlements.map((s) => s.asset),
+  ];
+  const metaByAsset = await resolveTokenMetaBatch(assetKeys);
+
   const byAsset: AssetAgg[] = [...chain.rawByAsset.entries()]
     .map(([asset, raw]) => {
-      const { symbol, decimals } = resolveSymbol(asset);
+      const { symbol, decimals } = metaFor(asset, metaByAsset);
       const human = formatUnits(raw, decimals);
       const usd = usdByAsset.has(asset) ? usdByAsset.get(asset)! : null;
       return {
@@ -282,7 +338,7 @@ export async function GET() {
 
   // Prefer ledger win rows (have prices + timestamps).
   for (const r of ledger.rows) {
-    const { symbol } = resolveSymbol(r.asset || zeroAddress);
+    const { symbol } = metaFor(r.asset || zeroAddress, metaByAsset);
     if (!isWinRow(symbol, r.humanAmount, r.asset)) continue;
     const usd = Number(r.usdValue);
     const qty = Number(r.humanAmount);
@@ -309,8 +365,8 @@ export async function GET() {
     const have = new Set(bigCandidates.map((b) => b.requestId));
     for (const s of chain.settlements) {
       if (have.has(s.requestId)) continue;
-      if (s.amount === 0n || s.asset === zeroAddress) continue;
-      const { symbol, decimals } = resolveSymbol(s.asset);
+      if (s.amount === BigInt(0) || s.asset === zeroAddress) continue;
+      const { symbol, decimals } = metaFor(s.asset, metaByAsset);
       const human = formatUnits(s.amount, decimals);
       const usd = usdByRequest.get(s.requestId);
       const qty = Number(human);
@@ -334,13 +390,13 @@ export async function GET() {
     .slice(0, 5)
     .map(({ sortKey: _s, ...rest }) => rest);
 
-  const allLedger = ledger.rows.map(serializeLedgerRow);
+  const allLedger = ledger.rows.map((r) => serializeLedgerRow(r, metaByAsset));
 
-  const deployBlock = process.env.GAME_DEPLOY_BLOCK || DEFAULT_DEPLOY_BLOCK.toString();
+  const deployBlock = activeGameDeployBlock().toString();
 
   return NextResponse.json({
     updatedAt: Date.now(),
-    game: contracts.scratchGame.address,
+    game: activeScratchGame().address,
     deployBlock,
     chain: {
       wins: chain.wins,

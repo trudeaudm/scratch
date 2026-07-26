@@ -4,6 +4,7 @@ import { useState } from "react";
 import type { Address } from "viem";
 import {
   activeScratchGame,
+  activeStandardTicketSource,
   contracts,
   explorerAddress,
   isConfigured,
@@ -277,10 +278,12 @@ export function StakingOpsPanel({ data, loading, onRefresh }: ReadProps) {
       </p>
 
       <div className="grid-cards">
-        <div className={`card-block${isLegacyContract(contracts.stakingVault) ? " legacy" : ""}`}>
+        <div
+          className={`card-block${data?.staking && isLegacyContract(data.staking.config) ? " legacy" : ""}`}
+        >
           <h3>
-            {contracts.stakingVault.label}
-            {isLegacyContract(contracts.stakingVault) ? (
+            {data?.staking?.config.label ?? "StakingVault"}
+            {data?.staking && isLegacyContract(data.staking.config) ? (
               <span className="legacy-tag">legacy</span>
             ) : null}
           </h3>
@@ -290,8 +293,8 @@ export function StakingOpsPanel({ data, loading, onRefresh }: ReadProps) {
             <p className="empty">StakingVault address not set</p>
           ) : (
             <dl className="kv">
-              <dt>totalStaked</dt>
-              <dd>{fmtToken(data.staking.totalStaked, 18)} SCRATCH</dd>
+              <dt>{data.staking.totalLabel}</dt>
+              <dd>{fmtToken(data.staking.totalStaked, 18)}</dd>
               <dt>emissionRate</dt>
               <dd>{fmtToken(data.staking.emissionRate, 18)} / s</dd>
               <dt>accTicketsPerShare</dt>
@@ -301,11 +304,11 @@ export function StakingOpsPanel({ data, loading, onRefresh }: ReadProps) {
         </div>
 
         <div
-          className={`card-block${isLegacyContract(contracts.standardTicketSource) ? " legacy" : ""}`}
+          className={`card-block${isLegacyContract(activeStandardTicketSource()) ? " legacy" : ""}`}
         >
           <h3>
-            {contracts.standardTicketSource.label}
-            {isLegacyContract(contracts.standardTicketSource) ? (
+            {activeStandardTicketSource().label}
+            {isLegacyContract(activeStandardTicketSource()) ? (
               <span className="legacy-tag">legacy</span>
             ) : null}
           </h3>

@@ -13,6 +13,7 @@ import {
 import { injected } from "@/utils/injected";
 import { isAddress, parseEther, type Address, type Hash } from "viem";
 import {
+  activeStandardTicketSource,
   contracts,
   explorerTx,
   isConfigured,
@@ -296,8 +297,8 @@ export function WritePanel({
 
   function prepareGrant() {
     setActionErr(null);
-    if (!isConfigured(contracts.standardTicketSource.address)) {
-      setActionErr("StandardTicketSource not configured");
+    if (!isConfigured(activeStandardTicketSource().address)) {
+      setActionErr(`${activeStandardTicketSource().label} not configured`);
       return;
     }
     const { addresses, error } = parseAddresses(grantAddrs);
@@ -321,7 +322,7 @@ export function WritePanel({
       kind: "grant",
       users: addresses,
       amountEach: each,
-      summary: `Call StandardTicketSource.grant with ${addresses.length} address(es) × ${fmtToken(each, 18)} tickets each (total ${fmtToken(total, 18)}). Remaining daily allowance after: ${tickets ? fmtToken(tickets.remaining - total, 18) : "unknown"}.`,
+      summary: `Call ${activeStandardTicketSource().label}.grant with ${addresses.length} address(es) × ${fmtToken(each, 18)} tickets each (total ${fmtToken(total, 18)}). Remaining daily allowance after: ${tickets ? fmtToken(tickets.remaining - total, 18) : "unknown"}.`,
     });
   }
 
@@ -391,7 +392,7 @@ export function WritePanel({
         });
       } else if (pending.kind === "grant") {
         await writeContractAsync({
-          address: contracts.standardTicketSource.address,
+          address: activeStandardTicketSource().address,
           abi: standardTicketSourceAbiTyped,
           functionName: "grant",
           args: [pending.users, pending.amountEach],

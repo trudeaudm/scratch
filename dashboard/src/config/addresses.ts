@@ -176,6 +176,39 @@ export function activeScratchGame(): ContractEntry {
   return contracts.scratchGameV2;
 }
 
+/**
+ * STANDARD ticket source for the active game generation (v1 ↔ Deploy2, v2 ↔ Deploy3).
+ * Grant / drop writes and ticket-cap vitals should use this — not a hard-coded v1 address.
+ */
+export function activeStandardTicketSource(): ContractEntry {
+  return activeScratchGame().key === "scratchGameV2"
+    ? contracts.standardTicketSourceV2
+    : contracts.standardTicketSource;
+}
+
+/** Staking vault for the active game generation. */
+export function activeStakingVault(): ContractEntry {
+  return activeScratchGame().key === "scratchGameV2"
+    ? contracts.stakingVaultV2
+    : contracts.stakingVault;
+}
+
+/**
+ * Deploy block for `activeScratchGame()` log scans (payouts, etc.).
+ * v2 defaults to Deploy3 creation (~StakingVaultV2 block); override via GAME_V2_DEPLOY_BLOCK.
+ */
+export function activeGameDeployBlock(): bigint {
+  if (activeScratchGame().key === "scratchGameV2") {
+    return BigInt(
+      process.env.GAME_V2_DEPLOY_BLOCK ||
+        process.env.NEXT_PUBLIC_GAME_V2_DEPLOY_BLOCK ||
+        process.env.NEXT_PUBLIC_STAKING_V2_DEPLOY_BLOCK ||
+        "18171314",
+    );
+  }
+  return BigInt(process.env.GAME_DEPLOY_BLOCK || "13138508");
+}
+
 /** v1 + v2 PrizeVault entries (configured or not). Same ABI; separate instances. */
 export const prizeVaultConfigs: ContractEntry[] = [
   contracts.prizeVault,

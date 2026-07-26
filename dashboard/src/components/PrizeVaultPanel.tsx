@@ -1,7 +1,7 @@
 "use client";
 
-import { isLegacyContract, writePanelTokens } from "@/config/addresses";
-import { fmtToken } from "@/utils/format";
+import { isLegacyContract } from "@/config/addresses";
+import { fmtToken, fmtUsd } from "@/utils/format";
 import { CopyAddress } from "@/components/CopyAddress";
 import type { PrizeVaultVitals } from "@/hooks/useTreasuryData";
 
@@ -17,7 +17,6 @@ export function PrizeVaultPanel({
   onRefresh: () => void;
 }) {
   void tokensEpoch;
-  const saleTokens = writePanelTokens();
 
   return (
     <section className="panel">
@@ -28,7 +27,8 @@ export function PrizeVaultPanel({
         </button>
       </div>
       <p className="section-note">
-        On-chain inventory per vault. Sweep queue / execute lives under Sweeps.
+        Full holdings per vault (config tokens + Blockscout discovery + on-chain inventory). Sweep
+        queue / execute lives under Sweeps.
       </p>
 
       {loading && vaults.length === 0 ? (
@@ -54,12 +54,13 @@ export function PrizeVaultPanel({
                       <tr>
                         <th>Asset</th>
                         <th className="num">Balance</th>
+                        <th className="num">USD</th>
                       </tr>
                     </thead>
                     <tbody>
                       {v.inventory.length === 0 ? (
                         <tr>
-                          <td colSpan={2} className="muted">
+                          <td colSpan={3} className="muted">
                             Empty inventory
                           </td>
                         </tr>
@@ -67,16 +68,19 @@ export function PrizeVaultPanel({
                         v.inventory.map((row) => (
                           <tr key={row.asset}>
                             <td>
-                              {row.symbol} <CopyAddress address={row.asset} />
+                              <span className="token-sym">{row.symbol}</span>
+                              {row.kind === "stock" && row.ticker ? (
+                                <span className="ticker-tag">{row.ticker}</span>
+                              ) : null}
+                              {!row.verified ? (
+                                <span className="badge-unverified">unverified</span>
+                              ) : null}
+                              <div style={{ fontSize: "0.75rem" }}>
+                                <CopyAddress address={row.asset} />
+                              </div>
                             </td>
-                            <td className="num">
-                              {fmtToken(
-                                row.balance,
-                                saleTokens.find(
-                                  (t) => t.address.toLowerCase() === row.asset.toLowerCase(),
-                                )?.decimals ?? 18,
-                              )}
-                            </td>
+                            <td className="num">{fmtToken(row.balance, row.decimals)}</td>
+                            <td className="num">{fmtUsd(row.usd)}</td>
                           </tr>
                         ))
                       )}

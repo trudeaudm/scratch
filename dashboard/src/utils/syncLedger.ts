@@ -7,7 +7,6 @@ import {
   type Address,
   zeroAddress,
 } from "viem";
-import { findTokenConfig, tokens } from "@/config/addresses";
 import { robinhoodChain } from "@/config/chain";
 import { fetchPrices, unitPriceFor } from "@/utils/prices";
 import {
@@ -16,6 +15,7 @@ import {
   readLedgerFile,
   type LedgerRow,
 } from "@/utils/payoutLedger";
+import { resolveTokenMeta } from "@/utils/tokenMeta";
 
 export type SyncSettlement = {
   requestId: string;
@@ -41,20 +41,6 @@ let inflight: Promise<SyncResult> | null = null;
 function csvEscape(v: string): string {
   if (/[",\n\r]/.test(v)) return `"${v.replace(/"/g, '""')}"`;
   return v;
-}
-
-function resolveMeta(asset: string): { symbol: string; decimals: number } {
-  const key = asset.toLowerCase();
-  if (key === zeroAddress) return { symbol: "NO_WIN", decimals: 18 };
-  const cfg =
-    findTokenConfig(asset as Address) ??
-    tokens.find((t) => t.address.toLowerCase() === key);
-  if (cfg) {
-    const symbol =
-      cfg.kind === "stock" && cfg.ticker?.trim() ? cfg.ticker.trim() : cfg.symbol;
-    return { symbol, decimals: cfg.decimals };
-  }
-  return { symbol: key.slice(0, 10), decimals: 18 };
 }
 
 function ensureLedgerFile(filePath: string): void {
@@ -101,19 +87,24 @@ export async function syncMissingLedgerRows(
 
       const blockNums = [...new Set(toAdd.map((s) => s.blockNumber))];
       const tsByBlock = new Map<string, string>();
-      await Promise.all(
-        blockNums.map(async (bn) => {
-          try {
-            const block = await pc.getBlock({ blockNumber: bn });
-            tsByBlock.set(
-              bn.toString(),
-              new Date(Number(block.timestamp) * 1000).toISOString(),
-            );
-          } catch {
-            tsByBlock.set(bn.toString(), new Date().toISOString());
-          }
-        }),
-      );
+      // Sequential batches — parallel getBlock for 100+ blocks trips RPC rate limits.
+      const BATCH = 8;
+      for (let i = 0; i < blockNums.length; i += BATCH) {
+        const slice = blockNums.slice(i, i + BATCH);
+        await Promise.all(
+          slice.map(async (bn) => {
+            try {
+              const block = await pc.getBlock({ blockNumber: bn });
+              tsByBlock.set(
+                bn.toString(),
+                new Date(Number(block.timestamp) * 1000).toISOString(),
+              );
+            } catch {
+              tsByBlock.set(bn.toString(), new Date().toISOString());
+            }
+          }),
+        );
+      }
 
       // Stable order by requestId for readable CSV tails.
       toAdd.sort((a, b) => Number(a.requestId) - Number(b.requestId));
@@ -121,7 +112,7 @@ export async function syncMissingLedgerRows(
       const lines: string[] = [];
       for (const s of toAdd) {
         if (have.has(s.requestId)) continue;
-        const { symbol, decimals } = resolveMeta(s.asset);
+        const { symbol, decimals } = await resolveTokenMeta(s.asset, pc);
         let human = "0";
         try {
           human = formatUnits(s.amount, decimals);
@@ -131,7 +122,7 @@ export async function syncMissingLedgerRows(
 
         let priceUsd = "";
         let usdValue = "";
-        if (s.asset === zeroAddress || s.amount === 0n) {
+        if (s.asset === zeroAddress || s.amount === BigInt(0)) {
           usdValue = "0";
         } else {
           const unit = unitPriceFor(s.asset, prices);
