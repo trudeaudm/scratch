@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   useAccount,
   useConnect,
@@ -29,6 +29,8 @@ import {
 import { fmtToken, parseAmount, shortAddr } from "@/utils/format";
 import { CopyAddress } from "@/components/CopyAddress";
 import type { TicketSourceVitals } from "@/hooks/useTreasuryData";
+import { useWalletSession } from "@/hooks/useWalletSession";
+import { formatWriteError } from "@/utils/writeGuards";
 
 type FundStep = "idle" | "approve" | "fund" | "done";
 
@@ -107,21 +109,41 @@ export function WritePanel({
   const { address, isConnected } = useAccount();
   const { connect, isPending: connecting } = useConnect();
   const { disconnect } = useDisconnect();
+  const { assertReadyForWrite } = useWalletSession("treasury");
   const publicClient = usePublicClient();
 
-  const { writeContractAsync, data: writeHash, isPending: writing, reset: resetWrite } =
-    useWriteContract();
-  const { sendTransactionAsync, data: sendHash, isPending: sending, reset: resetSend } =
-    useSendTransaction();
+  const {
+    writeContractAsync,
+    data: writeHash,
+    isPending: writing,
+    reset: resetWrite,
+    error: writeError,
+  } = useWriteContract();
+  const {
+    sendTransactionAsync,
+    data: sendHash,
+    isPending: sending,
+    reset: resetSend,
+    error: sendError,
+  } = useSendTransaction();
 
   const lastHash = writeHash ?? sendHash;
-  const { isLoading: confirming, isSuccess } = useWaitForTransactionReceipt({
+  const {
+    isLoading: confirming,
+    isSuccess,
+    error: receiptError,
+  } = useWaitForTransactionReceipt({
     hash: lastHash,
   });
 
   const [pending, setPending] = useState<PendingAction | null>(null);
   const [actionErr, setActionErr] = useState<string | null>(null);
   const [fundStep, setFundStep] = useState<FundStep>("idle");
+
+  useEffect(() => {
+    const error = writeError ?? sendError ?? receiptError;
+    if (error) setActionErr(formatWriteError(error));
+  }, [writeError, sendError, receiptError]);
 
   const [fundToken, setFundToken] = useState(tokens[0]?.symbol ?? "SCRATCH");
   const [fundAmount, setFundAmount] = useState("");
@@ -172,6 +194,14 @@ export function WritePanel({
   function clearPending() {
     setPending(null);
     setActionErr(null);
+  }
+
+  async function runPanelAction(action: () => void | Promise<void>) {
+    try {
+      await action();
+    } catch (e) {
+      setActionErr(formatWriteError(e));
+    }
   }
 
   async function prepareFund() {
@@ -290,7 +320,16 @@ export function WritePanel({
   }
 
   async function confirmSign() {
-    if (!pending || !address) return;
+    if (!pending) {
+      setActionErr("Nothing to confirm");
+      return;
+    }
+    const gate = await assertReadyForWrite();
+    if (!gate.ok) {
+      setActionErr(gate.error);
+      return;
+    }
+    const activeAccount = gate.account;
     setActionErr(null);
     resetWrite();
     resetSend();
@@ -302,7 +341,7 @@ export function WritePanel({
           address: pending.token.address,
           abi: erc20AbiTyped,
           functionName: "allowance",
-          args: [address, contracts.prizeVault.address],
+          args: [activeAccount, contracts.prizeVault.address],
         })) as bigint;
         if (allowance < pending.amount) {
           await writeContractAsync({
@@ -310,6 +349,7 @@ export function WritePanel({
             abi: erc20AbiTyped,
             functionName: "approve",
             args: [contracts.prizeVault.address, pending.amount],
+            account: activeAccount,
           });
         }
         setFundStep("fund");
@@ -318,16 +358,22 @@ export function WritePanel({
           abi: prizeVaultAbiTyped,
           functionName: "fund",
           args: [pending.token.address, pending.amount],
+          account: activeAccount,
         });
         setFundStep("done");
       } else if (pending.kind === "sendEth") {
-        await sendTransactionAsync({ to: pending.to, value: pending.value });
+        await sendTransactionAsync({
+          to: pending.to,
+          value: pending.value,
+          account: activeAccount,
+        });
       } else if (pending.kind === "sendToken") {
         await writeContractAsync({
           address: pending.token.address,
           abi: erc20AbiTyped,
           functionName: "transfer",
           args: [pending.to, pending.amount],
+          account: activeAccount,
         });
       } else if (pending.kind === "release") {
         await writeContractAsync({
@@ -335,6 +381,7 @@ export function WritePanel({
           abi: vestingWalletAbiTyped,
           functionName: "release",
           args: [pending.token],
+          account: activeAccount,
         });
       } else if (pending.kind === "grant") {
         await writeContractAsync({
@@ -342,11 +389,12 @@ export function WritePanel({
           abi: standardTicketSourceAbiTyped,
           functionName: "grant",
           args: [pending.users, pending.amountEach],
+          account: activeAccount,
         });
       }
       setPending(null);
     } catch (e) {
-      setActionErr(e instanceof Error ? e.message : "tx failed");
+      setActionErr(formatWriteError(e));
       setFundStep("idle");
     }
   }
@@ -430,7 +478,12 @@ export function WritePanel({
             className="mono"
           />
         </div>
-        <button type="button" className="btn secondary" disabled={!isConnected || busy} onClick={prepareFund}>
+        <button
+          type="button"
+          className="btn secondary"
+          disabled={!isConnected || busy}
+          onClick={() => void runPanelAction(prepareFund)}
+        >
           Review fund
         </button>
       </div>
@@ -467,7 +520,12 @@ export function WritePanel({
             className="mono"
           />
         </div>
-        <button type="button" className="btn secondary" disabled={!isConnected || busy} onClick={prepareSend}>
+        <button
+          type="button"
+          className="btn secondary"
+          disabled={!isConnected || busy}
+          onClick={() => void runPanelAction(prepareSend)}
+        >
           Review send
         </button>
       </div>

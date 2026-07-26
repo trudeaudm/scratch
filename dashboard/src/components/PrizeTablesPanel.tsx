@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState, type DragEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import {
   useAccount,
   useConnect,
@@ -18,6 +18,8 @@ import { scratchGameAbiTyped } from "@/config/abis";
 import { injected } from "@/utils/injected";
 import { fmtToken, fmtUsd } from "@/utils/format";
 import { CopyAddress } from "@/components/CopyAddress";
+import { useWalletSession } from "@/hooks/useWalletSession";
+import { formatWriteError } from "@/utils/writeGuards";
 import {
   TIER_LABELS,
   TIER_PREMIUM,
@@ -168,8 +170,24 @@ export function PrizeTablesPanel({
 
   const { address, isConnected } = useAccount();
   const { connect, isPending: connecting } = useConnect();
-  const { writeContractAsync, data: txHash, isPending: writing, reset } = useWriteContract();
-  const { isLoading: waiting, isSuccess } = useWaitForTransactionReceipt({ hash: txHash });
+  const { assertReadyForWrite } = useWalletSession("treasury");
+  const {
+    writeContractAsync,
+    data: txHash,
+    isPending: writing,
+    reset,
+    error: writeError,
+  } = useWriteContract();
+  const {
+    isLoading: waiting,
+    isSuccess,
+    error: receiptError,
+  } = useWaitForTransactionReceipt({ hash: txHash });
+
+  useEffect(() => {
+    const error = writeError ?? receiptError;
+    if (error) setErr(formatWriteError(error));
+  }, [writeError, receiptError]);
 
   const current = prizeTables?.find((t) => t.tier === tier)?.rows ?? [];
   const { balances, coverage } = useMemo(() => vaultMaps(vaultAssets), [vaultAssets]);
@@ -303,6 +321,11 @@ export function PrizeTablesPanel({
       setErr("Check the confirmation for rows exceeding 10% of vault balance");
       return;
     }
+    const gate = await assertReadyForWrite();
+    if (!gate.ok) {
+      setErr(gate.error);
+      return;
+    }
 
     const summaryRows = draft.prizeRows
       .map((r, i) => {
@@ -328,13 +351,14 @@ export function PrizeTablesPanel({
             cumOdds: r.cumOdds,
           })),
         ],
+        account: gate.account,
       });
       setConfirming(false);
       setEditing(false);
       onRefresh();
       void summaryRows;
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "setPrizeTable failed");
+      setErr(formatWriteError(e));
     }
   }
 
@@ -651,7 +675,11 @@ export function PrizeTablesPanel({
         </>
       )}
 
-      {err && <p className="err">{err}</p>}
+      {err && (
+        <p className="err" role="alert">
+          {err}
+        </p>
+      )}
       {(writing || waiting) && <p className="muted">Confirm in wallet…</p>}
       {isSuccess && txHash && <TxResult hash={txHash} />}
     </section>

@@ -20,6 +20,8 @@ import { prizeVaultAbiTyped } from "@/config/abis";
 import { countdown, fmtToken, shortAddr } from "@/utils/format";
 import { CopyAddress } from "@/components/CopyAddress";
 import type { PrizeVaultVitals, SweepRow } from "@/hooks/useTreasuryData";
+import { useWalletSession } from "@/hooks/useWalletSession";
+import { formatWriteError } from "@/utils/writeGuards";
 
 type PendingAction =
   | {
@@ -96,11 +98,21 @@ function VaultSweepSection({
   tokensEpoch: number;
   onRefresh: () => void;
 }) {
-  const { address, isConnected } = useAccount();
+  const { isConnected } = useAccount();
   const { connect, isPending: connecting } = useConnect();
-  const { writeContractAsync, data: writeHash, isPending: writing, reset: resetWrite } =
-    useWriteContract();
-  const { isLoading: confirming, isSuccess } = useWaitForTransactionReceipt({
+  const { assertReadyForWrite } = useWalletSession("treasury");
+  const {
+    writeContractAsync,
+    data: writeHash,
+    isPending: writing,
+    reset: resetWrite,
+    error: writeError,
+  } = useWriteContract();
+  const {
+    isLoading: confirming,
+    isSuccess,
+    error: receiptError,
+  } = useWaitForTransactionReceipt({
     hash: writeHash,
   });
 
@@ -108,6 +120,19 @@ function VaultSweepSection({
   const [pending, setPending] = useState<PendingAction | null>(null);
   const [confirmSymbol, setConfirmSymbol] = useState("");
   const [actionErr, setActionErr] = useState<string | null>(null);
+
+  /** Never let a write-path click fail silently. */
+  function surface(err: unknown) {
+    setActionErr(formatWriteError(err));
+  }
+
+  async function withWriteErrors(fn: () => void | Promise<void>) {
+    try {
+      await fn();
+    } catch (e) {
+      surface(e);
+    }
+  }
 
   const saleTokens = useMemo(
     () => writePanelTokens(),
@@ -134,6 +159,11 @@ function VaultSweepSection({
   }, []);
 
   useEffect(() => {
+    const err = writeError ?? receiptError;
+    if (err) setActionErr(formatWriteError(err));
+  }, [writeError, receiptError]);
+
+  useEffect(() => {
     if (saleTokens.length && !saleTokens.some((t) => t.symbol === sweepAsset)) {
       setSweepAsset(saleTokens[0].symbol);
     }
@@ -146,78 +176,93 @@ function VaultSweepSection({
   }
 
   function prepareQueue() {
-    setActionErr(null);
-    const token = saleTokens.find((t) => t.symbol === sweepAsset);
-    if (!token) {
-      setActionErr("Pick a configured token");
-      return;
-    }
-    const dest = destinations.find((d) => d.key === sweepDestKey);
-    if (!dest) {
-      setActionErr("Pick a labeled destination");
-      return;
-    }
-    if (!isConfigured(vault.config.address)) {
-      setActionErr("PrizeVault address not set");
-      return;
-    }
-    const eta = now + vault.sweepDelay;
-    const expiry = eta + vault.sweepGrace;
-    setPending({
-      kind: "sweep",
-      vault: vault.config.address,
-      asset: token.address,
-      to: dest.address,
-      summary: `On ${vault.config.label} (${shortAddr(vault.config.address)}): queues a FULL-BALANCE sweep of ${token.symbol}, executable between ${formatEta(eta)} and ${formatEta(expiry)}; prizes keep paying meanwhile and the sweep delivers whatever balance remains at execution. Destination: ${dest.label} (${shortAddr(dest.address)}). Calls sweep(asset, to).`,
+    void withWriteErrors(() => {
+      setActionErr(null);
+      const token = saleTokens.find((t) => t.symbol === sweepAsset);
+      if (!token) {
+        setActionErr("Pick a configured token");
+        return;
+      }
+      const dest = destinations.find((d) => d.key === sweepDestKey);
+      if (!dest) {
+        setActionErr("Pick a labeled destination");
+        return;
+      }
+      if (!isConfigured(vault.config.address)) {
+        setActionErr("PrizeVault address not set");
+        return;
+      }
+      const eta = now + vault.sweepDelay;
+      const expiry = eta + vault.sweepGrace;
+      setPending({
+        kind: "sweep",
+        vault: vault.config.address,
+        asset: token.address,
+        to: dest.address,
+        summary: `On ${vault.config.label} (${shortAddr(vault.config.address)}): queues a FULL-BALANCE sweep of ${token.symbol}, executable between ${formatEta(eta)} and ${formatEta(expiry)}; prizes keep paying meanwhile and the sweep delivers whatever balance remains at execution. Destination: ${dest.label} (${shortAddr(dest.address)}). Calls sweep(asset, to).`,
+      });
     });
   }
 
   function prepareExecute(sweep: SweepRow) {
-    setActionErr(null);
-    const live = liveStatus(sweep, now, vault.sweepGrace);
-    if (live.status !== "ready") {
-      setActionErr(
-        live.status === "queued"
-          ? `Execute opens in ${countdown(live.secondsToEta)}`
-          : "Sweep expired — re-queue via Queue sweep",
-      );
-      return;
-    }
-    setPending({
-      kind: "executeSweep",
-      vault: vault.config.address,
-      id: sweep.id,
-      summary: `On ${vault.config.label}: executeSweep(#${String(sweep.id)}) — transfer the vault's FULL remaining ${sweep.symbol} balance to ${labelFor(sweep.to)} (${shortAddr(sweep.to)}). Window open until ${formatEta(sweep.eta + vault.sweepGrace)} (${countdown(live.secondsToExpiry)} left).`,
+    void withWriteErrors(() => {
+      setActionErr(null);
+      const live = liveStatus(sweep, now, vault.sweepGrace);
+      if (live.status !== "ready") {
+        setActionErr(
+          live.status === "queued"
+            ? `Execute opens in ${countdown(live.secondsToEta)}`
+            : "Sweep expired — re-queue via Queue sweep",
+        );
+        return;
+      }
+      setPending({
+        kind: "executeSweep",
+        vault: vault.config.address,
+        id: sweep.id,
+        summary: `On ${vault.config.label}: executeSweep(#${String(sweep.id)}) — transfer the vault's FULL remaining ${sweep.symbol} balance to ${labelFor(sweep.to)} (${shortAddr(sweep.to)}). Window open until ${formatEta(sweep.eta + vault.sweepGrace)} (${countdown(live.secondsToExpiry)} left).`,
+      });
     });
   }
 
   function prepareCancel(sweep: SweepRow) {
-    setActionErr(null);
-    setConfirmSymbol("");
-    setPending({
-      kind: "cancelSweep",
-      vault: vault.config.address,
-      id: sweep.id,
-      symbol: sweep.symbol,
-      summary: `On ${vault.config.label}: cancelSweep(#${String(sweep.id)}) — drop the pending FULL-BALANCE ${sweep.symbol} sweep to ${labelFor(sweep.to)}. Type ${sweep.symbol} to confirm.`,
+    void withWriteErrors(() => {
+      setActionErr(null);
+      setConfirmSymbol("");
+      setPending({
+        kind: "cancelSweep",
+        vault: vault.config.address,
+        id: sweep.id,
+        symbol: sweep.symbol,
+        summary: `On ${vault.config.label}: cancelSweep(#${String(sweep.id)}) — drop the pending FULL-BALANCE ${sweep.symbol} sweep to ${labelFor(sweep.to)}. Type ${sweep.symbol} to confirm.`,
+      });
     });
   }
 
   async function confirmSign() {
-    if (!pending || !address) return;
-    if (pending.kind === "cancelSweep" && confirmSymbol !== pending.symbol) {
-      setActionErr(`Type ${pending.symbol} to confirm cancel`);
-      return;
-    }
-    setActionErr(null);
-    resetWrite();
-    try {
+    await withWriteErrors(async () => {
+      if (!pending) {
+        setActionErr("Nothing to confirm");
+        return;
+      }
+      if (pending.kind === "cancelSweep" && confirmSymbol !== pending.symbol) {
+        setActionErr(`Type ${pending.symbol} to confirm cancel`);
+        return;
+      }
+      const gate = await assertReadyForWrite();
+      if (!gate.ok) {
+        setActionErr(gate.error);
+        return;
+      }
+      setActionErr(null);
+      resetWrite();
       if (pending.kind === "sweep") {
         await writeContractAsync({
           address: pending.vault,
           abi: prizeVaultAbiTyped,
           functionName: "sweep",
           args: [pending.asset, pending.to],
+          account: gate.account,
         });
       } else if (pending.kind === "executeSweep") {
         await writeContractAsync({
@@ -225,6 +270,7 @@ function VaultSweepSection({
           abi: prizeVaultAbiTyped,
           functionName: "executeSweep",
           args: [pending.id],
+          account: gate.account,
         });
       } else {
         await writeContractAsync({
@@ -232,14 +278,13 @@ function VaultSweepSection({
           abi: prizeVaultAbiTyped,
           functionName: "cancelSweep",
           args: [pending.id],
+          account: gate.account,
         });
       }
       setPending(null);
       setConfirmSymbol("");
       onRefresh();
-    } catch (e) {
-      setActionErr(e instanceof Error ? e.message : "tx failed");
-    }
+    });
   }
 
   const busy = writing || confirming;
@@ -369,6 +414,12 @@ function VaultSweepSection({
         </table>
       )}
 
+      {actionErr && !pending && (
+        <p className="err" role="alert" style={{ marginTop: 10 }}>
+          {actionErr}
+        </p>
+      )}
+
       <h3>Queue sweep</h3>
       <p className="muted" style={{ marginTop: 0 }}>
         Timelock {countdown(vault.sweepDelay)} · grace {countdown(vault.sweepGrace)} ·
@@ -440,6 +491,11 @@ function VaultSweepSection({
               />
             </label>
           )}
+          {actionErr && (
+            <p className="err" role="alert" style={{ marginTop: 10 }}>
+              {actionErr}
+            </p>
+          )}
           <div className="row" style={{ marginTop: 12, marginBottom: 0 }}>
             <button
               type="button"
@@ -455,7 +511,6 @@ function VaultSweepSection({
           </div>
         </div>
       )}
-      {actionErr && <p className="err">{actionErr}</p>}
 
       <h3>Sweep history</h3>
       {vault.history.length === 0 ? (
