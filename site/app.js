@@ -3,7 +3,7 @@
  * Wire from index.html: <script type="module" src="./app.js?v=…"></script>
  * Bump ASSET_VERSION (and the index.html ?v=) on every site/ commit.
  */
-export const ASSET_VERSION = 'v2-live-1';
+export const ASSET_VERSION = 'v2-live-2';
 
 /**
  * Game generation flag. Production stays on v1 (StakingVault + ScratchGame) until
@@ -891,6 +891,8 @@ const state = {
   totalStaked: 0n,
   userStaked: 0n,
   scratchBalance: 0n,
+  /** Principal still on the retired v1 StakingVault (gen-2 legacy exit). */
+  v1LegacyStaked: 0n,
   /* --- v2 staking state (StakingVaultV2) --- */
   userTier: 0, // 0 = none/not deposited, 1 = NORMAL, 2 = ENHANCED
   userBanked: 0n, // banked ticket-wei (users.banked)
@@ -1103,6 +1105,7 @@ function dispatchDisconnect() {
   state.walletSupportsBatch = null;
   state.userStaked = 0n;
   state.scratchBalance = 0n;
+  state.v1LegacyStaked = 0n;
   state.liveTickets = { std: 0n, prem: 0n };
   state._stakeNextSecs = null;
   stopScratchTransferWatch();
@@ -1113,6 +1116,7 @@ function dispatchDisconnect() {
   }
   const panel = $('walletPanel');
   if (panel) panel.hidden = true;
+  renderV1LegacyExit({ clearNudge: true });
   updateStakeFormBalances();
   resetSessionToIdle({ keepNote: true });
   setSessionNote('Wallet disconnected.');
@@ -3402,7 +3406,9 @@ async function refreshWalletPanel(opts = {}) {
     if (panel) panel.hidden = true;
     state.userStaked = 0n;
     state.scratchBalance = 0n;
+    state.v1LegacyStaked = 0n;
     state._stakeNextSecs = null;
+    renderV1LegacyExit({ clearNudge: true });
     updateStakeFormBalances();
     return;
   }
@@ -3507,6 +3513,8 @@ async function refreshWalletPanel(opts = {}) {
     updateStakedTicketsTip();
     updateStakeFormBalances();
     if (v2) renderV2StakeUi();
+    if (v2) await refreshV1LegacyStake({ keepNudge: !!opts.keepV1Nudge });
+    else renderV1LegacyExit({ clearNudge: true });
 
     if (!opts.skipStage && sessionPhase() === PHASE.IDLE) {
       renderTier();
@@ -5834,6 +5842,7 @@ async function doWithdraw() {
   }
   try {
     await ensureChain();
+    const active = await assertActiveAccountMatchesSession('your wallet');
     const amount = parseUnits(raw, 18);
     if (warn) warn.textContent = 'Confirm withdraw in wallet…';
     const hash = await state.walletClient.writeContract({
@@ -5841,7 +5850,7 @@ async function doWithdraw() {
       abi: ABI_STAKING,
       functionName: 'withdraw',
       args: [amount],
-      account: state.account,
+      account: active,
       chain: robinhoodChain,
     });
     if (warn) warn.textContent = 'Withdrawing…';
@@ -5854,6 +5863,191 @@ async function doWithdraw() {
     await refreshWalletPanel();
   } catch (err) {
     if (warn) warn.textContent = err?.shortMessage || err?.message || String(err);
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* v1 legacy exit (gen 2) — withdraw retired vault principal                   */
+/* -------------------------------------------------------------------------- */
+
+/** Canonical production v1 StakingVault — never remapped by CONFIG.v2. */
+function v1StakingAddress() {
+  try {
+    return getAddress(CONFIG.addresses.STAKING_VAULT);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Compare the wallet's live active account to the session's captured account
+ * before any write. Mirrors the dashboard account-mismatch guard.
+ */
+async function assertActiveAccountMatchesSession(expectedRole = 'your wallet') {
+  if (!state.account) {
+    throw new Error(`Wallet not connected — reconnect as ${expectedRole}`);
+  }
+  const provider = getActiveProvider();
+  if (!provider?.request) {
+    throw new Error(`No active wallet — reconnect as ${expectedRole}`);
+  }
+  let accounts;
+  try {
+    accounts = await provider.request({ method: 'eth_accounts' });
+  } catch (e) {
+    throw new Error(e?.shortMessage || e?.message || `Wallet read failed — reconnect as ${expectedRole}`);
+  }
+  if (!accounts?.length) {
+    throw new Error(`No active account — reconnect as ${expectedRole}`);
+  }
+  const active = getAddress(accounts[0]);
+  if (active.toLowerCase() !== state.account.toLowerCase()) {
+    throw new Error(`connected wallet changed — reconnect as ${expectedRole}`);
+  }
+  return active;
+}
+
+function renderV1LegacyExit(opts = {}) {
+  const card = $('v1LegacyExit');
+  if (!card) return;
+  const nudge = $('v1LegacyNudge');
+  const status = $('v1LegacyStatus');
+  const amtEl = $('v1LegacyStaked');
+  const btn = $('v1LegacyWithdrawBtn');
+  if (opts.clearNudge && nudge) nudge.hidden = true;
+  if (opts.clearNudge && status) {
+    status.textContent = '';
+    status.classList.remove('ok');
+  }
+  const staked = state.v1LegacyStaked ?? 0n;
+  const nudgeOpen = !!(nudge && !nudge.hidden);
+  // Hide entirely at zero stake, except while the post-withdraw restake nudge is up.
+  const show = isV2() && !!state.account && (staked > 0n || nudgeOpen || !!opts.forceNudge);
+  card.hidden = !show;
+  if (!show) return;
+  if (amtEl) {
+    amtEl.textContent =
+      staked > 0n
+        ? `${formatHuman(staked)} SCRATCH on v1`
+        : '0 SCRATCH on v1';
+  }
+  if (btn) btn.hidden = staked <= 0n;
+  if (opts.forceNudge && nudge) nudge.hidden = false;
+}
+
+async function refreshV1LegacyStake(opts = {}) {
+  if (!isV2() || !state.account) {
+    state.v1LegacyStaked = 0n;
+    renderV1LegacyExit({ clearNudge: true });
+    return;
+  }
+  const v1 = v1StakingAddress();
+  if (!v1) {
+    state.v1LegacyStaked = 0n;
+    renderV1LegacyExit({ clearNudge: true });
+    return;
+  }
+  try {
+    const user = await publicClient.readContract({
+      address: v1,
+      abi: ABI_STAKING_V1,
+      functionName: 'users',
+      args: [state.account],
+    });
+    state.v1LegacyStaked = user.staked ?? user[0] ?? 0n;
+  } catch (err) {
+    console.warn('v1 legacy stake read failed', err);
+    state.v1LegacyStaked = 0n;
+  }
+  renderV1LegacyExit({ clearNudge: !opts.keepNudge });
+}
+
+function scrollToV2StakeForm() {
+  const target =
+    $('stakeTierPicker') ||
+    $('stakeAmount') ||
+    $('stakeBtn') ||
+    $('walletPanel');
+  if (!target) return;
+  target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  if (typeof target.focus === 'function' && $('stakeAmount')) {
+    try {
+      $('stakeAmount').focus({ preventScroll: true });
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+async function doV1LegacyWithdrawAll() {
+  const status = $('v1LegacyStatus');
+  const nudge = $('v1LegacyNudge');
+  const btn = $('v1LegacyWithdrawBtn');
+  if (!isV2()) return;
+  if (!state.account) {
+    await connectWallet();
+    if (!state.account) return;
+  }
+  await refreshV1LegacyStake({ keepNudge: true });
+  const amount = state.v1LegacyStaked ?? 0n;
+  if (amount <= 0n) {
+    if (status) {
+      status.classList.remove('ok');
+      status.textContent = 'No v1 stake to withdraw.';
+    }
+    renderV1LegacyExit({ clearNudge: true });
+    return;
+  }
+  const pretty = formatHuman(amount);
+  const warning = `Withdraw all ${pretty} SCRATCH from the retired v1 vault? v1 tickets no longer settle and any remaining v1 tickets will burn. Then restake below on v2 to pick your tier.`;
+  if (status) {
+    status.classList.remove('ok');
+    status.textContent = warning;
+  }
+  if (!confirm(warning)) {
+    if (status) status.textContent = '';
+    return;
+  }
+  try {
+    await ensureChain();
+    const active = await assertActiveAccountMatchesSession('your wallet');
+    const v1 = v1StakingAddress();
+    if (!v1) throw new Error('v1 StakingVault address missing');
+    if (btn) btn.disabled = true;
+    if (status) status.textContent = 'Confirm withdraw in wallet…';
+    const hash = await state.walletClient.writeContract({
+      address: v1,
+      abi: ABI_STAKING_V1,
+      functionName: 'withdraw',
+      args: [amount],
+      account: active,
+      chain: robinhoodChain,
+    });
+    if (status) status.textContent = 'Withdrawing from v1…';
+    await publicClient.waitForTransactionReceipt({ hash });
+    if (status) {
+      status.classList.add('ok');
+      status.textContent = 'Withdrawn from v1 ✓ — restake below to pick your tier.';
+    }
+    if (nudge) nudge.hidden = false;
+    await refreshWalletPanel({ keepV1Nudge: true });
+    renderV1LegacyExit({ forceNudge: true });
+    scrollToV2StakeForm();
+  } catch (err) {
+    if (isUserRejection(err)) {
+      if (status) {
+        status.classList.remove('ok');
+        status.textContent = '';
+      }
+      showToast(WALLET_REJECT_TOAST, { kind: 'warn', duration: 9000 });
+      return;
+    }
+    if (status) {
+      status.classList.remove('ok');
+      status.textContent = err?.shortMessage || err?.message || String(err);
+    }
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 
@@ -6023,6 +6217,12 @@ function wireUi() {
     doStake();
   });
   $('withdrawBtn')?.addEventListener('click', doWithdraw);
+  $('v1LegacyWithdrawBtn')?.addEventListener('click', () => {
+    void doV1LegacyWithdrawAll();
+  });
+  $('v1LegacyScrollBtn')?.addEventListener('click', () => {
+    scrollToV2StakeForm();
+  });
   $('stakePctRow')?.addEventListener('click', (e) => {
     const btn = e.target.closest('button[data-pct]');
     if (!btn || btn.disabled) return;
