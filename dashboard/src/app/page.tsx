@@ -40,13 +40,18 @@ export default function HomePage() {
           onRefresh={() => void refresh()}
           tokensEpoch={tokensEpoch}
         />
-        <WritePanel tickets={data?.tickets ?? null} tokensEpoch={tokensEpoch} />
+        <WritePanel
+          tickets={data?.tickets ?? null}
+          tokensEpoch={tokensEpoch}
+          fundVault={data?.gamePrizeVault ?? null}
+        />
       </div>
 
       <PrizeTablesPanel
         key={tokensEpoch}
         prizeTables={data?.prizeTables ?? null}
         vaultAssets={data?.vaultAssets ?? []}
+        gamePrizeVault={data?.gamePrizeVault ?? null}
         prices={
           data?.prices ?? {
             scratchUsd: null,

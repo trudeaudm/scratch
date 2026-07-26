@@ -40,6 +40,7 @@ type PendingAction =
       summary: string;
       token: (typeof tokens)[number];
       amount: bigint;
+      vault: Address;
     }
   | {
       kind: "sendEth";
@@ -101,10 +102,13 @@ function parseAddresses(raw: string): { addresses: Address[]; error: string | nu
 export function WritePanel({
   tickets,
   tokensEpoch = 0,
+  fundVault = null,
 }: {
   tickets: TicketSourceVitals | null;
   /** Bumps when verified tokens.json changes so fund/send dropdowns refresh. */
   tokensEpoch?: number;
+  /** PrizeVault from active game's `prizeVault()` — fund target. */
+  fundVault?: Address | null;
 }) {
   const { address, isConnected } = useAccount();
   const { connect, isPending: connecting } = useConnect();
@@ -211,8 +215,9 @@ export function WritePanel({
       setActionErr("Configure the token in addresses.ts");
       return;
     }
-    if (!isConfigured(contracts.prizeVault.address)) {
-      setActionErr("PrizeVault address not set");
+    const vault = fundVault;
+    if (!vault || !isConfigured(vault)) {
+      setActionErr("Active game prizeVault() not resolved — wait for refresh");
       return;
     }
     const decimals = await resolveTokenDecimals(token);
@@ -225,7 +230,8 @@ export function WritePanel({
       kind: "fund",
       token,
       amount,
-      summary: `Approve ${fundAmount.trim()} ${token.symbol} (${decimals} dp → ${amount.toString()} raw) for PrizeVault (${shortAddr(contracts.prizeVault.address)}), then call fund(asset=${shortAddr(token.address)}, amount=${amount.toString()}).`,
+      vault,
+      summary: `Approve ${fundAmount.trim()} ${token.symbol} (${decimals} dp → ${amount.toString()} raw) for the active game's PrizeVault (${shortAddr(vault)}), then call fund(asset=${shortAddr(token.address)}, amount=${amount.toString()}).`,
     });
   }
 
@@ -341,20 +347,20 @@ export function WritePanel({
           address: pending.token.address,
           abi: erc20AbiTyped,
           functionName: "allowance",
-          args: [activeAccount, contracts.prizeVault.address],
+          args: [activeAccount, pending.vault],
         })) as bigint;
         if (allowance < pending.amount) {
           await writeContractAsync({
             address: pending.token.address,
             abi: erc20AbiTyped,
             functionName: "approve",
-            args: [contracts.prizeVault.address, pending.amount],
+            args: [pending.vault, pending.amount],
             account: activeAccount,
           });
         }
         setFundStep("fund");
         await writeContractAsync({
-          address: contracts.prizeVault.address,
+          address: pending.vault,
           abi: prizeVaultAbiTyped,
           functionName: "fund",
           args: [pending.token.address, pending.amount],
@@ -458,6 +464,18 @@ export function WritePanel({
       {actionErr && <p className="err">{actionErr}</p>}
 
       <h3>Fund PrizeVault</h3>
+      <p className="muted" style={{ marginTop: 0, fontSize: "0.8rem" }}>
+        Targets the vault returned by active game{" "}
+        <span className="mono">prizeVault()</span>
+        {fundVault ? (
+          <>
+            {" "}
+            — <CopyAddress address={fundVault} />
+          </>
+        ) : (
+          " — unresolved (wait for refresh)"
+        )}
+      </p>
       <div className="row">
         <div className="field">
           <label>Token</label>

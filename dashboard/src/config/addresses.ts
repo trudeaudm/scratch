@@ -166,6 +166,16 @@ export const contracts = {
   } satisfies ContractEntry,
 } as const;
 
+/**
+ * Active ScratchGame for ops panels that edit/read tables + game vitals.
+ * Cutover point: flip this return to switch the dashboard game target.
+ * Prize vault for that game is always resolved on-chain via `prizeVault()` —
+ * never hardcode a vault address next to this.
+ */
+export function activeScratchGame(): ContractEntry {
+  return contracts.scratchGameV2;
+}
+
 /** v1 + v2 PrizeVault entries (configured or not). Same ABI; separate instances. */
 export const prizeVaultConfigs: ContractEntry[] = [
   contracts.prizeVault,
@@ -175,6 +185,12 @@ export const prizeVaultConfigs: ContractEntry[] = [
 /** Configured PrizeVault instances only (v1 and/or v2 once Deploy3 is filled). */
 export function configuredPrizeVaults(): ContractEntry[] {
   return prizeVaultConfigs.filter((v) => isConfigured(v.address));
+}
+
+/** Match a vault address to a labeled config entry when known. */
+export function findPrizeVaultConfig(address: Address): ContractEntry | undefined {
+  const key = address.toLowerCase();
+  return prizeVaultConfigs.find((v) => v.address.toLowerCase() === key);
 }
 
 /** Labeled destinations for send / sweep (fat-finger protection — no free text). */

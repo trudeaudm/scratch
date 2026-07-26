@@ -9,14 +9,14 @@ import {
 } from "wagmi";
 import { zeroAddress, type Address, type Hash } from "viem";
 import {
-  contracts,
+  activeScratchGame,
   explorerTx,
   isConfigured,
   tokens,
 } from "@/config/addresses";
 import { scratchGameAbiTyped } from "@/config/abis";
 import { injected } from "@/utils/injected";
-import { fmtToken, fmtUsd } from "@/utils/format";
+import { fmtToken, fmtUsd, shortAddr } from "@/utils/format";
 import { CopyAddress } from "@/components/CopyAddress";
 import { useWalletSession } from "@/hooks/useWalletSession";
 import { formatWriteError } from "@/utils/writeGuards";
@@ -146,6 +146,7 @@ function RowTable({
 export function PrizeTablesPanel({
   prizeTables,
   vaultAssets,
+  gamePrizeVault,
   prices,
   pendingCount,
   loading,
@@ -153,11 +154,14 @@ export function PrizeTablesPanel({
 }: {
   prizeTables: PrizeTableSnapshot[] | null;
   vaultAssets: VaultAssetMeta[];
+  /** Vault from active game's `prizeVault()` — backing / bps / 10% source. */
+  gamePrizeVault: Address | null;
   prices: PriceMap;
   pendingCount: number;
   loading?: boolean;
   onRefresh: () => void;
 }) {
+  const game = activeScratchGame();
   const [tier, setTier] = useState<TierId>(TIER_STANDARD);
   const [editing, setEditing] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -308,8 +312,8 @@ export function PrizeTablesPanel({
 
   async function submit() {
     setErr(null);
-    if (!isConfigured(contracts.scratchGameV2.address)) {
-      setErr("ScratchGameV2 address not set");
+    if (!isConfigured(game.address)) {
+      setErr(`${game.label} address not set`);
       return;
     }
     const blocking = blockingIssues(draft.issues);
@@ -338,8 +342,7 @@ export function PrizeTablesPanel({
     reset();
     try {
       await writeContractAsync({
-        // v2 cutover: table edits target ScratchGameV2.
-        address: contracts.scratchGameV2.address,
+        address: game.address,
         abi: scratchGameAbiTyped,
         functionName: "setPrizeTable",
         args: [
@@ -395,14 +398,27 @@ export function PrizeTablesPanel({
       {pendingCount > 0 && (
         <div className="banner-danger" role="alert">
           <strong>{pendingCount} Pending</strong> scratch request
-          {pendingCount === 1 ? "" : "s"} on ScratchGame — pending scratches will settle on the{" "}
+          {pendingCount === 1 ? "" : "s"} on {game.label} — pending scratches will settle on the{" "}
           <strong>NEW</strong> table. Wait for fulfillment or rescue first.
         </div>
       )}
 
+      <p className="muted" style={{ fontSize: "0.8rem", marginTop: 8 }}>
+        Target {game.label} <CopyAddress address={game.address} />
+        {gamePrizeVault ? (
+          <>
+            {" "}
+            · backing vault <CopyAddress address={gamePrizeVault} /> (from{" "}
+            <span className="mono">prizeVault()</span>)
+          </>
+        ) : (
+          <> · backing vault unresolved</>
+        )}
+      </p>
+
       {!prizeTables ? (
         <p className="empty">
-          {loading ? "Loading prize tables…" : "ScratchGame address not set in addresses.ts"}
+          {loading ? "Loading prize tables…" : `${game.label} address not set in addresses.ts`}
         </p>
       ) : !editing ? (
         <>
@@ -490,7 +506,14 @@ export function PrizeTablesPanel({
                 onChange={(e) => setBigPayoutAck(e.target.checked)}
               />
               I confirm one or more rows pay out more than <strong>10%</strong> of that asset&apos;s
-              current PrizeVault balance.
+              balance in the game&apos;s vault
+              {gamePrizeVault ? (
+                <>
+                  {" "}
+                  (<span className="mono">{shortAddr(gamePrizeVault)}</span>)
+                </>
+              ) : null}
+              .
             </label>
           )}
 

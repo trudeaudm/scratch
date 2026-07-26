@@ -3,6 +3,7 @@
 import { useState } from "react";
 import type { Address } from "viem";
 import {
+  activeScratchGame,
   contracts,
   explorerAddress,
   isConfigured,
@@ -297,11 +298,11 @@ export function ReadPanel({
         </>
       )}
 
-      <h3>ScratchGame</h3>
+      <h3>{activeScratchGame().label}</h3>
       {loading && !data ? (
         <p className="empty">Loading…</p>
       ) : !data?.game ? (
-        <p className="empty">ScratchGame address not set</p>
+        <p className="empty">{activeScratchGame().label} address not set</p>
       ) : (
         <dl className="kv">
           <dt>randomness provider</dt>

@@ -13,6 +13,7 @@ import {
   balanceHolders,
   configuredPrizeVaults,
   contracts,
+  activeScratchGame,
   findTokenConfig,
   isConfigured,
   tokens,
@@ -158,15 +159,21 @@ export type TreasurySnapshot = {
   updatedAt: number;
   prices: PriceMap;
   holders: HolderBalances[];
-  /** Primary (v1) vault vitals — used by fund / prize tables. */
+  /**
+   * PrizeVault wired to `activeScratchGame()` (via on-chain `prizeVault()`).
+   * Used for fund / prize-table backing. Full inventory of both vaults is in `prizeVaults`.
+   */
   prizeVault: PrizeVaultVitals | null;
   /** All configured PrizeVault instances (v1 and/or v2). */
   prizeVaults: PrizeVaultVitals[];
+  /** Address returned by active game's `prizeVault()` — source of `vaultAssets`. */
+  gamePrizeVault: Address | null;
   staking: StakingVitals | null;
   tickets: TicketSourceVitals | null;
   vesting: VestingVitals | null;
   game: GameVitals | null;
   prizeTables: PrizeTableSnapshot[] | null;
+  /** Balances + fallbackRate from the vault linked to the active ScratchGame. */
   vaultAssets: VaultAssetMeta[];
   /** Set when Blockscout tokenlist failed — holdings fell back to config-only. */
   discoveryWarning: string | null;
@@ -278,20 +285,24 @@ async function discoverAllHoldings(): Promise<{
   const byHolder = new Map<string, DiscoveredBag[]>();
   const addrs = new Set<string>();
   const holders = balanceHolders.filter((h) => isConfigured(h.address));
-  const results = await Promise.all(
-    holders.map(async (holder) => {
-      try {
-        const list = await fetchBlockscoutTokenList(holder.address);
-        return { holder, list, error: null as string | null };
-      } catch (e) {
-        return {
-          holder,
-          list: [] as Awaited<ReturnType<typeof fetchBlockscoutTokenList>>,
-          error: e instanceof Error ? e.message : "Blockscout tokenlist failed",
-        };
-      }
-    }),
-  );
+  // Sequential — parallel tokenlist stamps Blockscout into 429s every refresh.
+  const results: {
+    holder: (typeof balanceHolders)[number];
+    list: Awaited<ReturnType<typeof fetchBlockscoutTokenList>>;
+    error: string | null;
+  }[] = [];
+  for (const holder of holders) {
+    try {
+      const list = await fetchBlockscoutTokenList(holder.address);
+      results.push({ holder, list, error: null });
+    } catch (e) {
+      results.push({
+        holder,
+        list: [],
+        error: e instanceof Error ? e.message : "Blockscout tokenlist failed",
+      });
+    }
+  }
 
   let warning: string | null = null;
   for (const r of results) {
@@ -639,8 +650,7 @@ async function loadVesting(pc: ReturnType<typeof client>): Promise<VestingVitals
 }
 
 async function loadGame(pc: ReturnType<typeof client>): Promise<GameVitals | null> {
-  // v2 cutover: game vitals track ScratchGameV2 (v1 drain is watched via cast/operator).
-  const addr = contracts.scratchGameV2.address;
+  const addr = activeScratchGame().address;
   if (!isConfigured(addr)) return null;
 
   const [randomness, pendingRandomness, randomnessSwapEta, rescueDelay] = await Promise.all([
@@ -739,8 +749,7 @@ async function loadGame(pc: ReturnType<typeof client>): Promise<GameVitals | nul
 async function loadPrizeTables(
   pc: ReturnType<typeof client>,
 ): Promise<PrizeTableSnapshot[] | null> {
-  // v2 cutover: tables panel reads/edits ScratchGameV2.
-  const addr = contracts.scratchGameV2.address;
+  const addr = activeScratchGame().address;
   if (!isConfigured(addr)) return null;
 
   const out: PrizeTableSnapshot[] = [];
@@ -778,9 +787,32 @@ async function loadPrizeTables(
   return out;
 }
 
-async function loadVaultAssets(pc: ReturnType<typeof client>): Promise<VaultAssetMeta[]> {
-  const vault = contracts.prizeVault.address;
-  if (!isConfigured(vault)) return [];
+/**
+ * Resolve the PrizeVault wired to a ScratchGame via on-chain `prizeVault()`.
+ * This is the only correct source for table backing / bps / 10% checks.
+ */
+async function resolveGamePrizeVault(
+  pc: ReturnType<typeof client>,
+  gameAddr: Address,
+): Promise<Address | null> {
+  if (!isConfigured(gameAddr)) return null;
+  try {
+    const vault = (await pc.readContract({
+      address: gameAddr,
+      abi: scratchGameAbiTyped,
+      functionName: "prizeVault",
+    })) as Address;
+    return isConfigured(vault) ? vault : null;
+  } catch {
+    return null;
+  }
+}
+
+async function loadVaultAssets(
+  pc: ReturnType<typeof client>,
+  vault: Address | null,
+): Promise<VaultAssetMeta[]> {
+  if (!vault || !isConfigured(vault)) return [];
 
   const metas: VaultAssetMeta[] = [];
   const seen = new Set<string>();
@@ -840,6 +872,8 @@ export function useTreasuryData() {
         const pc = client();
         const discovery = await discoverAllHoldings();
         const prices = await fetchPrices(discovery.addresses);
+        const gameAddr = activeScratchGame().address;
+        const gamePrizeVault = await resolveGamePrizeVault(pc, gameAddr);
         const [holders, prizeVaults, staking, tickets, vesting, game, prizeTables, vaultAssets] =
           await Promise.all([
             loadHolders(pc, prices, discovery.byHolder),
@@ -849,18 +883,21 @@ export function useTreasuryData() {
             loadVesting(pc),
             loadGame(pc),
             loadPrizeTables(pc),
-            loadVaultAssets(pc),
+            loadVaultAssets(pc, gamePrizeVault),
           ]);
         const prizeVault =
-          prizeVaults.find((v) => v.config.key === contracts.prizeVault.key) ??
-          prizeVaults[0] ??
-          null;
+          (gamePrizeVault
+            ? prizeVaults.find(
+                (v) => v.config.address.toLowerCase() === gamePrizeVault.toLowerCase(),
+              )
+            : null) ?? null;
         setData({
           updatedAt: Date.now(),
           prices,
           holders,
           prizeVault,
           prizeVaults,
+          gamePrizeVault,
           staking,
           tickets,
           vesting,
@@ -883,6 +920,7 @@ export function useTreasuryData() {
           holders: prev?.holders ?? [],
           prizeVault: prev?.prizeVault ?? null,
           prizeVaults: prev?.prizeVaults ?? [],
+          gamePrizeVault: prev?.gamePrizeVault ?? null,
           staking: prev?.staking ?? null,
           tickets: prev?.tickets ?? null,
           vesting: prev?.vesting ?? null,
