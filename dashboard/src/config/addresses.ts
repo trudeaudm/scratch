@@ -232,6 +232,20 @@ export function isConfigured(addr: Address): boolean {
   return addr !== zeroAddress;
 }
 
+/** v1 / legacy Deploy2 contracts — de-emphasize vs Deploy3 (v2) in the UI. */
+export function isLegacyContract(entry: ContractEntry): boolean {
+  return /\(v1\)/i.test(entry.label);
+}
+
+/**
+ * Production Deploy3 StakingVaultV2 creation block (chain 4663).
+ * Override with NEXT_PUBLIC_STAKING_V2_DEPLOY_BLOCK when needed.
+ */
+export function stakingV2DeployBlock(): bigint {
+  const raw = process.env.NEXT_PUBLIC_STAKING_V2_DEPLOY_BLOCK || "18171314";
+  return BigInt(raw);
+}
+
 export function explorerTx(hash: string): string {
   return `${EXPLORER_BASE}/tx/${hash}`;
 }

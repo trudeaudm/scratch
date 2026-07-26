@@ -126,9 +126,16 @@ select option {
 }
 
 .app {
-  max-width: 1120px;
+  max-width: min(1600px, 100%);
   margin: 0 auto;
-  padding: 28px 20px 64px;
+  padding: 28px 24px 72px;
+}
+
+@media (min-width: 1280px) {
+  .app {
+    padding-left: 32px;
+    padding-right: 32px;
+  }
 }
 
 .header {
@@ -137,7 +144,7 @@ select option {
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 28px;
+  margin-bottom: 20px;
   border-bottom: 1px solid var(--border);
   padding-bottom: 18px;
 }
@@ -178,18 +185,94 @@ select option {
   gap: 20px;
 }
 
+.grid-cards {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: 1fr;
+}
+
 @media (min-width: 900px) {
   .grid-2 {
     grid-template-columns: 1.15fr 0.85fr;
     align-items: start;
   }
+
+  .grid-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1400px) {
+  .grid-cards {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.tabs {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 6px;
+  margin-bottom: 20px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.tab {
+  appearance: none;
+  flex: 0 0 auto;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 7px 14px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.tab:hover {
+  color: var(--text);
+  background: var(--bg-elev);
+  border-color: var(--border);
+}
+
+.tab.active {
+  color: var(--accent);
+  background: var(--accent-dim);
+  border-color: #2dd4bf55;
+}
+
+.tab-panel {
+  min-width: 0;
 }
 
 .panel {
   background: var(--bg-elev);
   border: 1px solid var(--border);
   border-radius: 10px;
-  padding: 18px 18px 14px;
+  padding: 20px 20px 16px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.panel + .panel {
+  margin-top: 16px;
+}
+
+.panel-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.panel-head h2 {
+  margin: 0;
 }
 
 .panel h2 {
@@ -199,8 +282,8 @@ select option {
 }
 
 .panel h3 {
-  margin: 18px 0 10px;
-  font-size: 0.85rem;
+  margin: 20px 0 12px;
+  font-size: 0.78rem;
   font-weight: 600;
   color: var(--muted);
   text-transform: uppercase;
@@ -209,6 +292,49 @@ select option {
 
 .panel h3:first-of-type {
   margin-top: 0;
+}
+
+.section-note {
+  margin: -6px 0 14px;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.legacy {
+  opacity: 0.72;
+  border-style: dashed;
+  background: #12151c;
+}
+
+.legacy-tag {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+
+.summary-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.85rem;
+}
+
+.summary-strip .label {
+  color: var(--muted);
+  margin-right: 6px;
 }
 
 .table {
@@ -220,7 +346,7 @@ select option {
 .table th,
 .table td {
   text-align: left;
-  padding: 6px 8px;
+  padding: 8px 10px;
   border-bottom: 1px solid var(--border);
   vertical-align: top;
 }
@@ -231,6 +357,16 @@ select option {
   font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.table th.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.table th.sortable:hover {
+  color: var(--accent);
 }
 
 .table td.num,
@@ -238,10 +374,13 @@ select option {
   text-align: right;
   font-family: var(--mono);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .table-scroll {
   overflow-x: auto;
+  max-width: 100%;
+  -webkit-overflow-scrolling: touch;
 }
 
 .muted {
@@ -402,8 +541,23 @@ select option {
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 12px;
-  margin-bottom: 10px;
+  padding: 14px 16px;
+  margin-bottom: 0;
+  min-width: 0;
+}
+
+.card-block.legacy {
+  opacity: 0.72;
+  border-style: dashed;
+  background: #10131a;
+}
+
+.vault-sweep-block.legacy {
+  opacity: 0.72;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  background: #10131a;
 }
 
 .kv {

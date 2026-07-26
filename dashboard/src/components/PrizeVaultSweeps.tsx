@@ -13,6 +13,7 @@ import {
   contracts,
   explorerTx,
   isConfigured,
+  isLegacyContract,
   sendTargets,
   writePanelTokens,
 } from "@/config/addresses";
@@ -291,10 +292,13 @@ function VaultSweepSection({
   const cancelReady =
     pending?.kind === "cancelSweep" ? confirmSymbol === pending.symbol : true;
 
+  const legacy = isLegacyContract(vault.config);
+
   return (
-    <div className="vault-sweep-block">
+    <div className={`vault-sweep-block${legacy ? " legacy" : ""}`}>
       <h3>
-        {vault.config.label}{" "}
+        {vault.config.label}
+        {legacy ? <span className="legacy-tag">legacy</span> : null}{" "}
         <span className="muted" style={{ fontWeight: 400, fontSize: "0.85rem" }}>
           <CopyAddress address={vault.config.address} />
         </span>
@@ -599,17 +603,36 @@ export function PrizeVaultSweeps({
   onRefresh: () => void;
 }) {
   if (loading && vaults.length === 0) {
-    return <p className="empty">Loading…</p>;
+    return (
+      <section className="panel">
+        <div className="panel-head">
+          <h2>Sweeps</h2>
+        </div>
+        <p className="empty">Loading…</p>
+      </section>
+    );
   }
   if (vaults.length === 0) {
     return (
-      <p className="empty">
-        No PrizeVault address set in addresses.ts (v1 and/or v2)
-      </p>
+      <section className="panel">
+        <div className="panel-head">
+          <h2>Sweeps</h2>
+        </div>
+        <p className="empty">No PrizeVault address set in addresses.ts (v1 and/or v2)</p>
+      </section>
     );
   }
   return (
-    <>
+    <section className="panel">
+      <div className="panel-head">
+        <h2>Sweeps</h2>
+        <button type="button" className="btn ghost" onClick={onRefresh} disabled={loading}>
+          {loading ? "Loading…" : "Refresh"}
+        </button>
+      </div>
+      <p className="section-note">
+        Timelocked full-balance sweeps per PrizeVault. Writes require the treasury wallet.
+      </p>
       {vaults.map((v) => (
         <VaultSweepSection
           key={v.config.key}
@@ -618,6 +641,6 @@ export function PrizeVaultSweeps({
           onRefresh={onRefresh}
         />
       ))}
-    </>
+    </section>
   );
 }

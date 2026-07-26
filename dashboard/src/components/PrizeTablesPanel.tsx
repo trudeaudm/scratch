@@ -374,9 +374,9 @@ export function PrizeTablesPanel({
   }, 0);
 
   return (
-    <section className="panel" style={{ marginTop: 20 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-        <h2 style={{ margin: 0 }}>Prize Tables</h2>
+    <section className="panel">
+      <div className="panel-head">
+        <h2>Prize Tables</h2>
         <div className="row" style={{ marginBottom: 0 }}>
           {([TIER_STANDARD, TIER_PREMIUM] as TierId[]).map((t) => (
             <button

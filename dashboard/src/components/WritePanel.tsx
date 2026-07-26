@@ -409,26 +409,27 @@ export function WritePanel({
 
   return (
     <section className="panel">
-      <h2>Write</h2>
-
-      <div className="row" style={{ marginBottom: 16 }}>
-        {isConnected ? (
-          <>
-            {address ? <CopyAddress address={address} /> : null}
-            <button type="button" className="btn secondary" onClick={() => disconnect()}>
-              Disconnect
+      <div className="panel-head">
+        <h2>Write</h2>
+        <div className="row" style={{ marginBottom: 0 }}>
+          {isConnected ? (
+            <>
+              {address ? <CopyAddress address={address} /> : null}
+              <button type="button" className="btn secondary" onClick={() => disconnect()}>
+                Disconnect
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              className="btn"
+              disabled={connecting}
+              onClick={() => connect({ connector: injected() })}
+            >
+              {connecting ? "Connecting…" : "Connect treasury wallet"}
             </button>
-          </>
-        ) : (
-          <button
-            type="button"
-            className="btn"
-            disabled={connecting}
-            onClick={() => connect({ connector: injected() })}
-          >
-            {connecting ? "Connecting…" : "Connect treasury wallet"}
-          </button>
-        )}
+          )}
+        </div>
       </div>
 
       {busy && (

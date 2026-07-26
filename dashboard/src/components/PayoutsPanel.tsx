@@ -143,7 +143,7 @@ export function PayoutsPanel() {
 
   return (
     <section className="panel">
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+      <div className="panel-head">
         <h2>Payouts</h2>
         <button type="button" className="btn ghost" onClick={() => void load()} disabled={loading}>
           {loading ? "Loading…" : "Refresh"}
