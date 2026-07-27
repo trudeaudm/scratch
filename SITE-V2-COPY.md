@@ -14,8 +14,14 @@ Suggested unlock params (match Deploy3 env defaults): **NORMAL 48h** (`172800`),
 
 | Where | v1 | v2 |
 |-------|----|----|
-| `site/index.html` `#minStakeRate` | `… · your share of **65%** of emissions · **no lockup**` | `… · your share of **65%** of emissions · timed unlock (48h / 120h)` |
-| `site/app.js` `renderMinStake` (~1297) | same dynamic HTML with `<b>no lockup</b>` | same, replace `<b>no lockup</b>` with `<b>timed unlock</b>` (or “48h / 120h unlock”) |
+| `site/index.html` `#minStakeRate` | Accrual + pro-rata emission copy · **no lockup** | Same accrual/emission copy · **timed unlock (48h / 120h)** |
+| `site/app.js` `refreshMinStake` | same dynamic HTML with `<b>no lockup</b>` | same, with live unlock hours from chain |
+
+Honest staking copy (both gens — do **not** hardcode “65% of emissions”):
+
+> Accrual starts at **{minStake}** $SCRATCH (~$ live) — smaller deposits are allowed (principal safe), they just don't earn yet. Pro-rata share of ~2,000 tickets/day by stake weight (your cut shrinks as total stake grows) · {lock copy}
+
+The ≈$ on `#minStakeRate` is live: `data-scratch-amount` × DexScreener `scratchUsd` via `fillUsdLive()`.
 
 ---
 

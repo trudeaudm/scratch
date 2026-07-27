@@ -3,7 +3,7 @@
  * Wire from index.html: <script type="module" src="./app.js?v=…"></script>
  * Bump ASSET_VERSION (and the index.html ?v=) on every site/ commit.
  */
-export const ASSET_VERSION = 'v2-live-4';
+export const ASSET_VERSION = 'v2-live-5';
 
 /**
  * Game generation flag. Production stays on v1 (StakingVault + ScratchGame) until
@@ -1761,7 +1761,8 @@ async function refreshMinStake() {
       const lockCopy = isV2()
         ? `<b>timed unlock (${unlockHoursLabel('normal')} / ${unlockHoursLabel('enhanced')})</b>`
         : '<b>no lockup</b>';
-      rate.innerHTML = `Stake at least <b id="minStakeAmount">${pretty}</b> $SCRATCH <span class="usd-live" data-scratch-amount="${human}"></span> · your share of <b>65%</b> of emissions · ${lockCopy}`;
+      // ≈$ comes from fillUsdLive() × live DexScreener scratchUsd (not hardcoded).
+      rate.innerHTML = `Accrual starts at <b id="minStakeAmount">${pretty}</b> $SCRATCH <span class="usd-live" data-scratch-amount="${human}"></span> — smaller deposits are allowed (principal safe), they just don't earn yet. Pro-rata share of ~2,000 tickets/day by stake weight (your cut shrinks as total stake grows) · ${lockCopy}`;
     }
 
     const live = $('minStakeLive');
@@ -2525,7 +2526,7 @@ function fillPctAmount(inputId, balance, pct) {
 }
 
 function belowMinStakeHint() {
-  return `Below minimum — stake at least ${minStakePretty()} SCRATCH to start earning tickets`;
+  return `Below earning threshold — stake at least ${minStakePretty()} SCRATCH to start accruing (smaller deposits are allowed)`;
 }
 
 function applyStakePctFill(pct) {
