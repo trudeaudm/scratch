@@ -3,7 +3,7 @@
  * Wire from index.html: <script type="module" src="./app.js?v=…"></script>
  * Bump ASSET_VERSION (and the index.html ?v=) on every site/ commit.
  */
-export const ASSET_VERSION = 'v2-live-3';
+export const ASSET_VERSION = 'v2-live-4';
 
 /**
  * Game generation flag. Production stays on v1 (StakingVault + ScratchGame) until
@@ -1640,23 +1640,67 @@ async function renderVaultInventory() {
   const el = $('vaultInventory');
   if (!el) return;
   try {
-    const [assets, balances] = await publicClient.readContract({
-      address: addr.prizeVault,
-      abi: ABI_PRIZE_VAULT,
-      functionName: 'inventory',
-    });
+    /**
+     * inventory() only lists assets that went through fund()/_track. Direct
+     * ERC-20 transfers (common for prize seeding) hold balance but are absent
+     * from that list — merge with balanceOf probes for tokens.json entries.
+     */
+    const byAddr = new Map();
+
+    try {
+      const [assets, balances] = await publicClient.readContract({
+        address: addr.prizeVault,
+        abi: ABI_PRIZE_VAULT,
+        functionName: 'inventory',
+      });
+      for (let i = 0; i < assets.length; i++) {
+        const asset = assets[i];
+        const bal = balances[i];
+        if (bal === 0n) continue;
+        byAddr.set(String(asset).toLowerCase(), { asset: getAddress(asset), bal });
+      }
+    } catch {
+      /* continue with known-token probes */
+    }
+
+    if (addr.prizeVault) {
+      await Promise.all(
+        Object.keys(KNOWN_TOKENS).map(async (key) => {
+          if (byAddr.has(key)) return;
+          const asset = getAddress(key);
+          try {
+            const bal = await publicClient.readContract({
+              address: addr.prizeVault,
+              abi: ABI_PRIZE_VAULT,
+              functionName: 'balanceOf',
+              args: [asset],
+            });
+            if (bal > 0n) byAddr.set(key, { asset, bal });
+          } catch {
+            /* skip token */
+          }
+        }),
+      );
+    }
+
     const items = [];
     const stocks = [];
-    for (let i = 0; i < assets.length; i++) {
-      const asset = assets[i];
-      const bal = balances[i];
-      if (bal === 0n) continue;
+    const rows = [...byAddr.values()].sort((a, b) => {
+      const sa = KNOWN_TOKENS[a.asset.toLowerCase()]?.symbol ?? a.asset;
+      const sb = KNOWN_TOKENS[b.asset.toLowerCase()]?.symbol ?? b.asset;
+      return String(sa).localeCompare(String(sb));
+    });
+    for (const { asset, bal } of rows) {
       const meta = await tokenMeta(asset);
       await ensureTokenPrice(asset);
       const human = Number(formatUnits(bal, meta.decimals));
       const px = unitUsd(asset);
       const usd = px != null ? formatApproxUsd(human * px) : '';
-      const line = `<div class="inv-row"><span class="inv-sym">${meta.symbol}</span><span class="inv-bal">${formatHuman(
+      const displaySym =
+        meta.kind === 'stock' && meta.ticker ? meta.ticker : meta.symbol;
+      const line = `<div class="inv-row"><span class="inv-sym">${escapeHtml(
+        displaySym,
+      )}</span><span class="inv-bal">${formatHuman(
         bal,
         meta.decimals,
       )} ${usd}</span></div>`;

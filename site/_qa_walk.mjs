@@ -60,7 +60,7 @@ assert(src.includes('readV1StakedLive'), 'v1 balance read live at click/send');
 assert(src.includes('ABI_STAKING_V1'), 'v1 staking ABI present');
 assert(src.includes('cancelV1LegacyWithdraw'), 'in-panel cancel for v1 withdraw');
 assert(html.includes('id="v1LegacyCancelBtn"'), 'v1 cancel button in HTML');
-assert(html.includes('app.js?v=v2-live-3') || /app\.js\?v=v2-live-3/.test(html), 'asset version bumped');
+assert(html.includes('app.js?v=v2-live-4') || /app\.js\?v=v2-live-4/.test(html), 'asset version bumped');
 assert(src.includes("ASSET_VERSION = 'v2-live-3'"), 'ASSET_VERSION matches index.html');
 {
   const fnStart = src.indexOf('async function doV1LegacyWithdrawAll');
