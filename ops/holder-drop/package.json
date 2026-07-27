@@ -7,6 +7,8 @@
   "scripts": {
     "drop": "node --use-system-ca src/run.js",
     "regrant-v1": "node --use-system-ca regrant-v1.js",
+    "snapshot-v1-stakers": "node --use-system-ca snapshot-v1-stakers.js",
+    "comp-grant": "node --use-system-ca comp-grant.js",
     "test": "node --test test/filter.test.js"
   },
   "engines": {
