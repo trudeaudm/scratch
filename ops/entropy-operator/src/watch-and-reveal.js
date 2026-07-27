@@ -136,6 +136,23 @@ function inferWssUrl(httpUrl) {
   return null;
 }
 
+/**
+ * If a reveal mined but our wait/nonce path missed it: request is no longer
+ * pending and epochCursor already equals the preimage we sent.
+ * @returns {Promise<boolean>}
+ */
+async function alreadyRevealedOnChain(contract, requestId, preimage) {
+  try {
+    const req = await contract.requests(requestId);
+    if (Boolean(req.pending ?? req[2])) return false;
+    const epoch = await contract.currentEpoch();
+    const cursor = String(await contract.epochCursor(epoch)).toLowerCase();
+    return cursor === String(preimage).toLowerCase();
+  } catch {
+    return false;
+  }
+}
+
 async function revealWithRetries(contract, requestId, preimage, maxRetries) {
   let lastErr;
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -148,7 +165,18 @@ async function revealWithRetries(contract, requestId, preimage, maxRetries) {
     } catch (err) {
       lastErr = err;
       const msg = err.shortMessage || err.message || String(err);
-      if (/NotOperator|bad address checksum|insufficient funds/i.test(msg + (err.data || ""))) {
+      const data = String(err.data || err.info?.error?.data || "");
+      // NotPending() = 0x7dc6505a — often a race: tx landed, local wait failed.
+      if (
+        /NotPending|0x7dc6505a/i.test(msg + data) &&
+        (await alreadyRevealedOnChain(contract, requestId, preimage))
+      ) {
+        console.warn(
+          `  reveal already on-chain for request ${requestId.toString()} (race recovery) — treating as success`,
+        );
+        return { blockNumber: null, raceRecovered: true };
+      }
+      if (/NotOperator|bad address checksum|insufficient funds/i.test(msg + data)) {
         throw err;
       }
       const delay = Math.min(30_000, 1000 * 2 ** (attempt - 1));
@@ -157,6 +185,20 @@ async function revealWithRetries(contract, requestId, preimage, maxRetries) {
     }
   }
   throw lastErr;
+}
+
+/**
+ * Walk secret → tip once; return index whose preimage hashes to cursor, or null.
+ * Same math as resync-index.mjs (cursor == H^k(secret) ⇒ index = k-1).
+ */
+function findIndexForCursor(secret, n, cursor) {
+  const want = String(cursor).toLowerCase();
+  let h = secret;
+  for (let k = 0; k <= Number(n); k++) {
+    if (h.toLowerCase() === want) return k - 1;
+    h = hashPacked(h);
+  }
+  return null;
 }
 
 /**
@@ -279,12 +321,27 @@ async function drainHeadReveals(ctx) {
       throw new Error("hash chain exhausted — register a new chain and regenerate state");
     }
 
-    const preimage = preimageAt(state.secret, state.nextRevealIndex);
+    let preimage = preimageAt(state.secret, state.nextRevealIndex);
     const cursor = await contract.epochCursor(currentEpoch);
     if (hashPacked(preimage) !== cursor) {
-      throw new Error(
-        `preimage at index ${state.nextRevealIndex} does not match on-chain cursor — state desync`,
+      // Common after a reveal race: on-chain advanced, nextRevealIndex did not.
+      const match = findIndexForCursor(state.secret, state.n, cursor);
+      if (match == null || match < 0) {
+        throw new Error(
+          `preimage at index ${state.nextRevealIndex} does not match on-chain cursor — state desync (no resync match)`,
+        );
+      }
+      console.warn(
+        `  state desync: local nextRevealIndex=${state.nextRevealIndex} → resync to ${match}`,
       );
+      state.nextRevealIndex = match;
+      saveState(chainFile, state);
+      preimage = preimageAt(state.secret, state.nextRevealIndex);
+      if (hashPacked(preimage) !== cursor) {
+        throw new Error(
+          `preimage at index ${state.nextRevealIndex} still mismatches cursor after resync`,
+        );
+      }
     }
 
     const key = requestId.toString();
@@ -311,7 +368,9 @@ async function drainHeadReveals(ctx) {
     const receipt = await revealWithRetries(contract, requestId, preimage, maxRetries);
 
     const confirmedAt = Date.now();
-    if (reqBlockTs != null) {
+    if (receipt?.raceRecovered) {
+      console.log(`  reveal latency: (race-recovered; no local receipt)`);
+    } else if (reqBlockTs != null) {
       const latencySec = ((confirmedAt - reqBlockTs) / 1000).toFixed(2);
       console.log(
         `  reveal latency: ${latencySec}s (request block ${reqBlockNumber} → confirm ${receipt.blockNumber})`,
