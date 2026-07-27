@@ -29,9 +29,10 @@ rehearsal/drill-logs-v2/
 rehearsal/*.log
 
 
-# SelfEntropy operator state (contains chain secret)
+# SelfEntropy operator state (contains chain secret — never commit)
 ops/entropy-operator/.env
-ops/entropy-operator/entropy-state.json
+ops/entropy-operator/entropy-state*.json
+ops/entropy-operator/entropy-state.json.*
 ops/entropy-operator/payout-ledger.csv
 ops/entropy-operator/ledger-errors.log
 ops/entropy-operator/node_modules/
