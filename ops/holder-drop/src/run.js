@@ -12,7 +12,7 @@
  *   - Crediter: credit(user, amount) — consumes caller's dailyCap; 7× balance ceiling
  */
 import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import dotenv from "dotenv";
 import { Contract, JsonRpcProvider, Wallet, formatUnits } from "ethers";
 import { buildExclusionSet, parseExcludeEnv } from "./exclusions.js";
@@ -21,6 +21,8 @@ import { filterEligibleHolders, takeWithinAllowance } from "./filter.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: resolve(__dirname, "..", ".env"), override: false });
+// Also accept repo-root .env when launched from the dashboard API.
+dotenv.config({ path: resolve(__dirname, "..", "..", "..", ".env"), override: false });
 
 const SOURCE_ABI = [
   "function credit(address user, uint256 amount)",
@@ -45,26 +47,36 @@ function remainingCrediterWei(cap, used, dayBucket, nowSec) {
   return cap > usedEffective ? cap - usedEffective : 0n;
 }
 
-async function main() {
+/**
+ * @param {{ live?: boolean, log?: (line: string) => void }} [opts]
+ * @returns {Promise<object>}
+ */
+export async function runHolderDrop(opts = {}) {
+  const log = opts.log || ((line) => console.log(line));
   const rpcUrl = process.env.RPC_URL;
   const pk = process.env.CREDITER_PRIVATE_KEY;
   const sourceAddr =
-    process.env.STANDARD_SOURCE || "0xC94894Cd3986E2D0f85616a0Dc59914f1057f003";
+    process.env.STANDARD_SOURCE || "0x6C7CC31d5eC5899c7f5019516cFA3629167B2fd8";
   const scratch =
     process.env.SCRATCH || "0xf5E5f4D3C34A14B2fDfD59584Fe555Cd5e21F196";
   const threshold = BigInt(process.env.THRESHOLD || "1000000000000000000000000");
   const ticketsEach = BigInt(process.env.TICKETS_EACH || "1000000000000000000");
-  const run = process.env.RUN === "true" || process.env.RUN === "1";
   const forceDry =
     process.env.DRY_RUN === "true" || process.env.DRY_RUN === "1";
-  const willSend = run && !forceDry;
+  // opts.live wins when set; otherwise honor RUN env (CLI).
+  const live =
+    opts.live === true
+      ? !forceDry
+      : opts.live === false
+        ? false
+        : (process.env.RUN === "true" || process.env.RUN === "1") && !forceDry;
 
   if (!rpcUrl) throw new Error("RPC_URL is required");
-  if (willSend && !pk) {
-    throw new Error("CREDITER_PRIVATE_KEY is required when RUN=true");
+  if (live && !pk) {
+    throw new Error("CREDITER_PRIVATE_KEY is required when running live");
   }
   if (process.env.GRANTER_PRIVATE_KEY) {
-    console.warn(
+    log(
       "WARN: GRANTER_PRIVATE_KEY is set but ignored — holder-drop uses CREDITER_PRIVATE_KEY + credit() only.",
     );
   }
@@ -73,7 +85,6 @@ async function main() {
   const provider = new JsonRpcProvider(rpcUrl);
   const source = new Contract(sourceAddr, SOURCE_ABI, provider);
 
-  // Resolve bot address: from key if present, else CREDITER_ADDRESS for dry-run without key.
   let botAddress = (process.env.CREDITER_ADDRESS || "").toLowerCase();
   let wallet = null;
   if (pk) {
@@ -81,50 +92,52 @@ async function main() {
     botAddress = wallet.address.toLowerCase();
   }
 
-  console.log("=== holder-drop (crediter path) ===");
-  console.log(`  scratch:       ${scratch}`);
-  console.log(`  source:        ${sourceAddr}`);
-  console.log(`  crediter:      ${botAddress || "(unset — cap check skipped)"}`);
-  console.log(`  threshold:     ${formatUnits(threshold, 18)} SCRATCH`);
-  console.log(`  ticketsEach:   ${formatUnits(ticketsEach, 18)}`);
-  console.log(`  mode:          ${willSend ? "LIVE RUN" : "DRY_RUN (no txs)"}`);
+  log("=== holder-drop (crediter path) ===");
+  log(`  scratch:       ${scratch}`);
+  log(`  source:        ${sourceAddr}`);
+  log(`  crediter:      ${botAddress || "(unset — cap check skipped)"}`);
+  log(`  threshold:     ${formatUnits(threshold, 18)} SCRATCH`);
+  log(`  ticketsEach:   ${formatUnits(ticketsEach, 18)}`);
+  log(`  mode:          ${live ? "LIVE RUN" : "DRY_RUN (no txs)"}`);
 
   let authorized = false;
   let remaining = 0n;
+  let dailyCap = 0n;
+  let usedToday = 0n;
   const owner = await source.owner();
-  console.log(`  source.owner:  ${owner}`);
+  log(`  source.owner:  ${owner}`);
 
   if (botAddress && /^0x[a-f0-9]{40}$/.test(botAddress)) {
     const c = await source.crediters(botAddress);
     authorized = c.authorized === true || c[0] === true;
-    const dailyCap = c.dailyCap ?? c[1];
-    const usedToday = c.usedToday ?? c[2];
+    dailyCap = c.dailyCap ?? c[1];
+    usedToday = c.usedToday ?? c[2];
     const dayBucket = c.dayBucket ?? c[3];
-    console.log(`  authorized:    ${authorized}`);
-    console.log(
+    log(`  authorized:    ${authorized}`);
+    log(
       `  crediterCap:   ${authorized ? formatUnits(dailyCap, 18) : "(not added yet)"}`,
     );
     if (!authorized) {
-      console.log(
+      log(
         "Crediter not authorized on-chain yet — dry-run will still list recipients.\n" +
           "  Treasury must call addCrediter(bot, 200e18) once (see README).",
       );
     } else {
       const block = await provider.getBlock("latest");
       remaining = remainingCrediterWei(dailyCap, usedToday, dayBucket, block.timestamp);
-      console.log(`  remainingToday:${formatUnits(remaining, 18)} ticket-wei`);
+      log(`  remainingToday:${formatUnits(remaining, 18)} ticket-wei`);
     }
-  } else if (willSend) {
-    throw new Error("CREDITER_PRIVATE_KEY is required when RUN=true");
+  } else if (live) {
+    throw new Error("CREDITER_PRIVATE_KEY is required when running live");
   } else {
-    console.log(
+    log(
       "  authorized:    (skipped — set CREDITER_ADDRESS or CREDITER_PRIVATE_KEY to resolve crediters())",
     );
   }
 
-  console.log("fetching holders from Blockscout…");
+  log("fetching holders from Blockscout…");
   const holders = await fetchAllHolders(scratch);
-  console.log(`  raw holders:   ${holders.length}`);
+  log(`  raw holders:   ${holders.length}`);
 
   const filtered = await filterEligibleHolders(holders, {
     threshold,
@@ -132,32 +145,65 @@ async function main() {
     isContract: (addr) => isContractAddress(provider, addr),
   });
 
-  // If not yet authorized, show full eligible list (cap unknown); live runs use remaining.
-  const allowance = authorized ? remaining : BigInt(filtered.eligible.length) * ticketsEach;
+  const allowance = authorized
+    ? remaining
+    : BigInt(filtered.eligible.length) * ticketsEach;
   const { recipients, skippedOverCap } = takeWithinAllowance(
     filtered.eligible,
     allowance,
     ticketsEach,
   );
 
-  console.log("--- filter ---");
-  console.log(`  eligible EOAs: ${filtered.eligible.length}`);
-  console.log(`  excluded list: ${filtered.excludedListed}`);
-  console.log(`  excluded contracts: ${filtered.excludedContracts}`);
-  console.log(`  below threshold: ${filtered.belowThreshold}`);
-  console.log(`  skipped over cap: ${skippedOverCap}`);
-  console.log(`  will credit:   ${recipients.length}`);
+  log("--- filter ---");
+  log(`  eligible EOAs: ${filtered.eligible.length}`);
+  log(`  excluded list: ${filtered.excludedListed}`);
+  log(`  excluded contracts: ${filtered.excludedContracts}`);
+  log(`  below threshold: ${filtered.belowThreshold}`);
+  log(`  skipped over cap: ${skippedOverCap}`);
+  log(`  will credit:   ${recipients.length}`);
 
-  console.log("--- recipients (balance-desc) ---");
+  log("--- recipients (balance-desc) ---");
   for (const r of recipients) {
-    console.log(`  ${r.address}  ${formatUnits(r.balance, 18)} SCRATCH`);
+    log(`  ${r.address}  ${formatUnits(r.balance, 18)} SCRATCH`);
   }
 
-  if (!willSend) {
-    console.log(
+  const preview = {
+    mode: live ? "live" : "dry_run",
+    scratch,
+    source: sourceAddr,
+    crediter: botAddress || null,
+    owner,
+    authorized,
+    threshold: threshold.toString(),
+    thresholdHuman: formatUnits(threshold, 18),
+    ticketsEach: ticketsEach.toString(),
+    ticketsEachHuman: formatUnits(ticketsEach, 18),
+    dailyCap: authorized ? dailyCap.toString() : null,
+    dailyCapHuman: authorized ? formatUnits(dailyCap, 18) : null,
+    usedToday: authorized ? usedToday.toString() : null,
+    remainingToday: authorized ? remaining.toString() : null,
+    remainingTodayHuman: authorized ? formatUnits(remaining, 18) : null,
+    rawHolders: holders.length,
+    eligible: filtered.eligible.length,
+    excludedListed: filtered.excludedListed,
+    excludedContracts: filtered.excludedContracts,
+    belowThreshold: filtered.belowThreshold,
+    skippedOverCap,
+    willCredit: recipients.length,
+    recipients: recipients.map((r) => ({
+      address: r.address,
+      balance: r.balance.toString(),
+      balanceHuman: formatUnits(r.balance, 18),
+    })),
+    credited: 0,
+    txHashes: [],
+  };
+
+  if (!live) {
+    log(
       "DRY_RUN complete — set RUN=true with CREDITER_PRIVATE_KEY after addCrediter to broadcast.",
     );
-    return;
+    return preview;
   }
 
   if (!authorized) {
@@ -166,8 +212,8 @@ async function main() {
     );
   }
   if (recipients.length === 0) {
-    console.log("nothing to credit");
-    return;
+    log("nothing to credit");
+    return preview;
   }
 
   const writable = source.connect(wallet);
@@ -176,20 +222,22 @@ async function main() {
 
   for (let i = 0; i < recipients.length; i++) {
     const user = recipients[i].address;
-    console.log(`credit ${i + 1}/${recipients.length} ${user}…`);
+    log(`credit ${i + 1}/${recipients.length} ${user}…`);
     const tx = await writable.credit(user, ticketsEach);
-    console.log(`  submitted ${tx.hash}`);
+    log(`  submitted ${tx.hash}`);
     const receipt = await tx.wait();
     if (!receipt || receipt.status !== 1) {
       throw new Error(`credit failed user=${user} tx=${tx.hash}`);
     }
     txHashes.push(tx.hash);
     credited++;
-    console.log(`  confirmed block=${receipt.blockNumber}`);
+    log(`  confirmed block=${receipt.blockNumber}`);
   }
 
-  console.log("--- summary ---");
-  console.log(
+  preview.credited = credited;
+  preview.txHashes = txHashes;
+  log("--- summary ---");
+  log(
     JSON.stringify(
       {
         eligible: filtered.eligible.length,
@@ -203,9 +251,26 @@ async function main() {
       2,
     ),
   );
+  return preview;
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+async function main() {
+  const run = process.env.RUN === "true" || process.env.RUN === "1";
+  const forceDry =
+    process.env.DRY_RUN === "true" || process.env.DRY_RUN === "1";
+  const result = await runHolderDrop({ live: run && !forceDry });
+  if (process.env.DROP_JSON === "1" || process.env.DROP_JSON === "true") {
+    console.log("DROP_JSON_RESULT=" + JSON.stringify(result));
+  }
+}
+
+const isCli =
+  Boolean(process.argv[1]) &&
+  import.meta.url === pathToFileURL(resolve(process.argv[1])).href;
+
+if (isCli) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
