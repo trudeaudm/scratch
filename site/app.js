@@ -3,7 +3,7 @@
  * Wire from index.html: <script type="module" src="./app.js?v=…"></script>
  * Bump ASSET_VERSION (and the index.html ?v=) on every site/ commit.
  */
-export const ASSET_VERSION = 'v2-live-6';
+export const ASSET_VERSION = 'v2-live-7';
 
 /**
  * Game generation flag. Production stays on v1 (StakingVault + ScratchGame) until
@@ -914,6 +914,8 @@ const state = {
   walletClient: null,
   tier: 'std', // 'std' | 'prem'
   view: 'cards', // 'cards' (game stage) | 'stake' (staking panel)
+  /** Last batch size for "Scratch again" after a multi session. */
+  lastBatchCount: 0,
   currentWin: false,
   /** @type {{ requestId: string, txHash: string|null, sharePrize: string, cardPrize: string, tierKey: string }|null} */
   lastWin: null,
@@ -1047,6 +1049,7 @@ const ACTION = {
   MULTI_OPEN: 'MULTI_OPEN',
   MULTI_CLOSE_PICKER: 'MULTI_CLOSE_PICKER',
   MULTI_START: 'MULTI_START',
+  MULTI_AGAIN: 'MULTI_AGAIN',
   MULTI_DONE: 'MULTI_DONE',
 };
 
@@ -1079,6 +1082,9 @@ async function sessionDispatch(action, payload = {}) {
       break;
     case ACTION.MULTI_START:
       await dispatchMultiStart(payload.count);
+      break;
+    case ACTION.MULTI_AGAIN:
+      await dispatchMultiAgain();
       break;
     case ACTION.MULTI_DONE:
       dispatchMultiDone();
@@ -1171,14 +1177,14 @@ function dispatchDisconnect() {
 }
 
 async function dispatchMultiOpen() {
-  if (state.mode !== 'live') return;
   if (sessionPhase() !== PHASE.IDLE) return;
-  if (activeTierTickets() < 2) return;
+  if (activeTierTickets() < 1) return;
   const picker = $('multiPicker');
   picker?.classList.add('show');
   syncMultiPickerCap();
   await refreshWalletBatchCapability();
   applyMultiPickerSigningMode();
+  $('multiCountInput')?.focus();
 }
 
 function dispatchMultiClosePicker() {
@@ -1187,12 +1193,31 @@ function dispatchMultiClosePicker() {
 }
 
 async function dispatchMultiStart(count) {
-  if (state.mode !== 'live') return;
   if (sessionPhase() !== PHASE.IDLE) return;
   const n = clampMultiCount(count);
-  if (n < 2) return;
+  if (n < 1) return;
+  state.lastBatchCount = n;
   dispatchMultiClosePicker();
+  if (n === 1) {
+    await startLiveScratch();
+    return;
+  }
   await startMultiScratch(n);
+}
+
+async function dispatchMultiAgain() {
+  if (!isMultiSession()) return;
+  const cards = state.session.multi?.cards || [];
+  if (!cards.every((c) => c.phase === PHASE.REVEALED || c.phase === 'rescued')) return;
+  const want = Math.max(1, state.lastBatchCount || cards.length || 1);
+  const left = activeTierTickets();
+  const n = Math.min(want, left);
+  if (n < 1) return;
+  resetSessionToIdle({ keepNote: true });
+  scrollToStageTop();
+  state.lastBatchCount = n;
+  if (n === 1) await startLiveScratch();
+  else await startMultiScratch(n);
 }
 
 function dispatchMultiDone() {
@@ -1200,6 +1225,16 @@ function dispatchMultiDone() {
   const cards = state.session.multi?.cards || [];
   if (!cards.every((c) => c.phase === PHASE.REVEALED || c.phase === 'rescued')) return;
   resetSessionToIdle();
+  scrollToHeroTop();
+}
+
+function scrollToStageTop() {
+  $('stage')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function scrollToHeroTop() {
+  const hero = document.getElementById('scratch') || $('hero-card');
+  (hero || document.body)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 /** Sync every scratch control from the single session phase + ticket counts. */
@@ -2082,34 +2117,8 @@ function isDemo() {
 }
 
 function setMode(mode) {
-  const next = mode === 'demo' ? 'demo' : 'live';
-  if (next === 'demo' && stageBusy()) {
-    // Drop in-flight live session before entering demo
-    resetSessionToIdle({ keepNote: true });
-    setSessionNote('Switched to demo — live draw cancelled on this screen only (check chain if a tx already confirmed).');
-  }
-  state.mode = next;
-  if (next === 'demo') state.view = 'cards';
-  const note = $('demoNote');
-  if (note) {
-    if (state.mode === 'demo') {
-      note.hidden = false;
-      note.style.display = '';
-      note.innerHTML =
-        '<b>Demo mode</b> — try the scratch UX without a wallet. Tickets and prizes here are local. Switch back to live to use real tickets.';
-    } else {
-      note.hidden = true;
-      note.style.display = 'none';
-    }
-  }
-  const btn = $('playModeDemo');
-  if (btn) {
-    btn.textContent = state.mode === 'demo' ? 'Back to live' : 'Try the demo';
-  }
-  const again = $('againBtn');
-  if (again) {
-    again.style.display = state.mode === 'demo' ? '' : 'none';
-  }
+  // Demo mode removed from the live site — force live.
+  state.mode = 'live';
   renderTier();
   updateScratchButtons();
 }
@@ -4108,19 +4117,24 @@ function multiBatchCap() {
 
 function syncMultiPickerCap() {
   const cap = multiBatchCap();
+  const hardMax = MULTI_MAX_BATCH;
   const input = $('multiCountInput');
   if (input) {
-    input.max = String(Math.max(2, cap));
-    input.min = '2';
-    let v = clampMultiCount(input.value || 3);
-    if (v < 2 && cap >= 2) v = Math.min(3, cap);
-    if (v >= 2) input.value = String(v);
+    input.max = String(Math.max(1, Math.min(hardMax, Math.max(cap, 1))));
+    input.min = '1';
+    let v = clampMultiCount(input.value || Math.min(5, Math.max(1, cap)));
+    if (v < 1 && cap >= 1) v = Math.min(5, cap);
+    if (v >= 1) input.value = String(v);
   }
-  $('multiChips')?.querySelectorAll('button[data-n]').forEach((btn) => {
-    const n = Number(btn.dataset.n);
-    btn.disabled = n > cap || cap < 2;
-    btn.classList.toggle('active', input && Number(input.value) === n && n <= cap);
-  });
+  const capLabel = $('multiCapLabel');
+  if (capLabel) capLabel.textContent = String(hardMax);
+  const note = $('multiCapNote');
+  if (note) {
+    note.textContent =
+      cap > 0
+        ? `you have ${cap} · up to ${hardMax} per batch`
+        : `up to ${hardMax} per batch`;
+  }
   applyMultiPickerSigningMode();
 }
 
@@ -4134,67 +4148,58 @@ async function refreshWalletBatchCapability() {
   return ok;
 }
 
-/** Picker + entry button copy when wallet must approve each ticket. */
+/** Picker + go-button copy when wallet must approve each ticket. */
 function applyMultiPickerSigningMode() {
   // v2 always does a single scratchMany confirm — no per-ticket approvals.
   if (isV2()) {
     $('multiFallbackNote')?.classList.remove('show');
-    const n = clampMultiCount($('multiCountInput')?.value || 3) || multiBatchCap();
+    const n = clampMultiCount($('multiCountInput')?.value || 1) || multiBatchCap();
     const goBtn = $('multiGoBtn');
-    if (goBtn) goBtn.textContent = n >= 2 ? `Scratch ${n} · one reveal` : 'Scratch';
-    for (const id of ['multiScratchOpen', 'scratchBtnMulti']) {
-      const b = $(id);
-      if (b) {
-        b.classList.remove('one-by-one');
-        b.textContent = 'Scratch multiple';
-      }
+    if (goBtn) {
+      if (n <= 1) goBtn.textContent = 'Scratch 1';
+      else goBtn.textContent = `Scratch ${n} · one reveal`;
     }
     return;
   }
   const sequential = state.walletSupportsBatch === false;
   const note = $('multiFallbackNote');
   note?.classList.toggle('show', sequential);
-  const n = clampMultiCount($('multiCountInput')?.value || 3) || multiBatchCap();
+  const n = clampMultiCount($('multiCountInput')?.value || 1) || multiBatchCap();
   const go = $('multiGoBtn');
   if (go) {
     if (sequential && n >= 2) {
       go.textContent = `Scratch · ${n} wallet approvals`;
+    } else if (n >= 1) {
+      go.textContent = `Scratch ${n}`;
     } else {
       go.textContent = 'Scratch';
     }
-  }
-  const openBtn = $('multiScratchOpen');
-  if (openBtn) {
-    openBtn.classList.toggle('one-by-one', sequential);
-    openBtn.textContent = sequential
-      ? 'Scratch multiple (one-by-one)'
-      : 'Scratch multiple';
-  }
-  const walletMulti = $('scratchBtnMulti');
-  if (walletMulti && !walletMulti.hidden) {
-    walletMulti.textContent = sequential
-      ? 'Scratch multiple (one-by-one)'
-      : 'Scratch multiple';
   }
 }
 
 function updateMultiEntryVisibility() {
   const entry = $('multiEntry');
-  const walletMulti = $('scratchBtnMulti');
-  const live = state.mode === 'live';
   const idle = sessionPhase() === PHASE.IDLE;
-  const show = live && idle && !!state.account && activeTierTickets() >= 2;
+  const show = idle;
   entry?.classList.toggle('show', show);
-  if (walletMulti) {
-    walletMulti.hidden = !show;
-    walletMulti.disabled = !show;
+  const n = activeTierTickets();
+  const can = !!state.account && n >= 1;
+  for (const id of ['scratchOneBtn', 'scratchMaxBtn', 'scratchXBtn']) {
+    const b = $(id);
+    if (b) b.disabled = !can;
+  }
+  const maxBtn = $('scratchMaxBtn');
+  if (maxBtn && can) {
+    const cap = multiBatchCap();
+    maxBtn.textContent = cap > 0 ? `Scratch max (${cap})` : 'Scratch max';
+  } else if (maxBtn) {
+    maxBtn.textContent = 'Scratch max';
   }
   if (!show) {
     $('multiPicker')?.classList.remove('show');
     $('multiFallbackNote')?.classList.remove('show');
-  } else {
+  } else if (can) {
     syncMultiPickerCap();
-    // Refresh capability in background so the open button label stays honest.
     if (state.walletSupportsBatch == null) {
       void refreshWalletBatchCapability().then(() => applyMultiPickerSigningMode());
     } else {
@@ -4460,10 +4465,17 @@ function updateMultiSummary() {
   $('multiDoneRow')?.classList.toggle('show', allDone);
   if (allDone) {
     const left = spendableOnTier(state.session.tierKey || state.tier);
-    const btn = $('multiDoneBtn');
-    if (btn) {
-      btn.textContent =
-        left >= 1 ? `Scratch another (${left} left)` : 'Done';
+    const again = $('multiAgainBtn');
+    if (again) {
+      const want = Math.max(1, state.lastBatchCount || cards.length || 1);
+      const next = Math.min(want, left);
+      again.disabled = next < 1;
+      again.textContent =
+        next < 1
+          ? 'Scratch again'
+          : next === want
+            ? `Scratch again (${next})`
+            : `Scratch again (${next} left)`;
     }
     setText($('prompt'), 'Batch complete');
   }
@@ -5369,6 +5381,7 @@ async function startMultiScratch(count) {
   }
 
   enterMultiBoardUI(tier, tierKey, n);
+  state.lastBatchCount = n;
 
   // v2: one on-chain call (scratchMany) → one requestId → one reveal for the whole board.
   if (isV2()) {
@@ -6408,11 +6421,16 @@ function applyGenerationUi() {
   const capNote = $('multiCapNote');
   if (capNote) {
     capNote.textContent = v2
-      ? '20 cards, one reveal, scratch at your pace'
-      : 'max 10 per batch';
+      ? `up to ${MULTI_MAX_BATCH} per batch`
+      : `up to ${MULTI_MAX_BATCH} per batch`;
   }
+  const capLabel = $('multiCapLabel');
+  if (capLabel) capLabel.textContent = String(MULTI_MAX_BATCH);
   const input = $('multiCountInput');
-  if (input) input.max = String(MULTI_MAX_BATCH);
+  if (input) {
+    input.max = String(MULTI_MAX_BATCH);
+    input.min = '1';
+  }
 
   updateStakedTicketsTip();
 
@@ -6449,25 +6467,8 @@ function wireUi() {
     card.addEventListener('click', () => sessionDispatch(ACTION.PICK_CARD));
   });
 
-  $('againBtn')?.addEventListener('click', () => {
-    if (state.mode !== 'demo') return;
-    state.demoTickets[state.tier] = (state.demoTickets[state.tier] || 0) + 1;
-    saveDemoTickets();
-    renderTier();
-    resetScratch();
-  });
-
   $('claimBtn')?.addEventListener('click', function () {
-    if (state.mode === 'live') {
-      sessionDispatch(ACTION.SCRATCH_ANOTHER);
-      return;
-    }
-    this.textContent = 'Claimed ✓';
-    this.disabled = true;
-    setTimeout(() => {
-      this.textContent = 'Claim reward';
-      this.disabled = false;
-    }, 2600);
+    sessionDispatch(ACTION.SCRATCH_ANOTHER);
   });
 
   $('shareXBtn')?.addEventListener('click', () => shareWinOnX());
@@ -6483,11 +6484,6 @@ function wireUi() {
       else connectWallet();
     });
   }
-
-  $('playModeDemo')?.addEventListener('click', (e) => {
-    e.preventDefault();
-    setMode(state.mode === 'demo' ? 'live' : 'demo');
-  });
 
   $('stakeBtn')?.addEventListener('click', doStake);
   $('stakeBtnPath')?.addEventListener('click', () => {
@@ -6547,9 +6543,15 @@ function wireUi() {
     sessionDispatch(ACTION.QUICK_SCRATCH, { tierKey: 'prem' });
   });
 
-  const openMulti = () => sessionDispatch(ACTION.MULTI_OPEN);
-  $('multiScratchOpen')?.addEventListener('click', openMulti);
-  $('scratchBtnMulti')?.addEventListener('click', openMulti);
+  $('scratchOneBtn')?.addEventListener('click', () => {
+    sessionDispatch(ACTION.MULTI_START, { count: 1 });
+  });
+  $('scratchMaxBtn')?.addEventListener('click', () => {
+    sessionDispatch(ACTION.MULTI_START, { count: multiBatchCap() });
+  });
+  $('scratchXBtn')?.addEventListener('click', () => {
+    sessionDispatch(ACTION.MULTI_OPEN);
+  });
   $('multiCancelBtn')?.addEventListener('click', () => {
     sessionDispatch(ACTION.MULTI_CLOSE_PICKER);
   });
@@ -6557,15 +6559,11 @@ function wireUi() {
     const n = clampMultiCount($('multiCountInput')?.value);
     sessionDispatch(ACTION.MULTI_START, { count: n });
   });
+  $('multiAgainBtn')?.addEventListener('click', () => {
+    sessionDispatch(ACTION.MULTI_AGAIN);
+  });
   $('multiDoneBtn')?.addEventListener('click', () => {
     sessionDispatch(ACTION.MULTI_DONE);
-  });
-  $('multiChips')?.addEventListener('click', (e) => {
-    const btn = e.target.closest('button[data-n]');
-    if (!btn || btn.disabled) return;
-    const input = $('multiCountInput');
-    if (input) input.value = btn.dataset.n;
-    syncMultiPickerCap();
   });
   $('multiCountInput')?.addEventListener('input', () => {
     syncMultiPickerCap();
@@ -6574,7 +6572,7 @@ function wireUi() {
     const input = $('multiCountInput');
     if (!input) return;
     const n = clampMultiCount(input.value);
-    if (n >= 2) input.value = String(n);
+    if (n >= 1) input.value = String(n);
     syncMultiPickerCap();
   });
 
@@ -6684,10 +6682,7 @@ async function init() {
   wireCanvas();
   wireUi();
   applyGenerationUi();
-  setMode('live');
-  // Hide again button in live by default
-  const again = $('againBtn');
-  if (again) again.style.display = 'none';
+  state.mode = 'live';
   renderTier();
   refreshPublic().then(() => rehydratePendingSession());
   state.refreshTimer = setInterval(refreshPublic, CONFIG.refreshMs);

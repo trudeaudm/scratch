@@ -269,8 +269,6 @@
     border:1px solid var(--line);font-size:13px;line-height:1.55;color:var(--muted);
   }
   .fairness b{color:var(--ink)}
-  .mode-bar{display:flex;justify-content:center;gap:10px;margin-top:14px;flex-wrap:wrap}
-
   header{
     text-align:center;padding:clamp(36px,5vw,64px) clamp(16px,4vw,40px) clamp(40px,6vw,72px);
     background:var(--green);
@@ -333,10 +331,6 @@
     text-transform:uppercase;border-radius:100px;padding:4px 11px;margin-left:10px;vertical-align:2px;
     background:#FFF4D6;color:#8A6E12;border:1px solid #EAD37E;
   }
-  .demo-note{
-    font-size:12px;font-weight:600;color:var(--muted);margin-top:10px;
-  }
-  .demo-note b{color:var(--green-dark)}
   .alloc-bar{display:flex;height:14px;border-radius:100px;overflow:hidden;margin:18px 0 10px}
   .alloc-bar i{display:block;height:100%}
   .alloc-legend{display:flex;flex-wrap:wrap;gap:14px;font-size:12.5px;color:var(--muted)}
@@ -346,9 +340,9 @@
   .param b{color:var(--green-dark)}
 
   /* game stage — period-accurate dark panel (the old app, embedded as an artifact) */
-  .stage{max-width:720px;margin:34px auto 0;min-height:500px;position:relative;
+  .stage{max-width:820px;margin:34px auto 0;min-height:500px;position:relative;width:100%;
     background:#0B1015;border-radius:26px;padding:34px 18px 30px;
-    box-shadow:inset 0 0 0 1px #1B242C, 0 24px 60px -30px rgba(11,14,12,.5)}
+    box-shadow:inset 0 0 0 1px #1B242C, 0 24px 60px -30px rgba(11,14,12,.5);box-sizing:border-box}
   .stage-prompt{font-size:13px;font-weight:600;color:#9FB4A8;margin-bottom:24px;letter-spacing:.04em}
 
   .fan{display:flex;justify-content:center;align-items:flex-end;gap:clamp(16px,3.5vw,34px);padding:10px 0 6px;perspective:900px;transition:opacity .3s ease}
@@ -387,32 +381,30 @@
   .fan.picked .card:nth-child(2){transition-delay:.06s}
   .fan.picked .card:nth-child(3){transition-delay:.12s}
   .fan.locked{opacity:.35;pointer-events:none;filter:grayscale(1)}
-  .stage.multi-active{max-width:min(920px,96vw);min-height:auto;padding-bottom:36px}
-  .stage.multi-active .fan,.stage.multi-active #panel{display:none!important}
+  .stage.multi-active{max-width:820px;min-height:auto;padding-bottom:36px}
+  .stage.multi-active .fan,.stage.multi-active #panel,.stage.multi-active #multiEntry{display:none!important}
 
   .multi-entry{
-    display:none;margin:0 auto 18px;max-width:420px;text-align:center;
+    display:none;margin:0 auto 18px;max-width:560px;text-align:center;
   }
   .multi-entry.show{display:block}
-  .multi-entry > .btn{
-    min-height:40px;color:#E8EDF0;border-color:#3A4A55;background:transparent;
+  .scratch-actions{display:flex;flex-wrap:wrap;justify-content:center;gap:8px}
+  .scratch-actions .btn{
+    flex:1 1 140px;min-height:44px;color:#E8EDF0;border-color:#3A4A55;background:transparent;
   }
-  .multi-entry > .btn:hover{color:#fff;border-color:#21CE99;background:transparent}
+  .scratch-actions .btn:hover{color:#fff;border-color:#21CE99;background:transparent}
+  .scratch-actions .btn:disabled{opacity:.4;cursor:not-allowed;transform:none;color:#8FA3B0;border-color:#2A3640}
+  .scratch-actions .btn.primary-scratch{
+    background:#21CE99;color:#0B1015;border-color:#21CE99;
+  }
+  .scratch-actions .btn.primary-scratch:hover{background:#1BB786;border-color:#1BB786;color:#0B1015}
+  .scratch-actions .btn.primary-scratch:disabled{background:#1A2A24;color:#5A7068;border-color:#1A2A24}
   .multi-picker{
     display:none;margin-top:12px;padding:14px 14px 12px;background:#131A21;border-radius:14px;
     border:1px solid #22303A;text-align:left;
   }
   .multi-picker.show{display:block}
   .multi-picker-label{font-size:12px;font-weight:600;color:#8FA3B0;margin-bottom:10px;letter-spacing:.03em}
-  .multi-chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}
-  .multi-chips button{
-    min-width:44px;min-height:40px;padding:0 14px;border-radius:10px;cursor:pointer;
-    font-family:'Inter';font-size:14px;font-weight:700;border:1.5px solid #2A3640;
-    background:#0B1015;color:#E8EDF0;
-  }
-  .multi-chips button:hover{border-color:#21CE99}
-  .multi-chips button.active{border-color:#21CE99;background:#15241F;color:#21CE99}
-  .multi-chips button:disabled{opacity:.35;cursor:not-allowed}
   .multi-count-row{display:flex;flex-wrap:wrap;align-items:center;gap:10px}
   .multi-count-row input{
     width:72px;min-height:40px;border-radius:10px;border:1.5px solid #2A3640;
@@ -433,8 +425,6 @@
     display:block;font-size:13px;font-weight:700;color:#F2E6B8;margin-bottom:4px;
     letter-spacing:.02em;
   }
-  .multi-entry > .btn.one-by-one{border-color:#5A4A1E;color:#E8D9A0}
-  .multi-entry > .btn.one-by-one:hover{border-color:#C9A227;color:#F2E6B8}
   .multi-seq-banner{
     display:none;margin:0 auto 14px;max-width:520px;padding:12px 14px;border-radius:12px;
     background:#2A2414;border:1px solid #5A4A1E;text-align:center;
@@ -496,9 +486,15 @@
   }
   .multi-card.ready-pop{animation:foilReadyPop .38s cubic-bezier(.34,1.56,.64,1)}
   .multi-done-row{display:none;margin-top:18px;text-align:center}
-  .multi-done-row.show{display:block}
-  .multi-done-row .btn{min-height:44px;min-width:200px;background:#21CE99;color:#0B1015}
-  .multi-done-row .btn:hover{background:#1BB786}
+  .multi-done-row.show{display:flex;flex-wrap:wrap;justify-content:center;gap:10px}
+  .multi-done-row .btn{min-height:44px;min-width:140px;flex:1 1 160px;max-width:240px}
+  .multi-done-row .btn.again-batch{background:#21CE99;color:#0B1015;border:none}
+  .multi-done-row .btn.again-batch:hover{background:#1BB786}
+  .multi-done-row .btn.again-batch:disabled{opacity:.4;cursor:not-allowed;background:#1A2A24;color:#5A7068}
+  .multi-done-row .btn.done-batch{
+    background:transparent;color:#E8EDF0;border:1.5px solid #3A4A55;
+  }
+  .multi-done-row .btn.done-batch:hover{border-color:#21CE99;color:#fff}
   .multi-progress{
     display:none;text-align:center;font-size:13px;font-weight:600;color:#B8A46A;
     margin:8px 0 14px;
@@ -895,10 +891,6 @@
     <button class="tier-tab premium" id="tabPrem" role="tab" aria-selected="false"><span class="star">★</span> Premium cards <span class="count" id="cntPrem">0</span></button>
     <button class="tier-tab stake" id="tabStake" role="tab" aria-selected="false">Stake $SCRATCH</button>
   </div>
-  <div class="mode-bar">
-    <button type="button" class="btn ghost sm" id="playModeDemo">Try the demo</button>
-  </div>
-  <div class="demo-note" id="demoNote" hidden></div>
   <div class="tier-note" id="tierNote">Connect a wallet to see your live tickets · odds below are read from the game contract</div>
 
   <!-- v2 only: shown when the connected wallet still has principal on the retired v1 vault -->
@@ -1031,18 +1023,16 @@
     <div class="stage-prompt" id="prompt">Choose your free scratch</div>
 
     <div class="multi-entry" id="multiEntry">
-      <button type="button" class="btn ghost sm" id="multiScratchOpen">Scratch multiple</button>
+      <div class="scratch-actions" id="scratchActions">
+        <button type="button" class="btn sm primary-scratch" id="scratchOneBtn">Scratch</button>
+        <button type="button" class="btn ghost sm" id="scratchMaxBtn">Scratch max</button>
+        <button type="button" class="btn ghost sm" id="scratchXBtn">Scratch X</button>
+      </div>
       <div class="multi-picker" id="multiPicker">
-        <div class="multi-picker-label">How many tickets?</div>
-        <div class="multi-chips" id="multiChips" role="group" aria-label="Batch size presets">
-          <button type="button" data-n="3">3</button>
-          <button type="button" data-n="5">5</button>
-          <button type="button" data-n="10">10</button>
-          <button type="button" data-n="20" class="gen-v2-only" hidden>20</button>
-        </div>
+        <div class="multi-picker-label">How many tickets? (max <span id="multiCapLabel">20</span>)</div>
         <div class="multi-count-row">
-          <input type="number" id="multiCountInput" inputmode="numeric" min="2" max="10" value="3" aria-label="Number of tickets">
-          <span class="multi-cap-note" id="multiCapNote">max 10 per batch</span>
+          <input type="number" id="multiCountInput" inputmode="numeric" min="1" max="20" value="5" aria-label="Number of tickets">
+          <span class="multi-cap-note" id="multiCapNote">up to 20 per batch</span>
         </div>
         <div class="multi-fallback-note" id="multiFallbackNote" role="status">
           <strong>One approval per ticket</strong>
@@ -1067,7 +1057,8 @@
       <div class="multi-summary" id="multiSummary" aria-live="polite"></div>
       <div class="multi-grid" id="multiGrid"></div>
       <div class="multi-done-row" id="multiDoneRow">
-        <button type="button" class="btn" id="multiDoneBtn">Scratch another</button>
+        <button type="button" class="btn again-batch" id="multiAgainBtn">Scratch again</button>
+        <button type="button" class="btn done-batch" id="multiDoneBtn">Done</button>
       </div>
     </div>
 
@@ -1096,7 +1087,6 @@
         </div>
         <div class="sc-foot">
           <div class="sc-timer" id="scTimer" hidden></div>
-          <button class="again" id="againBtn" style="display:none">Demo: reset</button>
         </div>
         <p class="session-reassure" id="sessionReassure">Reveals usually land in seconds — your ticket is safe either way.</p>
         <div class="claim-row" id="claimRow">
@@ -1298,6 +1288,6 @@
 <div class="toast-host" id="toastHost" aria-live="polite" aria-relevant="additions"></div>
 
 <!-- Bump ?v= to the short commit hash on every site/ ship so Render/CDN cannot serve stale app.js -->
-<script type="module" src="./app.js?v=v2-live-6"></script>
+<script type="module" src="./app.js?v=v2-live-7"></script>
 </body>
 </html>
