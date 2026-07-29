@@ -145,8 +145,6 @@
     border:6px solid transparent;border-top-color:#131A21;
   }
   .info-tip:hover .tip,.info-tip:focus-visible .tip{display:block}
-  .wallet-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
-  .wallet-actions .btn{flex:1 1 140px;text-align:center;min-height:44px}
   .stake-row,.withdraw-row{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:flex-end}
   .field-wrap{flex:1;min-width:140px;display:flex;flex-direction:column;gap:6px}
   .field-meta{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:12px;color:var(--muted);padding:0 6px;line-height:1.3;flex-wrap:wrap}
@@ -228,10 +226,9 @@
   .unlocking-panel .up-actions .btn{flex:1 1 120px;min-height:40px}
   .unlock-full-exit-warn{font-size:12px;color:#9B3B2E;font-weight:700;margin-top:8px;line-height:1.45}
   .pending-rescue{
-    display:none;margin-top:12px;padding:12px 14px;border-radius:12px;
+    margin-top:12px;padding:12px 14px;border-radius:12px;
     background:#FFF4D6;border:1px solid #EAD37E;font-size:13px;
   }
-  .pending-rescue.show{display:block}
   .scratch-panel.session-pending .scratch-card{
     animation:panelShimmer 2.4s ease-in-out infinite;
   }
@@ -294,7 +291,7 @@
   .sub b{color:var(--ink);font-weight:600}
 
   /* tier tabs */
-  .tiers{display:flex;justify-content:center;gap:8px;margin:36px auto 0;background:var(--dim);border-radius:100px;padding:5px;width:max-content;max-width:94vw}
+  .tiers{display:flex;flex-wrap:wrap;justify-content:center;gap:6px;margin:36px auto 0;background:var(--dim);border-radius:100px;padding:5px;width:max-content;max-width:94vw}
   .tier-tab{
     border:none;background:transparent;cursor:pointer;font-family:'Inter';
     font-size:13.5px;font-weight:700;color:var(--muted);
@@ -309,6 +306,19 @@
   .tier-tab.active .count{background:var(--green);color:#fff}
   .tier-tab.premium.active .count{background:var(--gold)}
   .tier-tab .star{color:var(--gold);font-size:12px}
+  .tier-tab.stake.active{color:var(--green-dark)}
+
+  /* hero view switch: card tabs show the game stage, stake tab shows the staking panel */
+  header[data-view="cards"] #walletPanel,
+  header[data-view="cards"] #stakeConnectPrompt{display:none!important}
+  header[data-view="stake"] #stage{display:none!important}
+  .stake-connect{
+    max-width:100%;margin:28px auto 0;padding:22px 18px;
+    border:1px solid var(--line);border-radius:18px;background:#fff;
+  }
+  .stake-connect p{font-size:13.5px;color:var(--muted);line-height:1.5;margin-bottom:14px}
+  .scratch-alerts{text-align:center;max-width:520px;margin:0 auto}
+  .scratch-alerts .scratch-status:empty{display:none;margin:0;min-height:0}
   .tier-note{font-size:12.5px;color:var(--muted);margin-top:12px}
   .tier-note b{color:var(--ink);font-weight:600}
 
@@ -502,7 +512,7 @@
   .stage-footer.show,.locked-note.show{display:block}
   .stage-footer b,.locked-note b{font-family:'IBM Plex Mono';color:#E8EDF0;font-variant-numeric:tabular-nums}
   .tier-tab:disabled{opacity:.45;cursor:not-allowed;transform:none}
-  .wallet-actions .btn:disabled,.path .cta .btn:disabled{opacity:.45;cursor:not-allowed}
+  .path .cta .btn:disabled{opacity:.45;cursor:not-allowed}
 
   .scratch-panel{
     position:absolute;left:50%;top:64px;transform:translateX(-50%) scale(.92) translateY(14px);
@@ -825,6 +835,10 @@
     .announce{overflow-wrap:anywhere;padding-left:12px;padding-right:12px}
     .sc-head{flex-wrap:wrap}
   }
+  @media(max-width:600px){
+    .tiers{border-radius:22px}
+    .tier-tab{padding:10px 14px;font-size:12.5px;gap:6px}
+  }
   @media(max-width:480px){
     nav .btn.ghost.x-link{font-size:0;padding:12px 16px;min-width:44px;text-align:center}
     nav .btn.ghost.x-link::before{content:"𝕏";font-size:16px;font-weight:700}
@@ -870,7 +884,7 @@
 
 <div class="announce">$SCRATCH is live and trading — <a href="https://dexscreener.com/robinhood/0x3f66e1430c12a7a64839f43050165db6d1bf1ae5bd7df11e47a37a8e73bc00ef" target="_blank" rel="noopener">chart</a> · auction cleared 91% above floor, 100% sold · <b>game &amp; staking are live onchain</b></div>
 
-<header id="scratch">
+<header id="scratch" data-view="cards">
   <div class="hero-card">
   <div class="eyebrow">Live on Robinhood Chain · scratch now</div>
   <h1>Your free stock era is back.<br><span>Every single day.</span></h1>
@@ -878,7 +892,8 @@
 
   <div class="tiers" role="tablist">
     <button class="tier-tab active" id="tabStd" role="tab" aria-selected="true">Holder cards <span class="count" id="cntStd">0</span></button>
-    <button class="tier-tab premium" id="tabPrem" role="tab" aria-selected="false"><span class="star">★</span> Staked cards <span class="count" id="cntPrem">0</span></button>
+    <button class="tier-tab premium" id="tabPrem" role="tab" aria-selected="false"><span class="star">★</span> Premium cards <span class="count" id="cntPrem">0</span></button>
+    <button class="tier-tab stake" id="tabStake" role="tab" aria-selected="false">Stake $SCRATCH</button>
   </div>
   <div class="mode-bar">
     <button type="button" class="btn ghost sm" id="playModeDemo">Try the demo</button>
@@ -900,6 +915,11 @@
     </div>
   </div>
 
+  <div class="stake-connect" id="stakeConnectPrompt" hidden>
+    <p>Connect your wallet to stake $SCRATCH, track your position and manage unlocks.</p>
+    <button type="button" class="btn sm" id="stakeConnectBtn">Connect wallet</button>
+  </div>
+
   <div class="wallet-panel" id="walletPanel" hidden>
     <h3>Your position</h3>
     <div class="wallet-grid">
@@ -916,16 +936,6 @@
         </div>
         <div class="v" id="walletPremTickets">—</div>
       </div>
-    </div>
-    <div class="wallet-actions">
-      <button type="button" class="btn sm" id="scratchBtnStd">Scratch holder card</button>
-      <button type="button" class="btn sm" id="scratchBtnPrem">Scratch staked card</button>
-      <button type="button" class="btn ghost sm" id="scratchBtnMulti" hidden>Scratch multiple</button>
-    </div>
-    <div class="scratch-status" id="scratchStatus"></div>
-    <div class="pending-rescue" id="pendingRescue">
-      Draw still pending past rescue delay.
-      <button type="button" class="btn sm" id="rescueBtn" style="margin-top:8px;width:100%">Rescue (refund ticket)</button>
     </div>
     <div class="wallet-tier gen-v2-only" id="walletTier" hidden>No stake yet</div>
     <div class="tier-picker gen-v2-only" id="stakeTierPicker" hidden role="group" aria-label="Stake tier">
@@ -1004,6 +1014,15 @@
       </div>
 
       <div class="withdraw-warn" id="unlockWarn">Warning: each unlock request burns tickets proportionally (currently 50% × fraction unlocked). Canceling re-stakes principal but does not restore burned tickets.</div>
+    </div>
+  </div>
+
+  <!-- Scratch-flow alerts live outside the wallet panel so they stay visible on the card tabs. -->
+  <div class="scratch-alerts">
+    <div class="scratch-status" id="scratchStatus"></div>
+    <div class="pending-rescue" id="pendingRescue" hidden>
+      Draw still pending past rescue delay.
+      <button type="button" class="btn sm" id="rescueBtn" style="margin-top:8px;width:100%">Rescue (refund ticket)</button>
     </div>
   </div>
   </div><!-- /.hero-card -->
@@ -1113,7 +1132,7 @@
 
     <div class="path premium">
       <div class="p-tag">★ Stake in vault</div>
-      <h3>Staked cards <span class="status" style="background:var(--green-tint);color:var(--green-dark);border-color:var(--green)">live</span></h3>
+      <h3>Premium cards <span class="status" style="background:var(--green-tint);color:var(--green-dark);border-color:var(--green)">live</span></h3>
       <div class="rate" id="minStakeRate">Accrual starts at <b id="minStakeAmount">…</b> $SCRATCH <span class="usd-live" data-scratch-amount="0"></span> — smaller deposits are allowed (principal safe), they just don't earn yet. Pro-rata share of ~2,000 tickets/day by stake weight (your cut shrinks as total stake grows) · <b>timed unlock (48h / 120h)</b></div>
       <div class="prize-list" id="prizeListPrem">
         <div class="prize-row"><span class="p muted">Loading live odds…</span><span class="o">…</span></div>
@@ -1279,6 +1298,6 @@
 <div class="toast-host" id="toastHost" aria-live="polite" aria-relevant="additions"></div>
 
 <!-- Bump ?v= to the short commit hash on every site/ ship so Render/CDN cannot serve stale app.js -->
-<script type="module" src="./app.js?v=v2-live-5"></script>
+<script type="module" src="./app.js?v=v2-live-6"></script>
 </body>
 </html>

@@ -3,7 +3,7 @@
  * Wire from index.html: <script type="module" src="./app.js?v=…"></script>
  * Bump ASSET_VERSION (and the index.html ?v=) on every site/ commit.
  */
-export const ASSET_VERSION = 'v2-live-5';
+export const ASSET_VERSION = 'v2-live-6';
 
 /**
  * Game generation flag. Production stays on v1 (StakingVault + ScratchGame) until
@@ -913,6 +913,7 @@ const state = {
   account: null,
   walletClient: null,
   tier: 'std', // 'std' | 'prem'
+  view: 'cards', // 'cards' (game stage) | 'stake' (staking panel)
   currentWin: false,
   /** @type {{ requestId: string, txHash: string|null, sharePrize: string, cardPrize: string, tierKey: string }|null} */
   lastWin: null,
@@ -1088,9 +1089,23 @@ async function sessionDispatch(action, payload = {}) {
   applySessionView();
 }
 
+/** Hero body switch: 'cards' renders the game stage, 'stake' renders the staking panel. */
+function setHeroView(view) {
+  const next = view === 'stake' ? 'stake' : 'cards';
+  if (next === 'stake' && state.mode === 'live' && sessionInFlight()) return;
+  state.view = next;
+  if (sessionPhase() === PHASE.IDLE) {
+    renderTier();
+  } else {
+    renderTierNote();
+    applySessionView();
+  }
+}
+
 async function dispatchSelectTier(tierKey) {
   if (tierKey !== 'std' && tierKey !== 'prem') return;
   if (state.mode === 'live' && sessionInFlight()) return;
+  state.view = 'cards';
   if (state.mode === 'live' && sessionPhase() === PHASE.REVEALED) {
     resetSessionToIdle({ keepNote: true });
   }
@@ -1101,6 +1116,7 @@ async function dispatchSelectTier(tierKey) {
 async function dispatchQuickScratch(tierKey) {
   if (tierKey !== 'std' && tierKey !== 'prem') return;
   if (state.mode === 'live' && sessionInFlight()) return;
+  state.view = 'cards';
 
   if (state.mode === 'live' && sessionPhase() === PHASE.REVEALED) {
     resetSessionToIdle({ keepNote: true });
@@ -1193,18 +1209,31 @@ function applySessionView() {
   const inFlight = live && sessionInFlight();
   const t = activeTier();
 
+  const cards = state.view !== 'stake';
+  const hero = document.getElementById('scratch');
+  if (hero) hero.dataset.view = cards ? 'cards' : 'stake';
+
   const tabStd = $('tabStd');
   const tabPrem = $('tabPrem');
+  const tabStake = $('tabStake');
   if (tabStd) {
     tabStd.disabled = inFlight;
-    tabStd.classList.toggle('active', state.tier === 'std');
-    tabStd.setAttribute('aria-selected', String(state.tier === 'std'));
+    tabStd.classList.toggle('active', cards && state.tier === 'std');
+    tabStd.setAttribute('aria-selected', String(cards && state.tier === 'std'));
   }
   if (tabPrem) {
     tabPrem.disabled = inFlight;
-    tabPrem.classList.toggle('active', state.tier === 'prem');
-    tabPrem.setAttribute('aria-selected', String(state.tier === 'prem'));
+    tabPrem.classList.toggle('active', cards && state.tier === 'prem');
+    tabPrem.setAttribute('aria-selected', String(cards && state.tier === 'prem'));
   }
+  if (tabStake) {
+    // Leaving the stage mid-draw would hide the pick/reveal UI, so the tab locks while one runs.
+    tabStake.disabled = inFlight;
+    tabStake.classList.toggle('active', !cards);
+    tabStake.setAttribute('aria-selected', String(!cards));
+  }
+  const connectPrompt = $('stakeConnectPrompt');
+  if (connectPrompt) connectPrompt.hidden = cards || !!state.account;
 
   const quickOk = (tierKey) => {
     if (inFlight) return false;
@@ -2060,6 +2089,7 @@ function setMode(mode) {
     setSessionNote('Switched to demo — live draw cancelled on this screen only (check chain if a tx already confirmed).');
   }
   state.mode = next;
+  if (next === 'demo') state.view = 'cards';
   const note = $('demoNote');
   if (note) {
     if (state.mode === 'demo') {
@@ -2084,6 +2114,24 @@ function setMode(mode) {
   updateScratchButtons();
 }
 
+function renderTierNote() {
+  const tierNote = $('tierNote');
+  if (!tierNote) return;
+  if (state.mode === 'live' && sessionInFlight()) return;
+
+  const minPretty = minStakePretty();
+  const human = formatUnits(state.minStake, 18);
+  if (state.view === 'stake') {
+    tierNote.innerHTML = `Stake to earn premium tickets by the second · min stake <b>${minPretty} $SCRATCH <span class="usd-live" data-scratch-amount="${human}"></span></b>`;
+  } else if (state.tier === 'std') {
+    tierNote.innerHTML =
+      'Holder (standard) tickets from grants · odds are live from the game contract · pays $SCRATCH &amp; USDG';
+  } else {
+    tierNote.innerHTML = `Premium (staked) tickets · min stake <b>${minPretty} $SCRATCH <span class="usd-live" data-scratch-amount="${human}"></span></b> · pays $SCRATCH, USDG &amp; stocks`;
+  }
+  fillUsdLive();
+}
+
 function renderTier() {
   const stage = $('stage');
   const fan = $('fan');
@@ -2091,18 +2139,7 @@ function renderTier() {
   const promptEl = $('prompt');
   const inFlight = state.mode === 'live' && sessionInFlight();
 
-  const minPretty = minStakePretty();
-  const human = formatUnits(state.minStake, 18);
-  const tierNote = $('tierNote');
-  if (tierNote && !inFlight) {
-    if (state.tier === 'std') {
-      tierNote.innerHTML =
-        'Holder (standard) tickets from grants · odds are live from the game contract · pays $SCRATCH &amp; USDG';
-    } else {
-      tierNote.innerHTML = `Staked tickets · min stake <b>${minPretty} $SCRATCH <span class="usd-live" data-scratch-amount="${human}"></span></b> · pays $SCRATCH, USDG &amp; stocks`;
-    }
-    fillUsdLive();
-  }
+  renderTierNote();
 
   if (inFlight || sessionPhase() === PHASE.REVEALED) {
     applySessionView();
@@ -6149,6 +6186,7 @@ async function refreshV1LegacyStake(opts = {}) {
 }
 
 function scrollToV2StakeForm() {
+  setHeroView('stake');
   const target =
     $('stakeTierPicker') ||
     $('stakeAmount') ||
@@ -6399,6 +6437,12 @@ function wireUi() {
   });
   $('tabPrem')?.addEventListener('click', () => {
     sessionDispatch(ACTION.SELECT_TIER, { tierKey: 'prem' });
+  });
+  $('tabStake')?.addEventListener('click', () => {
+    setHeroView('stake');
+  });
+  $('stakeConnectBtn')?.addEventListener('click', () => {
+    void connectWallet();
   });
 
   $('fan')?.querySelectorAll('.card').forEach((card) => {
