@@ -3,7 +3,7 @@
  * Wire from index.html: <script type="module" src="./app.js?v=…"></script>
  * Bump ASSET_VERSION (and the index.html ?v=) on every site/ commit.
  */
-export const ASSET_VERSION = 'v2-live-7';
+export const ASSET_VERSION = 'v2-live-8';
 
 /**
  * Game generation flag. Production stays on v1 (StakingVault + ScratchGame) until
@@ -1184,7 +1184,7 @@ async function dispatchMultiOpen() {
   syncMultiPickerCap();
   await refreshWalletBatchCapability();
   applyMultiPickerSigningMode();
-  $('multiCountInput')?.focus();
+  $('multiCountInput')?.focus({ preventScroll: true });
 }
 
 function dispatchMultiClosePicker() {
@@ -1213,9 +1213,9 @@ async function dispatchMultiAgain() {
   const left = activeTierTickets();
   const n = Math.min(want, left);
   if (n < 1) return;
+  state.lastBatchCount = n;
   resetSessionToIdle({ keepNote: true });
   scrollToStageTop();
-  state.lastBatchCount = n;
   if (n === 1) await startLiveScratch();
   else await startMultiScratch(n);
 }
@@ -1228,13 +1228,33 @@ function dispatchMultiDone() {
   scrollToHeroTop();
 }
 
+/** Absolute document Y of an element's top edge, less a breathing gap. */
+function documentTopOf(el, gap = 0) {
+  if (!el) return 0;
+  return Math.max(0, Math.round(el.getBoundingClientRect().top + window.scrollY - gap));
+}
+
+/**
+ * One deterministic window scroll, measured after the DOM has settled.
+ * Tearing down a batch collapses a tall grid and re-runs applySessionView, so a
+ * scroll issued on the same frame animates toward an offset that no longer
+ * exists — two frames guarantees post-layout numbers and a single clean move.
+ */
+function scrollWindowToElement(el, gap = 0) {
+  if (!el) return;
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      window.scrollTo({ top: documentTopOf(el, gap), behavior: 'smooth' });
+    });
+  });
+}
+
 function scrollToStageTop() {
-  $('stage')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  scrollWindowToElement($('stage'), 16);
 }
 
 function scrollToHeroTop() {
-  const hero = document.getElementById('scratch') || $('hero-card');
-  (hero || document.body)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  scrollWindowToElement(document.getElementById('scratch'), 0);
 }
 
 /** Sync every scratch control from the single session phase + ticket counts. */

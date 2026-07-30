@@ -288,22 +288,30 @@
   .sub{font-size:clamp(15px,1.6vw,17px);color:var(--muted);max-width:540px;margin:0 auto;line-height:1.6}
   .sub b{color:var(--ink);font-weight:600}
 
-  /* tier tabs */
-  .tiers{display:flex;flex-wrap:wrap;justify-content:center;gap:6px;margin:36px auto 0;background:var(--dim);border-radius:100px;padding:5px;width:max-content;max-width:94vw}
+  /* tier tabs — three items, one row, never wider than the hero card */
+  .tiers{
+    display:flex;flex-wrap:nowrap;justify-content:center;gap:4px;
+    margin:36px auto 0;padding:5px;width:100%;max-width:520px;box-sizing:border-box;
+    background:var(--dim);border-radius:100px;
+  }
   .tier-tab{
+    flex:1 1 auto;min-width:0;
     border:none;background:transparent;cursor:pointer;font-family:'Inter';
-    font-size:13.5px;font-weight:700;color:var(--muted);
-    padding:10px 20px;border-radius:100px;display:flex;align-items:center;gap:8px;
+    font-size:clamp(11.5px,2.6vw,13.5px);font-weight:700;color:var(--muted);
+    padding:10px clamp(8px,2.2vw,18px);border-radius:100px;min-height:44px;
+    display:flex;align-items:center;justify-content:center;gap:6px;
     transition:background .15s ease,color .15s ease;
   }
+  .tier-tab .t-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .tier-tab .count{
+    flex:0 0 auto;
     background:var(--line);color:var(--ink);border-radius:100px;
     font-size:11.5px;font-weight:700;padding:2px 8px;font-variant-numeric:tabular-nums;
   }
   .tier-tab.active{background:#fff;color:var(--ink);box-shadow:0 2px 10px rgba(11,14,12,.08)}
   .tier-tab.active .count{background:var(--green);color:#fff}
   .tier-tab.premium.active .count{background:var(--gold)}
-  .tier-tab .star{color:var(--gold);font-size:12px}
+  .tier-tab .star{flex:0 0 auto;color:var(--gold);font-size:12px}
   .tier-tab.stake.active{color:var(--green-dark)}
 
   /* hero view switch: card tabs show the game stage, stake tab shows the staking panel */
@@ -340,8 +348,10 @@
   .param b{color:var(--green-dark)}
 
   /* game stage — period-accurate dark panel (the old app, embedded as an artifact) */
+  /* overflow-anchor:none — emptying the multi grid must not let the browser
+     re-anchor and yank the viewport while Done scrolls back to the top. */
   .stage{max-width:820px;margin:34px auto 0;min-height:500px;position:relative;width:100%;
-    background:#0B1015;border-radius:26px;padding:34px 18px 30px;
+    background:#0B1015;border-radius:26px;padding:34px 18px 30px;overflow-anchor:none;
     box-shadow:inset 0 0 0 1px #1B242C, 0 24px 60px -30px rgba(11,14,12,.5);box-sizing:border-box}
   .stage-prompt{font-size:13px;font-weight:600;color:#9FB4A8;margin-bottom:24px;letter-spacing:.04em}
 
@@ -832,10 +842,13 @@
     .sc-head{flex-wrap:wrap}
   }
   @media(max-width:600px){
-    .tiers{border-radius:22px}
-    .tier-tab{padding:10px 14px;font-size:12.5px;gap:6px}
+    .tiers{gap:3px;padding:4px}
+    .tier-tab{padding:9px 8px;gap:5px;min-height:42px}
+    .tier-tab .count{font-size:10.5px;padding:2px 6px}
   }
   @media(max-width:480px){
+    /* Drop the trailing word so all three tab labels stay readable in one row. */
+    .tier-tab .t-label-long{display:none}
     nav .btn.ghost.x-link{font-size:0;padding:12px 16px;min-width:44px;text-align:center}
     nav .btn.ghost.x-link::before{content:"𝕏";font-size:16px;font-weight:700}
     .nav-actions{gap:6px}
@@ -887,9 +900,9 @@
   <p class="sub">Hold $SCRATCH and earn tickets by the second. <b>Stake it</b> and your cards can hide USDG, blue-chip memes — <b>or actual onchain stock.</b></p>
 
   <div class="tiers" role="tablist">
-    <button class="tier-tab active" id="tabStd" role="tab" aria-selected="true">Holder cards <span class="count" id="cntStd">0</span></button>
-    <button class="tier-tab premium" id="tabPrem" role="tab" aria-selected="false"><span class="star">★</span> Premium cards <span class="count" id="cntPrem">0</span></button>
-    <button class="tier-tab stake" id="tabStake" role="tab" aria-selected="false">Stake $SCRATCH</button>
+    <button class="tier-tab active" id="tabStd" role="tab" aria-selected="true"><span class="t-label">Holder<span class="t-label-long"> cards</span></span><span class="count" id="cntStd">0</span></button>
+    <button class="tier-tab premium" id="tabPrem" role="tab" aria-selected="false"><span class="star">★</span><span class="t-label">Premium<span class="t-label-long"> cards</span></span><span class="count" id="cntPrem">0</span></button>
+    <button class="tier-tab stake" id="tabStake" role="tab" aria-selected="false"><span class="t-label">Stake<span class="t-label-long"> $SCRATCH</span></span></button>
   </div>
   <div class="tier-note" id="tierNote">Connect a wallet to see your live tickets · odds below are read from the game contract</div>
 
@@ -1288,6 +1301,6 @@
 <div class="toast-host" id="toastHost" aria-live="polite" aria-relevant="additions"></div>
 
 <!-- Bump ?v= to the short commit hash on every site/ ship so Render/CDN cannot serve stale app.js -->
-<script type="module" src="./app.js?v=v2-live-7"></script>
+<script type="module" src="./app.js?v=v2-live-8"></script>
 </body>
 </html>
