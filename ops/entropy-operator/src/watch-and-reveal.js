@@ -17,8 +17,8 @@
  *   GAME_ADDRESS            ScratchGame (for ScratchSettled ledger parse)
  *   LEDGER_FILE             CSV path (alias: PAYOUT_LEDGER_PATH; default ../payout-ledger.csv)
  *   I_AM_THE_PRODUCTION_HOST  must be "true" to start — laptop fail-safe (see DEPLOY-RENDER.md)
- *   STATUS_PORT             if set, start HTTP status/ledger server on this port
- *   STATUS_TOKEN            Bearer token for /status /reconcile /ledger.csv (required with STATUS_PORT)
+ *   STATUS_PORT             HTTP status/ledger port (defaults to PORT on Render web services)
+ *   STATUS_TOKEN            Bearer for /status /reconcile /ledger.csv (optional; public routes still work)
  *                           Public (no auth): /healthz, /wins.json, /settlement/:id.json
  *
  * Reveal targeting always reads on-chain nextFulfillSeq (never event order).
@@ -512,7 +512,8 @@ async function main() {
   let wakePoll = null; // resolve to interrupt sleep on ws event
   let wsBackoffMs = 1000;
 
-  const statusPort = process.env.STATUS_PORT ? Number(process.env.STATUS_PORT) : 0;
+  // Render Web Services inject PORT; bind status HTTP there when STATUS_PORT unset.
+  const statusPort = Number(process.env.STATUS_PORT || process.env.PORT || 0);
   if (statusPort) {
     startStatusServer({
       port: statusPort,

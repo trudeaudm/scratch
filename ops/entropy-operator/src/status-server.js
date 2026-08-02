@@ -120,9 +120,7 @@ function ledgerStats(ledgerPath) {
  * @param {() => Promise<object>} opts.getLiveStatus  live chain + ledger for /status
  */
 export function startStatusServer({ port, token, getHealth, getLiveStatus }) {
-  if (!token) {
-    throw new Error("STATUS_TOKEN is required when STATUS_PORT is set");
-  }
+  const bearer = (token || "").trim();
 
   const server = http.createServer(async (req, res) => {
     try {
@@ -175,7 +173,15 @@ export function startStatusServer({ port, token, getHealth, getLiveStatus }) {
         return sendJson(res, 200, found, { "Cache-Control": "public, max-age=5" });
       }
 
-      if (readBearer(req) !== token) {
+      // Protected routes need STATUS_TOKEN; public wins/health still work without it.
+      if (!bearer) {
+        applyCors(req, res);
+        return sendJson(res, 401, {
+          error: "unauthorized",
+          hint: "set STATUS_TOKEN for /status /reconcile /ledger.csv",
+        });
+      }
+      if (readBearer(req) !== bearer) {
         applyCors(req, res);
         return sendJson(res, 401, { error: "unauthorized" });
       }
@@ -215,8 +221,11 @@ export function startStatusServer({ port, token, getHealth, getLiveStatus }) {
   });
 
   server.listen(port, "0.0.0.0", () => {
+    const authNote = bearer
+      ? "others Bearer STATUS_TOKEN"
+      : "STATUS_TOKEN unset — /status /reconcile /ledger.csv locked";
     console.log(
-      `  status HTTP:     :${port} (/healthz /wins.json /settlement/:id.json public; others Bearer STATUS_TOKEN)`,
+      `  status HTTP:     :${port} (/healthz /wins.json /settlement/:id.json public; ${authNote})`,
     );
   });
 

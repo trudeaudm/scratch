@@ -42,16 +42,18 @@ If migrating from the Background Worker, **attach the same disk** (or copy `/dat
 | `CHAIN_FILE` | `/data/entropy-state.json` |
 | `LEDGER_FILE` | `/data/payout-ledger.csv` |
 | `I_AM_THE_PRODUCTION_HOST` | `true` (**required** — watcher refuses to start without it) |
-| `STATUS_PORT` | `$PORT` (Render injects `PORT`; set `STATUS_PORT` to the same value, or use start command `STATUS_PORT=$PORT npm run watch`) |
-| `STATUS_TOKEN` | long random secret (Bearer token for `/status`, `/reconcile`, `/ledger.csv`) |
+| `STATUS_PORT` | optional — defaults to Render’s `PORT` so `/wins.json` comes up on a Web Service without extra env |
+| `STATUS_TOKEN` | long random secret (Bearer for `/status`, `/reconcile`, `/ledger.csv`; public `/wins.json` works without it) |
 
 Optional: `GAME_ADDRESS`, `POLL_MS`, `HEAD_CHECK_MS`.
 
-**Start command (recommended):**
+**Start command:**
 
 ```bash
-STATUS_PORT=$PORT npm run watch
+npm run watch
 ```
+
+(Watcher binds status HTTP to `STATUS_PORT` or, if unset, `PORT`.)
 
 On first start **before** state is pasted, the watcher hard-exits with `chain state file not found: /data/entropy-state.json` — that exit proves env + disk wiring. Leave it stopped (or crashed) until migration step (b).
 
@@ -182,7 +184,7 @@ If `wc -l` disagrees, delete the file (`rm /data/…`) and re-paste — do **not
    - `transport: websocket wss://…/v2/***` (wss mode) — or an explicit HTTP poll fallback if WSS is down
    - `chain file: /data/entropy-state.json`
    - `payout ledger: /data/payout-ledger.csv`
-   - `status HTTP: :<port> (/healthz /wins.json /settlement/:id.json public; others Bearer STATUS_TOKEN)`
+   - `status HTTP: :<port> (/healthz /wins.json /settlement/:id.json public; …)` — **required** for site wins feed
 3. Scratch one ticket on the live site (or wait for organic traffic). Confirm one settlement end-to-end: `RandomnessRequested` → `reveal` tx → `ScratchSettled` / ledger append in logs.
 4. Smoke status: `curl https://<operator-host>/healthz`, `curl "https://<operator-host>/wins.json?limit=5"`, and `curl -H "Authorization: Bearer $STATUS_TOKEN" https://<operator-host>/status`.
 
