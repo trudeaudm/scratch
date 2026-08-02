@@ -512,35 +512,49 @@ async function main() {
   let wakePoll = null; // resolve to interrupt sleep on ws event
   let wsBackoffMs = 1000;
 
-  // Render Web Services inject PORT; bind status HTTP there when STATUS_PORT unset.
-  const statusPort = Number(process.env.STATUS_PORT || process.env.PORT || 0);
-  if (statusPort) {
-    startStatusServer({
-      port: statusPort,
-      token: process.env.STATUS_TOKEN || "",
-      getHealth: () => ({
-        operator: wallet.address,
-        transport: useWs ? "websocket" : "http-poll",
-        nextRevealIndex: state.nextRevealIndex,
-        chainFile,
-        ledgerFile: ledgerPath,
-      }),
-      getLiveStatus: async () => {
-        const epoch = await contract.currentEpoch();
-        const nextFulfillSeq = await contract.nextFulfillSeq(epoch);
-        const nextSeq = await contract.nextSeq();
-        return {
+  // Render Web Services inject PORT; Background Workers do not.
+  // Prefer STATUS_PORT, else PORT. Log loudly if neither is set.
+  const statusPortRaw = process.env.STATUS_PORT || process.env.PORT || "";
+  const statusPort = Number(statusPortRaw);
+  if (Number.isFinite(statusPort) && statusPort > 0) {
+    try {
+      startStatusServer({
+        port: statusPort,
+        token: process.env.STATUS_TOKEN || "",
+        getHealth: () => ({
           operator: wallet.address,
           transport: useWs ? "websocket" : "http-poll",
-          epoch: epoch.toString(),
-          nextFulfillSeq: nextFulfillSeq.toString(),
-          nextSeq: nextSeq.toString(),
-          lag: (nextSeq - nextFulfillSeq).toString(),
           nextRevealIndex: state.nextRevealIndex,
-          lastProcessedBlock: state.lastProcessedBlock ?? null,
-        };
-      },
-    });
+          chainFile,
+          ledgerFile: ledgerPath,
+        }),
+        getLiveStatus: async () => {
+          const epoch = await contract.currentEpoch();
+          const nextFulfillSeq = await contract.nextFulfillSeq(epoch);
+          const nextSeq = await contract.nextSeq();
+          return {
+            operator: wallet.address,
+            transport: useWs ? "websocket" : "http-poll",
+            epoch: epoch.toString(),
+            nextFulfillSeq: nextFulfillSeq.toString(),
+            nextSeq: nextSeq.toString(),
+            lag: (nextSeq - nextFulfillSeq).toString(),
+            nextRevealIndex: state.nextRevealIndex,
+            lastProcessedBlock: state.lastProcessedBlock ?? null,
+          };
+        },
+      });
+    } catch (err) {
+      console.error(
+        `  status HTTP:     FAILED to bind :${statusPort} — ${err?.message || err}`,
+      );
+    }
+  } else {
+    console.warn(
+      `  status HTTP:     SKIPPED (no PORT/STATUS_PORT) — /wins.json will not be served.\n` +
+        `                   STATUS_PORT=${JSON.stringify(process.env.STATUS_PORT)} PORT=${JSON.stringify(process.env.PORT)}\n` +
+        `                   Fix: service must be a Render Web Service; Start Command: STATUS_PORT=$PORT npm run watch`,
+    );
   }
 
   const bumpWake = () => {

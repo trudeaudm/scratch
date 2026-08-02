@@ -220,6 +220,10 @@ export function startStatusServer({ port, token, getHealth, getLiveStatus }) {
     }
   });
 
+  server.on("error", (err) => {
+    console.error(`  status HTTP:     listen error on :${port} — ${err?.message || err}`);
+  });
+
   server.listen(port, "0.0.0.0", () => {
     const authNote = bearer
       ? "others Bearer STATUS_TOKEN"

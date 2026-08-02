@@ -47,13 +47,13 @@ If migrating from the Background Worker, **attach the same disk** (or copy `/dat
 
 Optional: `GAME_ADDRESS`, `POLL_MS`, `HEAD_CHECK_MS`.
 
-**Start command:**
+**Start command (set this explicitly on Render → Settings → Deploy):**
 
 ```bash
-npm run watch
+STATUS_PORT=$PORT npm run watch
 ```
 
-(Watcher binds status HTTP to `STATUS_PORT` or, if unset, `PORT`.)
+Must be a **Web Service** (not Background Worker) — only Web Services get `PORT` and public HTTP. Logs must show `status HTTP: :<port> …`; if you see `status HTTP: SKIPPED`, the process has no PORT.
 
 On first start **before** state is pasted, the watcher hard-exits with `chain state file not found: /data/entropy-state.json` — that exit proves env + disk wiring. Leave it stopped (or crashed) until migration step (b).
 
