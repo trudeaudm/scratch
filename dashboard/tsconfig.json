@@ -19,5 +19,5 @@
     }
   },
   "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts", "../site/tokens.json"],
-  "exclude": ["node_modules"]
+  "exclude": ["node_modules", "scripts"]
 }

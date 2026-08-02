@@ -7,7 +7,8 @@
  *   GET /healthz       → ok
  *
  * Env: RPC_URL, GAME (or GAME_ADDRESS), PORT, CACHE_DIR,
- *      SITE_ORIGIN, PUBLIC_ORIGIN (optional)
+ *      SITE_ORIGIN, PUBLIC_ORIGIN (optional),
+ *      OPERATOR_WINS_URL (ledger lookup before eth_getLogs)
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -201,6 +202,9 @@ app.listen(PORT, () => {
   console.log(`win-cards listening on :${PORT}`);
   console.log(`  CACHE_DIR=${CACHE_DIR}`);
   console.log(`  GAME=${process.env.GAME || process.env.GAME_ADDRESS || "(default)"}`);
+  console.log(
+    `  OPERATOR_WINS_URL=${process.env.OPERATOR_WINS_URL || process.env.WINS_API || "(default onrender)"}`,
+  );
   console.log(`  SITE_ORIGIN=${SITE_ORIGIN}`);
   console.log(`  PUBLIC_ORIGIN=${PUBLIC_ORIGIN}`);
 });

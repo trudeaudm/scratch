@@ -11,8 +11,8 @@ import tokensJson from "../../../site/tokens.json";
  * that list into a mutable `tokens` array so promote/remove can hot-update
  * fund/send dropdowns without a full reload.
  *
- * On-chain holdings also auto-discover via Blockscout — discovered-only tokens
- * render with an "unverified" badge and never enter write dropdowns.
+ * On-chain holdings also auto-discover via Alchemy token balances — discovered-only
+ * tokens render with an "unverified" badge and never enter write dropdowns.
  */
 export type DexPair = {
   /** DexScreener chain slug in /latest/dex/pairs/{chainId}/{pairAddress}. */
@@ -244,7 +244,7 @@ export const sendTargets: ContractEntry[] = [
 export const balanceHolders: ContractEntry[] = [
   contracts.prizeVault,
   contracts.prizeVaultV2,
-  contracts.stakingVault,
+  // StakingVault v1 retired — last staker exited 2026-07-29; no longer watched.
   contracts.stakingVaultV2,
   contracts.standardTicketSource,
   contracts.standardTicketSourceV2,

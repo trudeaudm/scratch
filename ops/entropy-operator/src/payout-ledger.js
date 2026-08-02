@@ -234,6 +234,135 @@ export function splitCsvLine(line) {
   return cols;
 }
 
+const ZERO_ADDR = "0x0000000000000000000000000000000000000000";
+
+/**
+ * Parse one ledger CSV data line into a public win row, or null if not a real win.
+ * requestId column may be `N` (v1) or `N:cardIndex` (v2).
+ */
+export function parseLedgerWinRow(cols) {
+  if (!cols || cols.length < 8) return null;
+  const timestamp = cols[0];
+  const key = cols[1] || "";
+  const user = cols[2] || "";
+  const tier = Number(cols[3]);
+  const rowIndex = cols[4] || "0";
+  const asset = (cols[5] || "").toLowerCase();
+  const symbol = cols[6] || "";
+  const rawAmount = cols[7] || "0";
+  const txHash = cols[12] || "";
+  if (!key || !user) return null;
+  if (!asset || asset === ZERO_ADDR) return null;
+  let amountBi;
+  try {
+    amountBi = BigInt(rawAmount);
+  } catch {
+    return null;
+  }
+  if (amountBi <= 0n) return null;
+
+  let requestId = key;
+  let cardIndex = null;
+  const colon = key.indexOf(":");
+  if (colon > 0) {
+    requestId = key.slice(0, colon);
+    const ci = Number(key.slice(colon + 1));
+    if (Number.isFinite(ci)) cardIndex = ci;
+  }
+
+  const tsMs = Date.parse(timestamp);
+  return {
+    id: key,
+    requestId,
+    cardIndex,
+    user,
+    tier: Number.isFinite(tier) ? tier : 0,
+    rowIndex,
+    asset,
+    symbol,
+    amount: rawAmount,
+    txHash: txHash || null,
+    timestamp: Number.isFinite(tsMs) ? new Date(tsMs).toISOString() : timestamp,
+    timestampMs: Number.isFinite(tsMs) ? tsMs : 0,
+  };
+}
+
+/**
+ * Recent real wins from the payout ledger (newest first).
+ * @param {{ sinceMs?: number|null, limit?: number, filePath?: string }} opts
+ */
+export function readRecentWinsFromLedger(opts = {}) {
+  const filePath = opts.filePath || defaultLedgerPath();
+  const limit = Math.min(Math.max(1, Number(opts.limit) || 50), 200);
+  const sinceMs =
+    opts.sinceMs != null && Number.isFinite(opts.sinceMs) ? opts.sinceMs : null;
+
+  if (!fs.existsSync(filePath)) {
+    return { wins: [], total: 0 };
+  }
+
+  const lines = fs.readFileSync(filePath, "utf8").split(/\r?\n/).filter(Boolean);
+  const start = lines[0]?.startsWith("timestamp") ? 1 : 0;
+  const wins = [];
+  for (let i = start; i < lines.length; i++) {
+    const row = parseLedgerWinRow(splitCsvLine(lines[i]));
+    if (!row) continue;
+    if (sinceMs != null && row.timestampMs < sinceMs) continue;
+    wins.push(row);
+  }
+  wins.sort((a, b) => {
+    if (b.timestampMs !== a.timestampMs) return b.timestampMs - a.timestampMs;
+    return String(b.id).localeCompare(String(a.id));
+  });
+  return { wins: wins.slice(0, limit), total: wins.length };
+}
+
+/**
+ * All ledger rows for a requestId (v1 one row; v2 all cards). Includes no-wins.
+ * @returns {null | { requestId: string, rows: object[] }}
+ */
+export function readSettlementFromLedger(requestId, filePath = defaultLedgerPath()) {
+  const rid = String(requestId ?? "").trim();
+  if (!rid || !/^\d+$/.test(rid)) return null;
+  if (!fs.existsSync(filePath)) return null;
+
+  const lines = fs.readFileSync(filePath, "utf8").split(/\r?\n/).filter(Boolean);
+  const start = lines[0]?.startsWith("timestamp") ? 1 : 0;
+  const rows = [];
+  const prefix = `${rid}:`;
+  for (let i = start; i < lines.length; i++) {
+    const cols = splitCsvLine(lines[i]);
+    if (cols.length < 8) continue;
+    const key = cols[1] || "";
+    if (key !== rid && !key.startsWith(prefix)) continue;
+    const asset = (cols[5] || "").toLowerCase();
+    const rawAmount = cols[7] || "0";
+    let cardIndex = null;
+    const colon = key.indexOf(":");
+    if (colon > 0) {
+      const ci = Number(key.slice(colon + 1));
+      if (Number.isFinite(ci)) cardIndex = ci;
+    }
+    rows.push({
+      id: key,
+      requestId: rid,
+      cardIndex,
+      user: cols[2] || "",
+      tier: Number(cols[3]) || 0,
+      rowIndex: cols[4] || "0",
+      asset,
+      symbol: cols[6] || "",
+      amount: rawAmount,
+      txHash: cols[12] || null,
+      timestamp: cols[0] || null,
+      retro: String(cols[11] || "").toLowerCase() === "true",
+    });
+  }
+  if (!rows.length) return null;
+  rows.sort((a, b) => (a.cardIndex ?? 0) - (b.cardIndex ?? 0));
+  return { requestId: rid, rows };
+}
+
 /**
  * Append one ledger row. Never throws to caller — logs loudly and returns false.
  * v2: requestId column stores `requestId:cardIndex` so multi-card batches don't collide.

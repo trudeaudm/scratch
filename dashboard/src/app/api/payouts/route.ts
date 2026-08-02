@@ -118,8 +118,12 @@ async function loadChainAgg(): Promise<ChainAgg> {
 
   const deployBlock = activeGameDeployBlock();
   const game = activeScratchGame().address;
-  const primary = process.env.NEXT_PUBLIC_RPC_URL ?? PUBLIC_RPC;
-  const urls = primary === PUBLIC_RPC ? [PUBLIC_RPC] : [primary, PUBLIC_RPC];
+  // Prefer public RPC; Alchemy is not needed for payout getLogs.
+  const primary = process.env.NEXT_PUBLIC_RPC_URL?.trim() || PUBLIC_RPC;
+  const urls =
+    primary === PUBLIC_RPC || primary.includes("alchemy.com")
+      ? [PUBLIC_RPC]
+      : [primary, PUBLIC_RPC];
 
   const client = createPublicClient({
     chain: robinhoodChain,
@@ -285,10 +289,11 @@ export async function GET() {
   let newestChainSettledAt: string | null = null;
   if (chain.newestBlock != null && !chain.error) {
     try {
-      const primary = process.env.NEXT_PUBLIC_RPC_URL ?? PUBLIC_RPC;
+      const raw = process.env.NEXT_PUBLIC_RPC_URL?.trim() || PUBLIC_RPC;
+      const url = raw.includes("alchemy.com") ? PUBLIC_RPC : raw;
       const client = createPublicClient({
         chain: robinhoodChain,
-        transport: http(primary, { timeout: 15_000 }),
+        transport: http(url, { timeout: 15_000 }),
       });
       const block = await client.getBlock({ blockNumber: chain.newestBlock });
       newestChainSettledAt = new Date(Number(block.timestamp) * 1000).toISOString();

@@ -56,10 +56,11 @@ function ensureLedgerFile(filePath: string): void {
 }
 
 function client() {
-  const primary = process.env.NEXT_PUBLIC_RPC_URL ?? PUBLIC_RPC;
+  const raw = process.env.NEXT_PUBLIC_RPC_URL?.trim() || PUBLIC_RPC;
+  const url = raw.includes("alchemy.com") ? PUBLIC_RPC : raw;
   return createPublicClient({
     chain: robinhoodChain,
-    transport: http(primary, { timeout: 20_000, retryCount: 1 }),
+    transport: http(url, { timeout: 20_000, retryCount: 1 }),
   });
 }
 

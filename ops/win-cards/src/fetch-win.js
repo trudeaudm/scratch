@@ -1,5 +1,6 @@
 /**
- * Resolve ScratchSettled for a requestId via eth_getLogs (indexed requestId).
+ * Resolve ScratchSettled for a requestId.
+ * Prefers operator ledger (OPERATOR_WINS_URL /settlement/:id.json), then eth_getLogs.
  * v1: single event. v2 (GAME_V2 gate): aggregate batch cards for /win/:req.
  */
 import { Contract, JsonRpcProvider, formatUnits } from "ethers";
@@ -15,6 +16,7 @@ const SCRATCH_SETTLED_ABI_V2 = [
 const DEFAULT_GAME = "0xBeD604b5AB226134EdF154cc31881d8C93f4C9e6";
 const DEFAULT_DEPLOY_BLOCK = 13_138_508;
 const LOG_CHUNK = 9_000;
+const DEFAULT_OPERATOR_WINS_URL = "https://scratch-operator-web.onrender.com";
 
 function formatHuman(amount, decimals = 18, maxFrac = 4) {
   const n = Number(formatUnits(amount, decimals));
@@ -43,20 +45,146 @@ export function isGameV2() {
   return gameAddress().toLowerCase() === v2Addr;
 }
 
+function operatorWinsBase() {
+  return (
+    process.env.OPERATOR_WINS_URL ||
+    process.env.WINS_API ||
+    DEFAULT_OPERATOR_WINS_URL
+  ).replace(/\/$/, "");
+}
+
 /**
- * @returns {Promise<null | {
- *   requestId: string,
- *   tier: number,
- *   isWin: boolean,
- *   cardPrize: string,
- *   sharePrize: string,
- *   symbol: string,
- *   txHash: string|null,
- *   cardCount?: number,
- *   winCount?: number,
- * }>}
+ * Build the same return shape as chain fetch from ledger settlement rows.
  */
-export async function fetchWin(requestId) {
+function winFromLedgerRows(requestId, rows) {
+  const v2 = isGameV2() || rows.some((r) => r.cardIndex != null);
+  const tier = Number(rows[0]?.tier ?? 0);
+  const txHash = rows.find((r) => r.txHash)?.txHash || null;
+
+  if (!v2) {
+    const row = rows[rows.length - 1];
+    const asset = (row.asset || "").toLowerCase();
+    let amount = 0n;
+    try {
+      amount = BigInt(row.amount || "0");
+    } catch {
+      amount = 0n;
+    }
+    const isWin = amount > 0n && asset && asset !== ZERO;
+    const meta = resolveToken(asset);
+    const human = isWin ? formatHuman(amount, meta.decimals) : "";
+    const cardPrize = isWin ? `+${human} ${meta.symbol}` : "Not this time";
+    const sharePrize =
+      isWin && meta.symbol === "SCRATCH"
+        ? `+${human} $SCRATCH`
+        : isWin
+          ? `+${human} ${meta.symbol}`
+          : "Not this time";
+    return {
+      requestId: String(requestId),
+      tier,
+      isWin,
+      cardPrize,
+      sharePrize,
+      symbol: isWin ? meta.symbol : "NO_WIN",
+      txHash,
+    };
+  }
+
+  const cardCount = rows.length;
+  const wins = [];
+  const totalBySymbol = new Map();
+
+  for (const row of rows) {
+    const asset = (row.asset || "").toLowerCase();
+    let amount = 0n;
+    try {
+      amount = BigInt(row.amount || "0");
+    } catch {
+      amount = 0n;
+    }
+    if (!(amount > 0n && asset && asset !== ZERO)) continue;
+    const meta = resolveToken(asset);
+    wins.push({ meta, amount });
+    const prev = totalBySymbol.get(meta.symbol) || 0n;
+    totalBySymbol.set(meta.symbol, prev + amount);
+  }
+
+  const winCount = wins.length;
+  const isWin = winCount > 0;
+
+  if (!isWin) {
+    return {
+      requestId: String(requestId),
+      tier,
+      isWin: false,
+      cardPrize: "Not this time",
+      sharePrize: "Not this time",
+      symbol: "NO_WIN",
+      txHash,
+      cardCount,
+      winCount: 0,
+    };
+  }
+
+  let sharePrize;
+  let cardPrize;
+  let symbol;
+  if (totalBySymbol.size === 1) {
+    const [sym, raw] = [...totalBySymbol.entries()][0];
+    const meta = resolveToken(
+      wins.find((w) => w.meta.symbol === sym)?.meta.address || ZERO,
+    );
+    const human = formatHuman(raw, meta.decimals);
+    symbol = sym;
+    const label = sym === "SCRATCH" ? "$SCRATCH" : sym;
+    sharePrize =
+      cardCount > 1
+        ? `${winCount} wins from ${cardCount} scratches +${human} ${label}`
+        : `+${human} ${label}`;
+    cardPrize = sharePrize;
+  } else {
+    const parts = [...totalBySymbol.entries()].map(([sym, raw]) => {
+      const meta = resolveToken(
+        wins.find((w) => w.meta.symbol === sym)?.meta.address || ZERO,
+      );
+      return `+${formatHuman(raw, meta.decimals)} ${sym}`;
+    });
+    symbol = "MIXED";
+    sharePrize = `${winCount} wins from ${cardCount} scratches ${parts.join(" · ")}`;
+    cardPrize = sharePrize;
+  }
+
+  return {
+    requestId: String(requestId),
+    tier,
+    isWin: true,
+    cardPrize,
+    sharePrize,
+    symbol,
+    txHash,
+    cardCount,
+    winCount,
+  };
+}
+
+async function fetchWinFromLedger(requestId) {
+  const base = operatorWinsBase();
+  if (!base) return null;
+  const url = `${base}/settlement/${requestId}.json`;
+  const res = await fetch(url, {
+    headers: { Accept: "application/json" },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`settlement HTTP ${res.status}`);
+  const data = await res.json();
+  const rows = Array.isArray(data?.rows) ? data.rows : [];
+  if (!rows.length) return null;
+  return winFromLedgerRows(requestId, rows);
+}
+
+async function fetchWinFromChain(requestId) {
   const rpcUrl = process.env.RPC_URL;
   if (!rpcUrl) throw new Error("RPC_URL is required");
 
@@ -121,11 +249,10 @@ export async function fetchWin(requestId) {
     };
   }
 
-  // v2: aggregate all cards for this requestId
   const tier = Number(logs[0].args.tier ?? 0);
   const cardCount = logs.length;
   const wins = [];
-  let totalBySymbol = new Map();
+  const totalBySymbol = new Map();
 
   for (const log of logs) {
     const asset = (log.args.asset || "").toLowerCase();
@@ -155,7 +282,6 @@ export async function fetchWin(requestId) {
     };
   }
 
-  // Prefer a single-symbol total for the share line; otherwise list parts.
   let sharePrize;
   let cardPrize;
   let symbol;
@@ -195,4 +321,27 @@ export async function fetchWin(requestId) {
     cardCount,
     winCount,
   };
+}
+
+/**
+ * @returns {Promise<null | {
+ *   requestId: string,
+ *   tier: number,
+ *   isWin: boolean,
+ *   cardPrize: string,
+ *   sharePrize: string,
+ *   symbol: string,
+ *   txHash: string|null,
+ *   cardCount?: number,
+ *   winCount?: number,
+ * }>}
+ */
+export async function fetchWin(requestId) {
+  try {
+    const fromLedger = await fetchWinFromLedger(requestId);
+    if (fromLedger) return fromLedger;
+  } catch (err) {
+    console.warn(`ledger settlement ${requestId}:`, err?.message || err);
+  }
+  return fetchWinFromChain(requestId);
 }

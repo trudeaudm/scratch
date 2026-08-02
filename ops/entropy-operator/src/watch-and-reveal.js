@@ -19,6 +19,7 @@
  *   I_AM_THE_PRODUCTION_HOST  must be "true" to start — laptop fail-safe (see DEPLOY-RENDER.md)
  *   STATUS_PORT             if set, start HTTP status/ledger server on this port
  *   STATUS_TOKEN            Bearer token for /status /reconcile /ledger.csv (required with STATUS_PORT)
+ *                           Public (no auth): /healthz, /wins.json, /settlement/:id.json
  *
  * Reveal targeting always reads on-chain nextFulfillSeq (never event order).
  * getLogs / websocket only accelerate discovery + latency metrics.

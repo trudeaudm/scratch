@@ -60,11 +60,17 @@ On first start **before** state is pasted, the watcher hard-exits with `chain st
 | Route | Auth | Purpose |
 |-------|------|---------|
 | `GET /healthz` | **none** | Render health check: `ok`, operator address, transport mode, `nextRevealIndex` |
+| `GET /wins.json` | **none** | Recent real wins from `LEDGER_FILE` for the public site (`?since=&limit=`). CORS for `scratch4663.xyz`. |
+| `GET /settlement/:requestId.json` | **none** | Ledger rows for one requestId (win-cards / share cards; avoids eth_getLogs). |
 | `GET /status` | Bearer `STATUS_TOKEN` | Live `nextFulfillSeq` vs `nextSeq`, newest ledger row, `retro=false` count in last 24h |
 | `GET /reconcile` | Bearer | Runs reconcile against `LEDGER_FILE`, returns summary JSON |
 | `GET /ledger.csv` | Bearer | Streams the authoritative CSV |
 
+Optional: `WINS_CORS_ORIGINS` comma-separated allowlist (default includes `https://scratch4663.xyz` + localhost).
+
 No `STATUS_PORT` → no HTTP server (same reveal-only behavior as before).
+
+Public site (`scratch4663.xyz`) should set `CONFIG.winsApi` to this service’s HTTPS origin (e.g. `https://scratch-operator-web.onrender.com`) and must **not** use an Alchemy key in the browser.
 
 **Laptop CSV is historical-only.** Never reconcile against `ops/entropy-operator/payout-ledger.csv` on a developer machine after cutover — always use Render `/data` via `/reconcile` or `/ledger.csv`.
 
@@ -90,7 +96,8 @@ Dashboard → **New +** → **Web Service** → same repo.
 
 | Key | Value |
 |-----|-------|
-| `RPC_URL` | same HTTPS RPC as the site / operator |
+| `RPC_URL` | public Robinhood RPC (or a dedicated low-privilege Alchemy app — **not** the operator key) |
+| `OPERATOR_WINS_URL` | `https://<scratch-operator-web-host>` — ledger lookup before eth_getLogs |
 | `GAME` | `0xBeD604b5AB226134EdF154cc31881d8C93f4C9e6` |
 | `CACHE_DIR` | `/data/win-cards` |
 | `SITE_ORIGIN` | `https://scratch4663.xyz` |
@@ -175,9 +182,9 @@ If `wc -l` disagrees, delete the file (`rm /data/…`) and re-paste — do **not
    - `transport: websocket wss://…/v2/***` (wss mode) — or an explicit HTTP poll fallback if WSS is down
    - `chain file: /data/entropy-state.json`
    - `payout ledger: /data/payout-ledger.csv`
-   - `status HTTP: :<port> (/healthz public; others Bearer STATUS_TOKEN)`
+   - `status HTTP: :<port> (/healthz /wins.json /settlement/:id.json public; others Bearer STATUS_TOKEN)`
 3. Scratch one ticket on the live site (or wait for organic traffic). Confirm one settlement end-to-end: `RandomnessRequested` → `reveal` tx → `ScratchSettled` / ledger append in logs.
-4. Smoke status: `curl https://<operator-host>/healthz` and `curl -H "Authorization: Bearer $STATUS_TOKEN" https://<operator-host>/status`.
+4. Smoke status: `curl https://<operator-host>/healthz`, `curl "https://<operator-host>/wins.json?limit=5"`, and `curl -H "Authorization: Bearer $STATUS_TOKEN" https://<operator-host>/status`.
 
 ### (d) Cutover declared — fail-safe the laptop copy
 

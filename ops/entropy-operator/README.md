@@ -47,7 +47,7 @@ npm run watch
 # FROM_BLOCK=13390000 CATCH_UP_ONCE=1 I_AM_THE_PRODUCTION_HOST=true npm run catch-up
 ```
 
-`OPERATOR_PRIVATE_KEY` must match on-chain `SelfEntropyProvider.operator()` — mismatch hard-exits at startup. Required on the live host: `I_AM_THE_PRODUCTION_HOST=true` (laptop fail-safe). Optional: `WSS_URL`, `FROM_BLOCK`, `CHAIN_FILE`, `POLL_MS` (default 2500), `HEAD_CHECK_MS` (default 60000), `REVEAL_MAX_RETRIES`, `GAME_ADDRESS`, `LEDGER_FILE` (alias `PAYOUT_LEDGER_PATH`), `STATUS_PORT` + `STATUS_TOKEN` (HTTP status/ledger surface). `PRIVATE_KEY` remains a fallback if `OPERATOR_PRIVATE_KEY` is unset.
+`OPERATOR_PRIVATE_KEY` must match on-chain `SelfEntropyProvider.operator()` — mismatch hard-exits at startup. Required on the live host: `I_AM_THE_PRODUCTION_HOST=true` (laptop fail-safe). Optional: `WSS_URL`, `FROM_BLOCK`, `CHAIN_FILE`, `POLL_MS` (default 2500), `HEAD_CHECK_MS` (default 60000), `REVEAL_MAX_RETRIES`, `GAME_ADDRESS`, `LEDGER_FILE` (alias `PAYOUT_LEDGER_PATH`), `STATUS_PORT` + `STATUS_TOKEN` (HTTP status/ledger surface; public `GET /wins.json` + `GET /settlement/:id.json`). `PRIVATE_KEY` remains a fallback if `OPERATOR_PRIVATE_KEY` is unset.
 
 **Render:** see [`../DEPLOY-RENDER.md`](../DEPLOY-RENDER.md) — operator is a **Web Service** (`CHAIN_FILE=/data/entropy-state.json`, `LEDGER_FILE=/data/payout-ledger.csv`, `STATUS_PORT=$PORT`).
 

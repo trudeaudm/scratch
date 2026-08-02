@@ -16,18 +16,63 @@ import {
   stakingV2DeployBlock,
 } from "@/config/addresses";
 import { robinhoodChain } from "@/config/chain";
-import { countdown, fmtToken, shortAddr } from "@/utils/format";
+import { countdown, fmtToken, fmtUsd, shortAddr } from "@/utils/format";
 import { CopyAddress } from "@/components/CopyAddress";
+import { SupplyLocationPanel } from "@/components/SupplyLocationPanel";
+import { StakeHistoryModal } from "@/components/StakeHistoryModal";
+import type { StakerTierHint } from "@/utils/supplyLocation";
+import {
+  fetchWalletScratchFlow,
+  flushPnlFillsStore,
+  PNL_LOGIC_VERSION,
+} from "@/utils/stakerPnl";
+import { fetchPrices } from "@/utils/prices";
+import {
+  clearStakeHistoryCache,
+  mergeStakeEvents,
+  scanVaultStakeEvents,
+} from "@/utils/stakeHistory";
+import {
+  fetchDiskSnapshot,
+  flushDiskSnapshotWrite,
+  loadLocalSnapshot,
+  preferSnapshot,
+  scheduleDiskSnapshotWrite,
+  writeLocalSnapshot,
+  type StoredSnapshot,
+  type StoredStakeEvent,
+  type StakerTierLabel,
+} from "@/utils/stakersSnapshot";
 
 const VAULT = contracts.stakingVaultV2.address;
-/** Alchemy / common RPC eth_getLogs cap is 10k blocks — stay under it. */
-const LOG_CHUNK_SIZE = 9000;
 const READ_BATCH = 40;
-const STORAGE_KEY = "scratch-dashboard:stakers-v2-snapshot";
+/** Parallel Alchemy PnL fetches (Transfers CU budget ≫ Blockscout). */
+const PNL_CONCURRENCY = 4;
 
-const depositedEvent = parseAbiItem(
-  "event Deposited(address indexed user, uint256 amount, uint8 tier)",
-);
+/** Run `worker` over items with at most `limit` in flight; optional progress callback. */
+async function mapPool<T, R>(
+  items: T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<R>,
+  onProgress?: (done: number, total: number) => void,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  let done = 0;
+  const total = items.length;
+  async function run(): Promise<void> {
+    for (;;) {
+      const i = next++;
+      if (i >= total) return;
+      results[i] = await worker(items[i], i);
+      done += 1;
+      onProgress?.(done, total);
+    }
+  }
+  const n = Math.min(limit, Math.max(1, total));
+  await Promise.all(Array.from({ length: n }, () => run()));
+  return results;
+}
 
 const stakingV2Abi = [
   parseAbiItem(
@@ -40,7 +85,7 @@ const stakingV2Abi = [
 const TIER_NORMAL = 1;
 const TIER_ENHANCED = 2;
 
-type TierLabel = "NORMAL" | "ENHANCED" | "UNSET";
+type TierLabel = StakerTierLabel;
 
 type StakerRow = {
   address: Address;
@@ -49,6 +94,16 @@ type StakerRow = {
   tickets: bigint;
   unlockingAmount: bigint;
   releaseAt: number;
+  /** Market SCRATCH bought; null = PnL not loaded. */
+  bought: bigint | null;
+  /** Market SCRATCH sold; null = PnL not loaded. */
+  sold: bigint | null;
+  boughtUsd: number | null;
+  soldUsd: number | null;
+  realizedPnlUsd: number | null;
+  unrealizedPnlUsd: number | null;
+  /** realized + unrealized; null = not loaded. */
+  pnlUsd: number | null;
 };
 
 type Snapshot = {
@@ -58,27 +113,46 @@ type Snapshot = {
   addressesFound: number;
   chunksScanned: number;
   chunksFailed: number;
+  /**
+   * Last block whose stake-moving logs are included in `stakeEvents` / address set.
+   * Next Refresh scans only (scannedThroughBlock + 1)…tip when set.
+   */
+  scannedThroughBlock: number | null;
+  /** Vault Deposit / UnlockRequested / UnlockCancelled logs through the cursor. */
+  stakeEvents: StoredStakeEvent[];
+  /** When trade-flow columns were last filled (0 = never). */
+  pnlAt: number;
+  /** Live SCRATCH/USD used for unrealized mark (null if price fetch failed). */
+  scratchUsd: number | null;
+  /** Must match PNL_LOGIC_VERSION or PnL fields are cleared. */
+  pnlLogicVersion: number;
 };
 
-type SortKey = "address" | "staked" | "tier" | "tickets" | "unlock";
-
-type StoredRow = {
-  address: Address;
-  staked: string;
-  tier: TierLabel;
-  tickets: string;
-  unlockingAmount: string;
-  releaseAt: number;
+type PnlFields = {
+  bought: bigint | null;
+  sold: bigint | null;
+  boughtUsd: number | null;
+  soldUsd: number | null;
+  realizedPnlUsd: number | null;
+  unrealizedPnlUsd: number | null;
+  pnlUsd: number | null;
 };
 
-type StoredSnapshot = {
-  takenAt: number;
-  rows: StoredRow[];
-  warnings: string[];
-  addressesFound: number;
-  chunksScanned: number;
-  chunksFailed: number;
+const EMPTY_PNL: PnlFields = {
+  bought: null,
+  sold: null,
+  boughtUsd: null,
+  soldUsd: null,
+  realizedPnlUsd: null,
+  unrealizedPnlUsd: null,
+  pnlUsd: null,
 };
+
+function hasHistoricalPnl(r: PnlFields): boolean {
+  return r.pnlUsd != null && r.bought != null && r.sold != null;
+}
+
+type SortKey = "address" | "staked" | "tier" | "tickets" | "unlock" | "bought" | "sold" | "pnl";
 
 function client(): PublicClient {
   return createPublicClient({
@@ -123,6 +197,11 @@ function serializeSnapshot(snapshot: Snapshot): StoredSnapshot {
     addressesFound: snapshot.addressesFound,
     chunksScanned: snapshot.chunksScanned,
     chunksFailed: snapshot.chunksFailed,
+    scannedThroughBlock: snapshot.scannedThroughBlock,
+    stakeEvents: snapshot.stakeEvents,
+    pnlAt: snapshot.pnlAt,
+    scratchUsd: snapshot.scratchUsd,
+    pnlLogicVersion: snapshot.pnlLogicVersion,
     rows: snapshot.rows.map((r) => ({
       address: r.address,
       staked: r.staked.toString(),
@@ -130,6 +209,13 @@ function serializeSnapshot(snapshot: Snapshot): StoredSnapshot {
       tickets: r.tickets.toString(),
       unlockingAmount: r.unlockingAmount.toString(),
       releaseAt: r.releaseAt,
+      bought: r.bought == null ? null : r.bought.toString(),
+      sold: r.sold == null ? null : r.sold.toString(),
+      boughtUsd: r.boughtUsd,
+      soldUsd: r.soldUsd,
+      realizedPnlUsd: r.realizedPnlUsd,
+      unrealizedPnlUsd: r.unrealizedPnlUsd,
+      pnlUsd: r.pnlUsd,
     })),
   };
 }
@@ -143,41 +229,59 @@ function deserializeSnapshot(raw: StoredSnapshot): Snapshot | null {
       addressesFound: raw.addressesFound ?? raw.rows.length,
       chunksScanned: raw.chunksScanned ?? 0,
       chunksFailed: raw.chunksFailed ?? 0,
-      rows: raw.rows.map((r) => ({
-        address: r.address,
-        staked: BigInt(r.staked),
-        tier: r.tier,
-        tickets: BigInt(r.tickets),
-        unlockingAmount: BigInt(r.unlockingAmount),
-        releaseAt: r.releaseAt,
-      })),
+      scannedThroughBlock:
+        typeof raw.scannedThroughBlock === "number" ? raw.scannedThroughBlock : null,
+      stakeEvents: Array.isArray(raw.stakeEvents) ? raw.stakeEvents : [],
+      pnlLogicVersion:
+        typeof raw.pnlLogicVersion === "number" ? raw.pnlLogicVersion : 0,
+      pnlAt:
+        raw.pnlLogicVersion === PNL_LOGIC_VERSION ? (raw.pnlAt ?? 0) : 0,
+      scratchUsd:
+        raw.pnlLogicVersion === PNL_LOGIC_VERSION ? (raw.scratchUsd ?? null) : null,
+      rows: raw.rows.map((r) => {
+        const bought = r.bought == null || r.bought === undefined ? null : BigInt(r.bought);
+        const sold = r.sold == null || r.sold === undefined ? null : BigInt(r.sold);
+        const logicOk = raw.pnlLogicVersion === PNL_LOGIC_VERSION;
+        // Legacy spot-only / stale classification — force recompute.
+        const hasUsd =
+          logicOk && typeof r.pnlUsd === "number" && Number.isFinite(r.pnlUsd);
+        return {
+          address: r.address,
+          staked: BigInt(r.staked),
+          tier: r.tier,
+          tickets: BigInt(r.tickets),
+          unlockingAmount: BigInt(r.unlockingAmount),
+          releaseAt: r.releaseAt,
+          bought: hasUsd ? bought : null,
+          sold: hasUsd ? sold : null,
+          boughtUsd: hasUsd && typeof r.boughtUsd === "number" ? r.boughtUsd : null,
+          soldUsd: hasUsd && typeof r.soldUsd === "number" ? r.soldUsd : null,
+          realizedPnlUsd:
+            hasUsd && typeof r.realizedPnlUsd === "number" ? r.realizedPnlUsd : null,
+          unrealizedPnlUsd:
+            hasUsd && typeof r.unrealizedPnlUsd === "number" ? r.unrealizedPnlUsd : null,
+          pnlUsd: hasUsd ? r.pnlUsd! : null,
+        };
+      }),
     };
   } catch {
     return null;
   }
 }
 
+/** Sync read of browser cache (kept mirrored on every commit). */
 function loadStoredSnapshot(): Snapshot | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    return deserializeSnapshot(JSON.parse(raw) as StoredSnapshot);
-  } catch {
-    return null;
-  }
+  const raw = loadLocalSnapshot();
+  return raw ? deserializeSnapshot(raw) : null;
 }
 
 function persistSnapshot(snapshot: Snapshot): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(serializeSnapshot(snapshot)));
-  } catch {
-    /* quota / private mode */
-  }
+  const stored = serializeSnapshot(snapshot);
+  writeLocalSnapshot(stored);
+  scheduleDiskSnapshotWrite(stored);
 }
 
-function downloadCsv(rows: StakerRow[], takenAt: number): void {
+function downloadCsv(rows: StakerRow[], takenAt: number, scratchUsd: number | null): void {
   const header = [
     "address",
     "staked",
@@ -186,6 +290,14 @@ function downloadCsv(rows: StakerRow[], takenAt: number): void {
     "unlockingAmount",
     "releaseAt",
     "unlockStatus",
+    "bought",
+    "sold",
+    "boughtUsd",
+    "soldUsd",
+    "pnlUsd",
+    "realizedPnlUsd",
+    "unrealizedPnlUsd",
+    "scratchUsdSpot",
   ];
   const now = Math.floor(Date.now() / 1000);
   const lines = [header.join(",")];
@@ -203,6 +315,14 @@ function downloadCsv(rows: StakerRow[], takenAt: number): void {
         formatUnits(r.unlockingAmount, 18),
         r.releaseAt ? String(r.releaseAt) : "",
         unlockStatus,
+        r.bought == null ? "" : formatUnits(r.bought, 18),
+        r.sold == null ? "" : formatUnits(r.sold, 18),
+        r.boughtUsd == null ? "" : r.boughtUsd.toFixed(6),
+        r.soldUsd == null ? "" : r.soldUsd.toFixed(6),
+        r.pnlUsd == null ? "" : r.pnlUsd.toFixed(6),
+        r.realizedPnlUsd == null ? "" : r.realizedPnlUsd.toFixed(6),
+        r.unrealizedPnlUsd == null ? "" : r.unrealizedPnlUsd.toFixed(6),
+        scratchUsd == null ? "" : String(scratchUsd),
       ]
         .map(csvEscape)
         .join(","),
@@ -218,52 +338,6 @@ function downloadCsv(rows: StakerRow[], takenAt: number): void {
   URL.revokeObjectURL(url);
 }
 
-async function scanDepositors(
-  pc: PublicClient,
-  fromBlock: bigint,
-  toBlock: bigint,
-  onProgress: (done: number, total: number) => void,
-): Promise<{ addresses: Address[]; chunksScanned: number; chunksFailed: number; warnings: string[] }> {
-  const chunk = BigInt(LOG_CHUNK_SIZE);
-  const span = toBlock - fromBlock;
-  const totalChunks = Math.max(1, Number(span / chunk) + 1);
-  const seen = new Set<string>();
-  const addresses: Address[] = [];
-  const warnings: string[] = [];
-  let chunksScanned = 0;
-  let chunksFailed = 0;
-  let done = 0;
-
-  for (let start = fromBlock; start <= toBlock; start += chunk) {
-    const end = start + chunk - BigInt(1) > toBlock ? toBlock : start + chunk - BigInt(1);
-    done += 1;
-    onProgress(done, totalChunks);
-    try {
-      const logs = await pc.getLogs({
-        address: VAULT,
-        event: depositedEvent,
-        fromBlock: start,
-        toBlock: end,
-      });
-      chunksScanned += 1;
-      for (const log of logs) {
-        const user = log.args.user;
-        if (!user) continue;
-        const key = user.toLowerCase();
-        if (seen.has(key)) continue;
-        seen.add(key);
-        addresses.push(user);
-      }
-    } catch (e) {
-      chunksFailed += 1;
-      const msg = e instanceof Error ? e.message : String(e);
-      warnings.push(`Log chunk ${start.toString()}–${end.toString()} failed: ${msg}`);
-    }
-  }
-
-  return { addresses, chunksScanned, chunksFailed, warnings };
-}
-
 async function readStakerStates(
   pc: PublicClient,
   addresses: Address[],
@@ -273,56 +347,13 @@ async function readStakerStates(
   const warnings: string[] = [];
   const total = addresses.length || 1;
 
+  // Robinhood Chain has no Multicall3 in viem — batch with Promise.all of eth_calls.
   for (let i = 0; i < addresses.length; i += READ_BATCH) {
     const batch = addresses.slice(i, i + READ_BATCH);
     onProgress(Math.min(i + batch.length, addresses.length), total);
 
-    const contractsCall = batch.flatMap((addr) => [
-      { address: VAULT, abi: stakingV2Abi, functionName: "users" as const, args: [addr] as const },
-      {
-        address: VAULT,
-        abi: stakingV2Abi,
-        functionName: "unlocking" as const,
-        args: [addr] as const,
-      },
-      {
-        address: VAULT,
-        abi: stakingV2Abi,
-        functionName: "ticketsOf" as const,
-        args: [addr] as const,
-      },
-    ]);
-
-    try {
-      const results = await pc.multicall({ contracts: contractsCall, allowFailure: true });
-      for (let j = 0; j < batch.length; j++) {
-        const userRes = results[j * 3];
-        const unlockRes = results[j * 3 + 1];
-        const ticketsRes = results[j * 3 + 2];
-        if (userRes.status !== "success" || unlockRes.status !== "success") {
-          warnings.push(`State read failed for ${shortAddr(batch[j])}`);
-          continue;
-        }
-        const [staked, , , tierRaw] = userRes.result as readonly [bigint, bigint, bigint, number];
-        const [unlockingAmount, releaseAtRaw] = unlockRes.result as readonly [bigint, number | bigint];
-        const tickets =
-          ticketsRes.status === "success" ? (ticketsRes.result as bigint) : BigInt(0);
-        if (ticketsRes.status !== "success") {
-          warnings.push(`ticketsOf failed for ${shortAddr(batch[j])}`);
-        }
-        rows.push({
-          address: batch[j],
-          staked,
-          tier: tierLabel(Number(tierRaw)),
-          tickets,
-          unlockingAmount,
-          releaseAt: Number(releaseAtRaw),
-        });
-      }
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      warnings.push(`Multicall batch @${i} failed: ${msg}`);
-      for (const addr of batch) {
+    const batchRows = await Promise.all(
+      batch.map(async (addr) => {
         try {
           const [user, unlock, tickets] = await Promise.all([
             pc.readContract({
@@ -346,24 +377,67 @@ async function readStakerStates(
           ]);
           const [staked, , , tierRaw] = user as readonly [bigint, bigint, bigint, number];
           const [unlockingAmount, releaseAtRaw] = unlock as readonly [bigint, number | bigint];
-          rows.push({
+          return {
             address: addr,
             staked,
             tier: tierLabel(Number(tierRaw)),
             tickets: tickets as bigint,
             unlockingAmount,
             releaseAt: Number(releaseAtRaw),
-          });
-        } catch (inner) {
-          const im = inner instanceof Error ? inner.message : String(inner);
-          warnings.push(`State read failed for ${shortAddr(addr)}: ${im}`);
+            ...EMPTY_PNL,
+          } satisfies StakerRow;
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          warnings.push(`State read failed for ${shortAddr(addr)}: ${msg}`);
+          return null;
         }
-      }
+      }),
+    );
+
+    for (const row of batchRows) {
+      if (row) rows.push(row);
     }
   }
 
   onProgress(addresses.length, total);
   return { rows, warnings };
+}
+
+function FlowCell({
+  value,
+  usd,
+}: {
+  value: bigint | null;
+  usd?: number | null;
+}) {
+  if (value == null) return <span className="muted">—</span>;
+  const title =
+    usd != null && Number.isFinite(usd) ? `Historical USD: ${fmtUsd(usd)}` : undefined;
+  return (
+    <span className="num" title={title}>
+      {fmtToken(value, 18, 2)}
+    </span>
+  );
+}
+
+function PnlCell({ row }: { row: StakerRow }) {
+  if (row.pnlUsd == null) return <span className="muted">—</span>;
+  const pnlUsd = row.pnlUsd;
+  const realizedUsd = row.realizedPnlUsd;
+  const cls = pnlUsd > 0 ? "ok" : pnlUsd < 0 ? "danger" : "muted";
+  const sign = pnlUsd > 0 ? "+" : "";
+  return (
+    <span
+      className={`num ${cls}`}
+      title="Total = FIFO realized + unrealized on remaining lots at live spot · (realized) in parentheses"
+    >
+      {sign}
+      {fmtUsd(pnlUsd)}
+      <span className="muted" style={{ fontWeight: 400, marginLeft: 4 }}>
+        ({realizedUsd == null ? "—" : fmtUsd(realizedUsd)} realized)
+      </span>
+    </span>
+  );
 }
 
 function UnlockCell({ row, now }: { row: StakerRow; now: number }) {
@@ -399,11 +473,52 @@ export function StakersPanel() {
   const [sortKey, setSortKey] = useState<SortKey>("staked");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [showHistorical, setShowHistorical] = useState(false);
+  const [historyTarget, setHistoryTarget] = useState<{
+    address: Address;
+    staked: bigint;
+  } | null>(null);
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
 
   useEffect(() => {
-    setSnapshot(loadStoredSnapshot());
-    setHydrated(true);
+    let cancelled = false;
+    (async () => {
+      const localRaw = loadLocalSnapshot();
+      const local = localRaw ? deserializeSnapshot(localRaw) : null;
+      if (local && !cancelled) setSnapshot(local);
+
+      try {
+        const diskRaw = await fetchDiskSnapshot();
+        if (cancelled) return;
+        const chosen = preferSnapshot(localRaw, diskRaw);
+        if (chosen) {
+          const snap = deserializeSnapshot(chosen);
+          if (snap) {
+            setSnapshot(snap);
+            writeLocalSnapshot(chosen);
+            // Migrate local-only → disk, or push ahead-of-disk local.
+            if (!diskRaw || preferSnapshot(diskRaw, chosen) === chosen) {
+              scheduleDiskSnapshotWrite(chosen);
+            }
+          }
+        }
+      } catch (e) {
+        console.warn("[stakers-snapshot] disk hydrate failed:", e);
+      } finally {
+        if (!cancelled) setHydrated(true);
+      }
+    })();
+
+    const onHide = () => {
+      void flushDiskSnapshotWrite();
+    };
+    document.addEventListener("visibilitychange", onHide);
+    window.addEventListener("pagehide", onHide);
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onHide);
+      window.removeEventListener("pagehide", onHide);
+      void flushDiskSnapshotWrite();
+    };
   }, []);
 
   useEffect(() => {
@@ -416,7 +531,7 @@ export function StakersPanel() {
     persistSnapshot(next);
   }, []);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (opts?: { full?: boolean }) => {
     if (!isConfigured(VAULT)) {
       setError("StakingVaultV2 address not set");
       return;
@@ -425,12 +540,32 @@ export function StakersPanel() {
     setError(null);
     setProgressLabel("scanning… 0/1");
     const warnings: string[] = [];
+    if (opts?.full) clearStakeHistoryCache();
 
     try {
       const pc = client();
       const latest = await pc.getBlockNumber();
-      const from = stakingV2DeployBlock();
-      if (from > latest) {
+      const deploy = stakingV2DeployBlock();
+      const prev = loadStoredSnapshot();
+      const needsEventBackfill =
+        prev != null &&
+        prev.scannedThroughBlock != null &&
+        prev.rows.length > 0 &&
+        (!prev.stakeEvents || prev.stakeEvents.length === 0);
+      const full =
+        Boolean(opts?.full) || prev?.scannedThroughBlock == null || needsEventBackfill;
+      if (needsEventBackfill) {
+        warnings.push(
+          "Snapshot had no cached stake events — full log rescan to populate History",
+        );
+      }
+
+      let from = deploy;
+      if (!full && prev?.scannedThroughBlock != null) {
+        from = BigInt(prev.scannedThroughBlock) + 1n;
+      }
+
+      if (deploy > latest) {
         commitSnapshot({
           takenAt: Date.now(),
           rows: [],
@@ -438,45 +573,172 @@ export function StakersPanel() {
           addressesFound: 0,
           chunksScanned: 0,
           chunksFailed: 0,
+          scannedThroughBlock: null,
+          stakeEvents: [],
+          pnlAt: 0,
+          scratchUsd: null,
+          pnlLogicVersion: PNL_LOGIC_VERSION,
         });
         return;
       }
 
-      const { addresses, chunksScanned, chunksFailed, warnings: logWarnings } =
-        await scanDepositors(pc, from, latest, (done, total) => {
-          setProgressLabel(`scanning… ${done}/${total}`);
+      const known = new Map<string, Address>();
+      if (!full && prev) {
+        for (const r of prev.rows) known.set(r.address.toLowerCase(), r.address);
+      }
+
+      let chunksScanned = 0;
+      let chunksFailed = 0;
+      let newEvents: StoredStakeEvent[] = [];
+
+      if (from <= latest) {
+        const scanned = await scanVaultStakeEvents(pc, from, latest, {
+          onProgress: (done, total) => {
+            setProgressLabel(
+              full ? `scanning… ${done}/${total}` : `scanning new… ${done}/${total}`,
+            );
+          },
         });
-      warnings.push(...logWarnings);
+        chunksScanned = scanned.chunksScanned;
+        chunksFailed = scanned.chunksFailed;
+        warnings.push(...scanned.warnings);
+        newEvents = scanned.events;
+        for (const a of scanned.addresses) known.set(a.toLowerCase(), a);
+      } else {
+        setProgressLabel("positions…");
+      }
 
-      const chunk = BigInt(LOG_CHUNK_SIZE);
-      const logTotal = Math.max(1, Number((latest - from) / chunk) + 1);
-      const readTotal = Math.max(1, addresses.length);
-      const combinedTotal = logTotal + readTotal;
+      const stakeEvents = mergeStakeEvents(
+        full ? [] : prev?.stakeEvents ?? [],
+        newEvents,
+      );
 
-      setProgressLabel(`scanning… ${logTotal}/${combinedTotal}`);
+      const addresses = [...known.values()];
+      setProgressLabel(`positions… 0/${addresses.length || 1}`);
 
-      const { rows, warnings: stateWarnings } = await readStakerStates(
+      const { rows: freshRows, warnings: stateWarnings } = await readStakerStates(
         pc,
         addresses,
         (done) => {
-          setProgressLabel(`scanning… ${logTotal + done}/${combinedTotal}`);
+          setProgressLabel(`positions… ${done}/${addresses.length || 1}`);
         },
       );
       warnings.push(...stateWarnings);
 
-      commitSnapshot({
+      // Carry prior historical PnL; only re-fetch wallets missing FIFO USD fields.
+      // Drop cache when fill-classification logic changed.
+      const priorFlow = new Map<string, PnlFields>();
+      if (prev && prev.pnlLogicVersion === PNL_LOGIC_VERSION) {
+        for (const r of prev.rows) {
+          priorFlow.set(r.address.toLowerCase(), {
+            bought: r.bought,
+            sold: r.sold,
+            boughtUsd: r.boughtUsd,
+            soldUsd: r.soldUsd,
+            realizedPnlUsd: r.realizedPnlUsd,
+            unrealizedPnlUsd: r.unrealizedPnlUsd,
+            pnlUsd: r.pnlUsd,
+          });
+        }
+      }
+      const rows: StakerRow[] = freshRows.map((r) => {
+        const prior = priorFlow.get(r.address.toLowerCase());
+        if (!prior || !hasHistoricalPnl(prior)) return r;
+        return { ...r, ...prior };
+      });
+
+      const scannedThroughBlock =
+        chunksFailed === 0
+          ? Number(latest)
+          : prev?.scannedThroughBlock ?? null;
+      if (chunksFailed > 0) {
+        warnings.push(
+          "Log scan had failures — cursor not advanced; next Refresh will retry the same range",
+        );
+      }
+
+      const base: Snapshot = {
         takenAt: Date.now(),
         rows,
         warnings,
         addressesFound: addresses.length,
         chunksScanned,
         chunksFailed,
-      });
+        scannedThroughBlock,
+        stakeEvents: chunksFailed === 0 ? stakeEvents : prev?.stakeEvents ?? stakeEvents,
+        pnlAt: prev?.pnlAt ?? 0,
+        scratchUsd: prev?.scratchUsd ?? null,
+        pnlLogicVersion: prev?.pnlLogicVersion ?? 0,
+      };
+      commitSnapshot(base);
+
+      const needPnl = rows.filter((r) => !hasHistoricalPnl(r));
+      if (needPnl.length === 0) {
+        return;
+      }
+
+      setProgressLabel("pnl… ohlcv");
+      const prices = await fetchPrices();
+      const scratchUsd = prices.scratchUsd;
+      if (scratchUsd == null) {
+        warnings.push(
+          "Live SCRATCH/USD unavailable — unrealized mark needs DexScreener spot (realized still uses historical candles)",
+        );
+      }
+      const withPnl = [...rows];
+      const indexByAddr = new Map(withPnl.map((r, i) => [r.address.toLowerCase(), i]));
+      const pnlWarnings = [...warnings];
+      await mapPool(
+        needPnl,
+        PNL_CONCURRENCY,
+        async (row) => {
+          const i = indexByAddr.get(row.address.toLowerCase());
+          if (i == null) return row;
+          try {
+            const flow = await fetchWalletScratchFlow(row.address, scratchUsd, {
+              mode: "incremental",
+            });
+            withPnl[i] = {
+              ...withPnl[i],
+              bought: flow.bought,
+              sold: flow.sold,
+              boughtUsd: flow.boughtUsd,
+              soldUsd: flow.soldUsd,
+              realizedPnlUsd: flow.realizedPnlUsd,
+              unrealizedPnlUsd: flow.unrealizedPnlUsd,
+              pnlUsd: flow.pnlUsd,
+            };
+            if (flow.unpricedCount > 0) {
+              pnlWarnings.push(
+                `${shortAddr(row.address)}: ${flow.unpricedCount} fill(s) missing historical candle`,
+              );
+            }
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            pnlWarnings.push(`PnL fetch failed for ${shortAddr(row.address)}: ${msg}`);
+          }
+          return withPnl[i];
+        },
+        (done, total) => {
+          setProgressLabel(`pnl… ${done}/${total}`);
+          if (done % 5 === 0 || done === total) {
+            commitSnapshot({
+              ...base,
+              rows: [...withPnl],
+              warnings: pnlWarnings,
+              pnlAt: Date.now(),
+              scratchUsd,
+              pnlLogicVersion: PNL_LOGIC_VERSION,
+            });
+          }
+        },
+      );
+      await flushPnlFillsStore().catch(() => {});
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setError(msg);
-      setSnapshot((prev) => {
-        if (prev) return prev;
+      setSnapshot((prevSnap) => {
+        if (prevSnap) return prevSnap;
         const empty: Snapshot = {
           takenAt: Date.now(),
           rows: [],
@@ -484,6 +746,11 @@ export function StakersPanel() {
           addressesFound: 0,
           chunksScanned: 0,
           chunksFailed: 0,
+          scannedThroughBlock: null,
+          stakeEvents: [],
+          pnlAt: 0,
+          scratchUsd: null,
+          pnlLogicVersion: PNL_LOGIC_VERSION,
         };
         persistSnapshot(empty);
         return empty;
@@ -493,6 +760,87 @@ export function StakersPanel() {
       setProgressLabel(null);
     }
   }, [commitSnapshot]);
+
+  const loadPnl = useCallback(async () => {
+    if (!snapshot?.rows.length) return;
+    setScanning(true);
+    setError(null);
+    const warnings = [...snapshot.warnings];
+    const rows = [...snapshot.rows];
+    const total = rows.length;
+
+    try {
+      setProgressLabel("pnl… ohlcv");
+      const prices = await fetchPrices();
+      const scratchUsd = prices.scratchUsd;
+      if (scratchUsd == null) {
+        warnings.push(
+          "Live SCRATCH/USD unavailable — unrealized mark needs DexScreener spot (realized still uses historical candles)",
+        );
+      }
+      await mapPool(
+        rows,
+        PNL_CONCURRENCY,
+        async (row, i) => {
+          const addr = row.address;
+          try {
+            // Prefer mark-to-market from cached fills; falls back to incremental Transfers.
+            const flow = await fetchWalletScratchFlow(addr, scratchUsd, {
+              mode: "mark",
+            });
+            rows[i] = {
+              ...row,
+              bought: flow.bought,
+              sold: flow.sold,
+              boughtUsd: flow.boughtUsd,
+              soldUsd: flow.soldUsd,
+              realizedPnlUsd: flow.realizedPnlUsd,
+              unrealizedPnlUsd: flow.unrealizedPnlUsd,
+              pnlUsd: flow.pnlUsd,
+            };
+            if (flow.unpricedCount > 0) {
+              warnings.push(
+                `${shortAddr(addr)}: ${flow.unpricedCount} fill(s) missing historical candle`,
+              );
+            }
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            warnings.push(`PnL fetch failed for ${shortAddr(addr)}: ${msg}`);
+            rows[i] = { ...row, ...EMPTY_PNL };
+          }
+          return rows[i];
+        },
+        (done) => {
+          setProgressLabel(`pnl… ${done}/${total}`);
+          if (done % 5 === 0 || done === total) {
+            commitSnapshot({
+              ...snapshot,
+              rows: [...rows],
+              warnings,
+              pnlAt: Date.now(),
+              scratchUsd,
+              pnlLogicVersion: PNL_LOGIC_VERSION,
+            });
+          }
+        },
+      );
+      await flushPnlFillsStore().catch(() => {});
+      commitSnapshot({
+        ...snapshot,
+        rows,
+        warnings,
+        pnlAt: Date.now(),
+        scratchUsd,
+        pnlLogicVersion: PNL_LOGIC_VERSION,
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+    } finally {
+      setScanning(false);
+      setProgressLabel(null);
+    }
+  }, [snapshot, commitSnapshot]);
 
   const activeRows = useMemo(
     () => (snapshot?.rows ?? []).filter(isActive),
@@ -527,6 +875,27 @@ export function StakersPanel() {
         case "unlock":
           cmp = compareUnlock(a, b);
           break;
+        case "bought": {
+          const av = a.bought ?? -1n;
+          const bv = b.bought ?? -1n;
+          cmp = av === bv ? 0 : av < bv ? -1 : 1;
+          break;
+        }
+        case "sold": {
+          const av = a.sold ?? -1n;
+          const bv = b.sold ?? -1n;
+          cmp = av === bv ? 0 : av < bv ? -1 : 1;
+          break;
+        }
+        case "pnl": {
+          const ap = a.pnlUsd;
+          const bp = b.pnlUsd;
+          if (ap == null && bp == null) cmp = 0;
+          else if (ap == null) cmp = -1;
+          else if (bp == null) cmp = 1;
+          else cmp = ap === bp ? 0 : ap < bp ? -1 : 1;
+          break;
+        }
       }
       return cmp * dir;
     });
@@ -592,16 +961,35 @@ export function StakersPanel() {
       })
     : null;
 
+  const supplyHints: StakerTierHint[] | null = useMemo(() => {
+    if (!snapshot?.rows.length) return null;
+    return snapshot.rows.map((r) => ({
+      staked: r.staked,
+      tier: r.tier,
+      unlockingAmount: r.unlockingAmount,
+      releaseAt: r.releaseAt,
+    }));
+  }, [snapshot]);
+
   return (
     <section className="panel">
+      <SupplyLocationPanel stakerHints={supplyHints} />
+
       <div className="panel-head">
         <div>
           <h2>Stakers</h2>
           <p className="section-note" style={{ marginBottom: 0 }}>
             Manual snapshot of {contracts.stakingVaultV2.label} (
             <CopyAddress address={VAULT} />
-            ). Scan Deposit logs from deploy block, keep current stakers (staked &gt; 0). Persisted in
-            browser localStorage until the next Refresh.
+            ). First scan walks Deposit/Unlock logs from deploy (cached for History); later
+            Refresh only scans blocks since last success, then re-reads positions. Persisted to{" "}
+            <code>dashboard/.data/stakers-v2-snapshot.json</code> (survives cookie / site-data
+            clears) with a localStorage cache. Bought / sold count <em>market</em> SCRATCH only
+            (DEX swaps + CCA settler fills) — stake deposits, wallet transfers, and AA hops are
+            excluded. PnL uses historical FIFO cost basis (GeckoTerminal daily close at each
+            fill); total = realized + unrealized on remaining lots at live spot; figure in
+            parentheses is realized only. Market fills require a Uniswap v4 Swap (or settler
+            buy); LP and plain transfers are excluded.
           </p>
         </div>
         <div className="row" style={{ marginBottom: 0, gap: 8 }}>
@@ -610,9 +998,34 @@ export function StakersPanel() {
               type="button"
               className="btn secondary"
               disabled={!visibleRows.length}
-              onClick={() => downloadCsv(visibleRows, snapshot.takenAt)}
+              onClick={() => downloadCsv(visibleRows, snapshot.takenAt, snapshot.scratchUsd)}
             >
               Export CSV
+            </button>
+          )}
+          {snapshot && snapshot.rows.length > 0 && (
+            <button
+              type="button"
+              className="btn secondary"
+              disabled={scanning}
+              onClick={() => void loadPnl()}
+            >
+              {scanning && progressLabel?.startsWith("pnl")
+                ? progressLabel
+                : snapshot.pnlAt
+                  ? "Refresh PnL"
+                  : "Load PnL"}
+            </button>
+          )}
+          {snapshot?.scannedThroughBlock != null && (
+            <button
+              type="button"
+              className="btn secondary"
+              disabled={scanning || !isConfigured(VAULT)}
+              title="Re-walk Deposit logs from the vault deploy block"
+              onClick={() => void refresh({ full: true })}
+            >
+              Full rescan
             </button>
           )}
           <button
@@ -621,12 +1034,22 @@ export function StakersPanel() {
             disabled={scanning || !isConfigured(VAULT)}
             onClick={() => void refresh()}
           >
-            {scanning ? progressLabel ?? "scanning…" : "Refresh stakers"}
+            {scanning && !progressLabel?.startsWith("pnl")
+              ? progressLabel ?? "scanning…"
+              : "Refresh stakers"}
           </button>
         </div>
       </div>
 
       {error && <p className="err">{error}</p>}
+      {snapshot?.scannedThroughBlock != null && !scanning ? (
+        <p className="muted" style={{ marginTop: 0 }}>
+          Deposit logs through block {snapshot.scannedThroughBlock.toLocaleString()}
+          {snapshot.takenAt
+            ? ` · positions @ ${new Date(snapshot.takenAt).toLocaleString()}`
+            : ""}
+        </p>
+      ) : null}
       {snapshot?.warnings.length ? (
         <div className="banner-warn" role="status">
           Partial results — {snapshot.warnings.length} issue
@@ -734,6 +1157,16 @@ export function StakersPanel() {
                     <th className="sortable" onClick={() => toggleSort("unlock")}>
                       Unlock{sortMark("unlock")}
                     </th>
+                    <th className="num sortable" onClick={() => toggleSort("bought")}>
+                      Bought{sortMark("bought")}
+                    </th>
+                    <th className="num sortable" onClick={() => toggleSort("sold")}>
+                      Sold{sortMark("sold")}
+                    </th>
+                    <th className="num sortable" onClick={() => toggleSort("pnl")}>
+                      PnL (USD){sortMark("pnl")}
+                    </th>
+                    <th></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -760,6 +1193,27 @@ export function StakersPanel() {
                       <td>
                         <UnlockCell row={r} now={now} />
                       </td>
+                      <td className="num">
+                        <FlowCell value={r.bought} usd={r.boughtUsd} />
+                      </td>
+                      <td className="num">
+                        <FlowCell value={r.sold} usd={r.soldUsd} />
+                      </td>
+                      <td className="num">
+                        <PnlCell row={r} />
+                      </td>
+                      <td>
+                        <button
+                          type="button"
+                          className="btn ghost"
+                          style={{ padding: "2px 8px", fontSize: "0.8rem" }}
+                          onClick={() =>
+                            setHistoryTarget({ address: r.address, staked: r.staked })
+                          }
+                        >
+                          History
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -767,6 +1221,16 @@ export function StakersPanel() {
             </div>
           )}
         </>
+      ) : null}
+
+      {historyTarget ? (
+        <StakeHistoryModal
+          address={historyTarget.address}
+          currentStaked={historyTarget.staked}
+          knownEvents={snapshot?.stakeEvents}
+          eventsThroughBlock={snapshot?.scannedThroughBlock ?? null}
+          onClose={() => setHistoryTarget(null)}
+        />
       ) : null}
     </section>
   );

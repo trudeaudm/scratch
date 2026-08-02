@@ -337,6 +337,57 @@ select option {
   margin-right: 6px;
 }
 
+.supply-block {
+  margin: 0 0 22px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.supply-bar {
+  display: flex;
+  height: 10px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  margin-bottom: 14px;
+}
+
+.supply-bar-market {
+  background: var(--accent);
+  opacity: 0.85;
+}
+
+.supply-bar-locked {
+  background: var(--warn);
+  opacity: 0.75;
+}
+
+.supply-buckets {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 900px) {
+  .supply-buckets {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.supply-bucket h4 {
+  margin: 0 0 4px;
+  font-size: 0.95rem;
+}
+
+.supply-bucket-onMarket {
+  border-color: #2dd4bf55;
+}
+
+.supply-bucket-locked4d {
+  border-color: #fbbf2455;
+}
+
 .table {
   width: 100%;
   border-collapse: collapse;

@@ -17,21 +17,89 @@ type BlockscoutTokenRow = {
   balance?: string;
 };
 
+/** Soft TTL — avoid re-hitting Blockscout on every 30s dashboard poll. */
+const TOKENLIST_TTL_MS = 120_000;
+/** Minimum gap between Blockscout HTTP calls (shared queue). */
+const MIN_GAP_MS = 400;
+/** Retries after transient (non-429) failures. */
+const MAX_RETRIES = 3;
 /**
- * Fetch all ERC-20 holdings for an address via Blockscout account/tokenlist.
- * Throws on HTTP / API errors so callers can fall back to config-only.
+ * How long every Blockscout caller fails fast after a 429.
+ * The public endpoint throttles per-IP, so per-request backoff just multiplies
+ * the stall across holders — one shared cooldown is the only thing that helps.
  */
-export async function fetchBlockscoutTokenList(address: Address): Promise<DiscoveredToken[]> {
-  const url = `${BLOCKSCOUT_API}?module=account&action=tokenlist&address=${address}`;
-  const res = await fetch(url, { signal: AbortSignal.timeout(12_000) });
-  if (!res.ok) throw new Error(`Blockscout HTTP ${res.status}`);
+const RATE_LIMIT_COOLDOWN_MS = 60_000;
 
-  const data = (await res.json()) as {
-    status?: string;
-    message?: string;
-    result?: BlockscoutTokenRow[] | string | null;
-  };
+type CacheEntry = { at: number; tokens: DiscoveredToken[] };
+const tokenListCache = new Map<string, CacheEntry>();
 
+let queue: Promise<void> = Promise.resolve();
+let lastCallAt = 0;
+let rateLimitedUntil = 0;
+
+/** Thrown instead of issuing a request while the shared 429 cooldown is open. */
+export class BlockscoutRateLimitError extends Error {
+  constructor(msg = "Blockscout rate limited (HTTP 429)") {
+    super(msg);
+    this.name = "BlockscoutRateLimitError";
+  }
+}
+
+/** True while Blockscout has us throttled and callers should skip the network. */
+export function isBlockscoutRateLimited(): boolean {
+  return Date.now() < rateLimitedUntil;
+}
+
+/** Seconds left on the shared cooldown, for surfacing in UI warnings. */
+export function blockscoutCooldownSeconds(): number {
+  return Math.max(0, Math.ceil((rateLimitedUntil - Date.now()) / 1000));
+}
+
+function tripRateLimit(): void {
+  rateLimitedUntil = Date.now() + RATE_LIMIT_COOLDOWN_MS;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/** Blockscout accepts an optional API key that raises the per-IP limit. */
+function withApiKey(url: string): string {
+  const key = process.env.NEXT_PUBLIC_BLOCKSCOUT_API_KEY;
+  if (!key) return url;
+  return `${url}${url.includes("?") ? "&" : "?"}apikey=${encodeURIComponent(key)}`;
+}
+
+/**
+ * Serialize Blockscout HTTP so parallel holders / panels don't stampede into 429.
+ * Throws {@link BlockscoutRateLimitError} without hitting the network while the
+ * shared cooldown is open, and opens that cooldown whenever a 429 comes back.
+ */
+export async function blockscoutFetch(url: string, timeoutMs = 12_000): Promise<Response> {
+  if (isBlockscoutRateLimited()) throw new BlockscoutRateLimitError();
+
+  const run = queue.then(async () => {
+    if (isBlockscoutRateLimited()) throw new BlockscoutRateLimitError();
+    const wait = Math.max(0, MIN_GAP_MS - (Date.now() - lastCallAt));
+    if (wait > 0) await sleep(wait);
+    lastCallAt = Date.now();
+    const res = await fetch(withApiKey(url), { signal: AbortSignal.timeout(timeoutMs) });
+    if (res.status === 429) tripRateLimit();
+    return res;
+  });
+  // Keep the queue alive even if this call rejects.
+  queue = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
+
+function parseTokenListPayload(data: {
+  status?: string;
+  message?: string;
+  result?: BlockscoutTokenRow[] | string | null;
+}): DiscoveredToken[] {
   // Blockscout returns status "0" with message "No token transfers found" / empty — treat as empty list.
   if (!data.result || typeof data.result === "string") {
     if (data.status === "0") return [];
@@ -63,6 +131,51 @@ export async function fetchBlockscoutTokenList(address: Address): Promise<Discov
     });
   }
   return out;
+}
+
+/**
+ * Fetch all ERC-20 holdings for an address via Blockscout account/tokenlist.
+ * Cached + rate-limited. On 429 after retries, returns last good cache when present
+ * (throws only when there is nothing to fall back to).
+ */
+export async function fetchBlockscoutTokenList(address: Address): Promise<DiscoveredToken[]> {
+  const key = address.toLowerCase();
+  const cached = tokenListCache.get(key);
+  if (cached && Date.now() - cached.at < TOKENLIST_TTL_MS) {
+    return cached.tokens;
+  }
+
+  const url = `${BLOCKSCOUT_API}?module=account&action=tokenlist&address=${address}`;
+  let lastErr: Error | null = null;
+
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    try {
+      const res = await blockscoutFetch(url);
+      if (res.status === 429) {
+        // Cooldown is already open; retrying here only delays the caller.
+        lastErr = new BlockscoutRateLimitError();
+        break;
+      }
+      if (!res.ok) throw new Error(`Blockscout HTTP ${res.status}`);
+
+      const data = (await res.json()) as {
+        status?: string;
+        message?: string;
+        result?: BlockscoutTokenRow[] | string | null;
+      };
+      const tokens = parseTokenListPayload(data);
+      tokenListCache.set(key, { at: Date.now(), tokens });
+      return tokens;
+    } catch (e) {
+      lastErr = e instanceof Error ? e : new Error("Blockscout tokenlist failed");
+      if (lastErr instanceof BlockscoutRateLimitError) break;
+      if (attempt < MAX_RETRIES - 1) await sleep(1_000 * 2 ** attempt);
+    }
+  }
+
+  // Stale cache is better than blank discovery after a rate-limit storm.
+  if (cached) return cached.tokens;
+  throw lastErr ?? new Error("Blockscout tokenlist failed");
 }
 
 export type BlockscoutTokenFacts = {
@@ -101,7 +214,7 @@ export async function fetchBlockscoutTokenFacts(address: Address): Promise<Block
   const errors: string[] = [];
 
   try {
-    const res = await fetch(`${EXPLORER_BASE}/api/v2/tokens/${addr}`);
+    const res = await blockscoutFetch(`${EXPLORER_BASE}/api/v2/tokens/${addr}`);
     if (res.ok) {
       const data = (await res.json()) as { holders_count?: string | number };
       const n = Number(data.holders_count);
@@ -114,7 +227,7 @@ export async function fetchBlockscoutTokenFacts(address: Address): Promise<Block
   }
 
   try {
-    const res = await fetch(`${EXPLORER_BASE}/api/v2/smart-contracts/${addr}`);
+    const res = await blockscoutFetch(`${EXPLORER_BASE}/api/v2/smart-contracts/${addr}`);
     if (res.ok) {
       const data = (await res.json()) as {
         is_verified?: boolean;
@@ -137,7 +250,7 @@ export async function fetchBlockscoutTokenFacts(address: Address): Promise<Block
 
   try {
     const url = `${BLOCKSCOUT_API}?module=contract&action=getcontractcreation&contractaddresses=${addr}`;
-    const res = await fetch(url);
+    const res = await blockscoutFetch(url);
     if (res.ok) {
       const data = (await res.json()) as {
         status?: string;

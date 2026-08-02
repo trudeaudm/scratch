@@ -27,7 +27,7 @@ export function PrizeVaultPanel({
         </button>
       </div>
       <p className="section-note">
-        Full holdings per vault (config tokens + Blockscout discovery + on-chain inventory). Sweep
+        Full holdings per vault (config tokens + Alchemy discovery + on-chain inventory). Sweep
         queue / execute lives under Sweeps.
       </p>
 

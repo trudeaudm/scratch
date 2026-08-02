@@ -1,15 +1,15 @@
 /**
  * Public win share page — loads ScratchSettled for ?req=&tier= and renders the card.
+ * Prefers operator ledger (/settlement/:id.json); falls back to public RPC getLogs.
  * Bump ASSET_VERSION in sync with win.html ?v=.
  */
-export const ASSET_VERSION = 'v2-live-1';
+export const ASSET_VERSION = 'v2-live-2';
 
 /** Game generation — production stays v1 until cutover. `?gen=2` forces v2 for verify. */
 export const GAME_GENERATION = 2;
 
 import {
   createPublicClient,
-  fallback,
   http,
   formatUnits,
   parseAbiItem,
@@ -41,9 +41,11 @@ const CONFIG = {
   chainId: 4663,
   explorer: 'https://robinhoodchain.blockscout.com',
   rpc: {
-    alchemy: 'https://robinhood-mainnet.g.alchemy.com/v2/Mnnnl8pj1I4NQNUzq7BXU',
+    /** Public Robinhood RPC only — never ship an Alchemy key in the browser. */
     public: 'https://rpc.mainnet.chain.robinhood.com',
   },
+  /** Same operator host as site/app.js — ledger-backed settlement lookup. */
+  winsApi: 'https://scratch-operator-web.onrender.com',
   game: '0xBeD604b5AB226134EdF154cc31881d8C93f4C9e6',
   // v2 game (ScratchGameV2) — production Deploy3; used when generation is 2.
   gameV2: '0xe6BA601710aFd1297114D738CA201D1D84eb3Da1',
@@ -102,13 +104,13 @@ const chain = defineChain({
   id: CONFIG.chainId,
   name: 'Robinhood Chain',
   nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
-  rpcUrls: { default: { http: [CONFIG.rpc.alchemy, CONFIG.rpc.public] } },
+  rpcUrls: { default: { http: [CONFIG.rpc.public] } },
   blockExplorers: { default: { name: 'Blockscout', url: CONFIG.explorer } },
 });
 
 const client = createPublicClient({
   chain,
-  transport: fallback([http(CONFIG.rpc.alchemy), http(CONFIG.rpc.public)]),
+  transport: http(CONFIG.rpc.public),
 });
 
 const metaCache = new Map();
@@ -126,55 +128,38 @@ function formatHuman(amount, decimals = 18, maxFrac = 4) {
   return n.toLocaleString('en-US', { maximumFractionDigits: maxFrac });
 }
 
-function parseQuery() {
-  const q = new URLSearchParams(location.search);
-  const reqRaw = (q.get('req') || '').trim();
-  const tierRaw = (q.get('tier') || '').trim().toLowerCase();
-  // v2 share links carry `requestId:cardIndex`; v1 is just `requestId`.
-  let requestId = null;
-  let cardIndex = null;
-  const m = /^(\d+)(?::(\d+))?$/.exec(reqRaw);
-  if (m) {
-    try {
-      requestId = BigInt(m[1]);
-    } catch {
-      requestId = null;
-    }
-    if (m[2] != null) cardIndex = Number(m[2]);
-  }
-  let tierHint = null;
-  if (tierRaw === 'prem' || tierRaw === 'premium' || tierRaw === '1') tierHint = 1;
-  else if (tierRaw === 'std' || tierRaw === 'standard' || tierRaw === '0') tierHint = 0;
-  return { requestId, cardIndex, tierHint, reqRaw };
+function setText(el, text) {
+  if (el) el.textContent = text;
 }
 
 function showGeneric() {
-  document.body.classList.remove('is-premium');
-  $('winCard')?.classList.remove('premium');
-  const reqEl = $('winReq');
-  if (reqEl) reqEl.textContent = 'ONCHAIN WIN';
-  const tierEl = $('winTier');
-  if (tierEl) {
-    tierEl.textContent = 'SCRATCH';
-    tierEl.className = 'tier-badge';
-  }
-  const amt = $('winAmt');
-  if (amt) {
-    amt.textContent = 'Wins are settled onchain';
-    amt.className = 'amt';
-  }
-  setText($('winLbl'), 'Odds and payouts come from the live game contract.');
-  const receipt = $('winReceipt');
-  if (receipt) {
-    receipt.hidden = true;
-    receipt.removeAttribute('href');
-  }
-  $('winStatus')?.classList.add('show');
-  setText($('winStatus'), 'Share a win from the app to get a receipt link for a specific ticket.');
+  setText($('winAmt'), '—');
+  setText($('winLbl'), 'Open a settled scratch from the main site to share a card.');
+  $('winReceipt').hidden = true;
 }
 
-function setText(el, text) {
-  if (el) el.textContent = text;
+function parseQuery() {
+  const q = new URLSearchParams(location.search);
+  const reqRaw = q.get('req');
+  const cardRaw = q.get('card');
+  const tierRaw = q.get('tier');
+  let requestId = null;
+  try {
+    if (reqRaw != null && reqRaw !== '') requestId = BigInt(reqRaw);
+  } catch {
+    requestId = null;
+  }
+  let cardIndex = null;
+  if (cardRaw != null && cardRaw !== '') {
+    const n = Number(cardRaw);
+    if (Number.isFinite(n) && n >= 0) cardIndex = n;
+  }
+  let tierHint = null;
+  if (tierRaw != null && tierRaw !== '') {
+    const n = Number(tierRaw);
+    if (n === 0 || n === 1) tierHint = n;
+  }
+  return { requestId, cardIndex, tierHint };
 }
 
 async function tokenMeta(asset) {
@@ -198,9 +183,51 @@ async function tokenMeta(asset) {
   }
 }
 
+/**
+ * Prefer operator ledger (originated on reveal) over eth_getLogs.
+ * Returns a synthetic log-shaped object for renderWin.
+ */
+async function findSettledFromLedger(requestId, cardIndex) {
+  try {
+    const url = new URL(`/settlement/${requestId.toString()}.json`, CONFIG.winsApi);
+    const res = await fetch(url.toString(), { cache: 'no-store' });
+    if (res.status === 404) return null;
+    if (!res.ok) return null;
+    const data = await res.json();
+    const rows = Array.isArray(data?.rows) ? data.rows : [];
+    if (!rows.length) return null;
+
+    let row = null;
+    if (cardIndex != null) {
+      row = rows.find((r) => Number(r.cardIndex ?? 0) === cardIndex) || null;
+    }
+    if (!row) row = rows[rows.length - 1];
+
+    let amount = 0n;
+    try {
+      amount = BigInt(row.amount || '0');
+    } catch {
+      amount = 0n;
+    }
+    return {
+      transactionHash: row.txHash || null,
+      args: {
+        user: row.user,
+        requestId,
+        cardIndex: row.cardIndex != null ? Number(row.cardIndex) : null,
+        tier: Number(row.tier ?? 0),
+        rowIndex: BigInt(row.rowIndex || 0),
+        asset: row.asset,
+        amount,
+      },
+    };
+  } catch {
+    return null;
+  }
+}
+
 function pickCard(logs, cardIndex) {
   if (!logs.length) return null;
-  // v2: choose the log for the requested cardIndex; else the last (latest) log.
   if (cardIndex != null) {
     const match = logs.find((l) => Number(l.args.cardIndex ?? 0) === cardIndex);
     if (match) return match;
@@ -208,7 +235,7 @@ function pickCard(logs, cardIndex) {
   return logs[logs.length - 1];
 }
 
-async function findSettled(requestId, cardIndex) {
+async function findSettledFromChain(requestId, cardIndex) {
   const tip = await client.getBlockNumber();
   const from = CONFIG.deployBlock;
   const game = getAddress(activeGameAddress());
@@ -232,6 +259,12 @@ async function findSettled(requestId, cardIndex) {
     start = clampedFrom - 1n;
   }
   return null;
+}
+
+async function findSettled(requestId, cardIndex) {
+  const fromLedger = await findSettledFromLedger(requestId, cardIndex);
+  if (fromLedger) return fromLedger;
+  return findSettledFromChain(requestId, cardIndex);
 }
 
 function applyTierUi(tier) {
@@ -311,7 +344,7 @@ async function main() {
       : `REQUEST #${requestId.toString()}`;
   setText($('winReq'), reqLabel);
   setText($('winAmt'), 'Loading…');
-  setText($('winLbl'), 'Fetching settlement from chain');
+  setText($('winLbl'), 'Fetching settlement');
   $('winReceipt').hidden = true;
 
   try {

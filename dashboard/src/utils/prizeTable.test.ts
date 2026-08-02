@@ -15,7 +15,7 @@ import {
   validatePrizeTable,
   type EditorRow,
   type PrizeRow,
-} from "./prizeTable.ts";
+} from "./prizeTable";
 
 const NO_WIN = zeroAddress;
 const SCRATCH = "0x1111111111111111111111111111111111111111" as const;
@@ -284,6 +284,7 @@ describe("annotate + EV", () => {
     const ann = annotateRows(table, bal, {
       scratchUsd: 1,
       ethUsd: null,
+      byToken: {},
       fetchedAt: null,
       error: null,
     });
@@ -302,6 +303,7 @@ describe("annotate + EV", () => {
     const ann = annotateRows(table, bal, {
       scratchUsd: null,
       ethUsd: null,
+      byToken: {},
       fetchedAt: null,
       error: null,
     });

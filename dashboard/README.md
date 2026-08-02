@@ -8,16 +8,18 @@ Local-only ops UI for Phase-2 contracts on **Robinhood Chain (id 4663)**.
 
 - Next.js 14 (App Router) + TypeScript
 - viem + wagmi (injected connector)
-- Chain 4663 defined manually in `src/config/chain.ts` (RPC from `NEXT_PUBLIC_RPC_URL`, explorer `robinhoodchain.blockscout.com`)
+- Chain 4663 defined manually in `src/config/chain.ts` (`NEXT_PUBLIC_RPC_URL` = public RPC; Alchemy Enhanced via server-only `ALCHEMY_RPC_URL`)
 
 ## Setup
 
 ```bash
 cd dashboard
-cp .env.example .env.local   # set NEXT_PUBLIC_RPC_URL
+cp .env.example .env.local   # public RPC + optional ALCHEMY_RPC_URL
 npm install
 npm test                     # prize-table validation unit tests
 ```
+
+**Dual RPC:** `NEXT_PUBLIC_RPC_URL` is the public Robinhood endpoint for all viem/wagmi `eth_*` / `getLogs`. Set `ALCHEMY_RPC_URL` (server-only) for `alchemy_getTokenBalances` / `alchemy_getAssetTransfers` — browser code calls `/api/alchemy/*` so the key never ships in the client bundle.
 
 ### Fill addresses
 
@@ -32,7 +34,11 @@ Verified tokens live in **`../site/tokens.json`** (repo-root `site/tokens.json`)
 
 Zero addresses (`0x000…000`) skip on-chain reads for that row until filled.
 
-**Holdings are discovery-based:** the read panel also queries Blockscout `account/tokenlist` for every tracked address, merges with config, and shows all nonzero ERC-20s. Tokens not in `tokens.json` get an **unverified** badge (scam airdrops must not look curated) and a **Verify & add** button. Write-panel fund/send dropdowns stay **config-only** and refresh immediately after promote/remove. If Blockscout fails, the UI falls back to config balances with a warning bar.
+**Holdings are discovery-based:** the read panel queries Alchemy `alchemy_getTokenBalances` (via `/api/alchemy/token-balances`, ~5 min cache) for prize-vault holders, merges with config, and shows all nonzero ERC-20s. Tokens not in `tokens.json` get an **unverified** badge (scam airdrops must not look curated) and a **Verify & add** button. Write-panel fund/send dropdowns stay **config-only** and refresh immediately after promote/remove. If Alchemy discovery fails, the UI falls back to config balances with a warning bar. Explorer links and the Verify-token modal still use Blockscout.
+
+**Stakers snapshot** (Deposit-log cursor + positions + PnL) is written to **`dashboard/.data/stakers-v2-snapshot.json`** via a localhost-only API (gitignored). localStorage is only a fast cache — clearing site data won’t force a full log rescan if the file is still there.
+
+**Staker PnL** is FIFO cost-basis using GeckoTerminal daily SCRATCH/USD closes (cached at `dashboard/.data/scratch-ohlcv-day.json`), not live spot. Unrealized marks remaining lots at the current DexScreener price. Market fills are persisted at `dashboard/.data/staker-pnl-fills.json` so Alchemy Transfers only pull new blocks after the first backfill; **Reload PnL** remaks unrealized from that cache. Free GT tier is ~30 req/min; the OHLCV cache refreshes about every 6 hours.
 
 
 ### Copy ABIs from Foundry `out/`
@@ -69,7 +75,7 @@ Open [http://localhost:3000](http://localhost:3000). Connect the treasury wallet
 
 ## Panels
 
-### Read (auto-refresh 30s)
+### Read (auto-refresh 60s; static tables / sweep history on longer TTLs)
 
 Balances for PrizeVault, StakingVault, StandardTicketSource, ops VestingWallet, and treasury EOA:
 

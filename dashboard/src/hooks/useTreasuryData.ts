@@ -31,7 +31,17 @@ import {
 } from "@/config/abis";
 import { robinhoodChain, REFRESH_MS } from "@/config/chain";
 import { ethUsd, fetchPrices, amountUsd, unitPriceFor, type PriceMap, type PriceTag } from "@/utils/prices";
-import { fetchBlockscoutTokenList } from "@/utils/blockscout";
+import { alchemyGetTokenBalances } from "@/utils/alchemy";
+import { resolveTokenMeta } from "@/utils/tokenMeta";
+
+/** Ceiling on Alchemy discovery before the snapshot proceeds without finishing all holders. */
+const DISCOVERY_BUDGET_MS = 12_000;
+/** Parallel alchemy_getTokenBalances calls. */
+const DISCOVERY_CONCURRENCY = 4;
+/** Prize tables rarely change — reuse for an hour unless forced. */
+const PRIZE_TABLE_TTL_MS = 60 * 60 * 1000;
+/** eth_getLogs window cap (public RPC / Alchemy both enforce ~10k). */
+const LOG_LOOKBACK = 9_000n;
 
 /** Fallback if on-chain SWEEP_* reads fail — matches PrizeVault.sol. */
 const SWEEP_DELAY_DEFAULT = 48 * 60 * 60;
@@ -192,7 +202,7 @@ export type TreasurySnapshot = {
   prizeTables: PrizeTableSnapshot[] | null;
   /** Balances + fallbackRate from the vault linked to the active ScratchGame. */
   vaultAssets: VaultAssetMeta[];
-  /** Set when Blockscout tokenlist failed — holdings fell back to config-only. */
+  /** Set when Alchemy token discovery failed — holdings fell back to config-only. */
   discoveryWarning: string | null;
   error: string | null;
 };
@@ -293,7 +303,10 @@ async function loadHolders(
   );
 }
 
-/** One Blockscout pass for all holders — feeds Dex pricing and holding merge. */
+/**
+ * Alchemy token discovery — prize vaults only (they hold arbitrary ERC-20s).
+ * Other holders use config-token balanceOf on the public RPC.
+ */
 async function discoverAllHoldings(): Promise<{
   byHolder: Map<string, DiscoveredBag[]>;
   addresses: Address[];
@@ -301,45 +314,72 @@ async function discoverAllHoldings(): Promise<{
 }> {
   const byHolder = new Map<string, DiscoveredBag[]>();
   const addrs = new Set<string>();
-  const holders = balanceHolders.filter((h) => isConfigured(h.address));
-  // Sequential — parallel tokenlist stamps Blockscout into 429s every refresh.
+  const holders = configuredPrizeVaults().filter((h) => isConfigured(h.address));
+  const deadline = Date.now() + DISCOVERY_BUDGET_MS;
+  let skipped = 0;
+  let firstError: string | null = null;
+
   const results: {
     holder: (typeof balanceHolders)[number];
-    list: Awaited<ReturnType<typeof fetchBlockscoutTokenList>>;
+    list: DiscoveredBag[];
     error: string | null;
   }[] = [];
-  for (const holder of holders) {
-    try {
-      const list = await fetchBlockscoutTokenList(holder.address);
-      results.push({ holder, list, error: null });
-    } catch (e) {
-      results.push({
-        holder,
-        list: [],
-        error: e instanceof Error ? e.message : "Blockscout tokenlist failed",
-      });
+
+  let next = 0;
+  async function worker(): Promise<void> {
+    for (;;) {
+      const i = next++;
+      if (i >= holders.length) return;
+      if (Date.now() > deadline) {
+        skipped++;
+        continue;
+      }
+      const holder = holders[i];
+      try {
+        const balances = await alchemyGetTokenBalances(holder.address);
+        const list: DiscoveredBag[] = [];
+        for (const b of balances) {
+          if (b.balance === 0n) continue;
+          const meta = await resolveTokenMeta(b.address);
+          list.push({
+            address: b.address,
+            balance: b.balance,
+            symbol: meta.symbol,
+            decimals: meta.decimals,
+          });
+        }
+        results.push({ holder, list, error: null });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "Alchemy token balances failed";
+        if (!firstError) firstError = msg;
+        results.push({ holder, list: [], error: msg });
+      }
     }
   }
+
+  const n = Math.min(DISCOVERY_CONCURRENCY, Math.max(1, holders.length));
+  await Promise.all(Array.from({ length: n }, () => worker()));
 
   let warning: string | null = null;
   for (const r of results) {
     if (r.error) {
-      warning = `Blockscout token discovery failed (${r.error}) — showing config tokens only`;
+      warning = `Alchemy token discovery failed (${r.error}) — showing config tokens only`;
       continue;
     }
-    byHolder.set(
-      r.holder.address.toLowerCase(),
-      r.list.map((t) => ({
-        address: t.address,
-        balance: t.balance,
-        symbol: t.symbol,
-        decimals: t.decimals,
-      })),
-    );
+    byHolder.set(r.holder.address.toLowerCase(), r.list);
     for (const t of r.list) {
       if (!findTokenConfig(t.address)) addrs.add(t.address.toLowerCase());
     }
   }
+
+  if (skipped > 0) {
+    warning = `Alchemy token discovery timed out after ${Math.round(
+      DISCOVERY_BUDGET_MS / 1000,
+    )}s (${skipped} holder(s) skipped) — showing config tokens only`;
+  } else if (firstError && !warning) {
+    warning = `Alchemy token discovery failed (${firstError}) — showing config tokens only`;
+  }
+
   return { byHolder, addresses: [...addrs] as Address[], warning };
 }
 
@@ -360,32 +400,22 @@ async function resolveAssetSymbol(
   }
 }
 
+type SweepHistoryCache = { throughBlock: bigint; rows: SweepHistoryRow[] };
+const sweepHistoryCache = new Map<string, SweepHistoryCache>();
+
 async function loadSweepHistory(
   pc: ReturnType<typeof client>,
   addr: Address,
 ): Promise<SweepHistoryRow[]> {
+  const cacheKey = addr.toLowerCase();
   try {
     const latest = await pc.getBlockNumber();
-    // Alchemy caps eth_getLogs at 10k blocks.
-    const lookback = 9_000n;
-    const fromBlock = latest > lookback ? latest - lookback : 0n;
-    const [queued, executed, cancelled] = await Promise.all([
-      pc.getLogs({ address: addr, event: sweepQueuedEvent, fromBlock, toBlock: latest }) as Promise<
-        Log[]
-      >,
-      pc.getLogs({
-        address: addr,
-        event: sweepExecutedEvent,
-        fromBlock,
-        toBlock: latest,
-      }) as Promise<Log[]>,
-      pc.getLogs({
-        address: addr,
-        event: sweepCancelledEvent,
-        fromBlock,
-        toBlock: latest,
-      }) as Promise<Log[]>,
-    ]);
+    const prev = sweepHistoryCache.get(cacheKey);
+    const fromBlock = prev
+      ? prev.throughBlock + 1n
+      : latest > LOG_LOOKBACK
+        ? latest - LOG_LOOKBACK
+        : 0n;
 
     type Raw = {
       kind: SweepHistoryRow["kind"];
@@ -399,59 +429,78 @@ async function loadSweepHistory(
     };
     const rows: Raw[] = [];
 
-    for (const l of queued) {
-      const args = (l as { args?: { id?: bigint; asset?: Address; to?: Address; eta?: bigint | number } })
-        .args;
-      if (args?.id === undefined || !l.transactionHash || l.blockNumber === null) continue;
-      rows.push({
-        kind: "SweepQueued",
-        id: args.id,
-        asset: args.asset ?? null,
-        to: args.to ?? null,
-        eta: args.eta !== undefined ? Number(args.eta) : null,
-        amount: null,
-        txHash: l.transactionHash,
-        blockNumber: l.blockNumber,
-      });
-    }
-    for (const l of executed) {
-      const args = (
-        l as { args?: { id?: bigint; asset?: Address; to?: Address; amount?: bigint } }
-      ).args;
-      if (args?.id === undefined || !l.transactionHash || l.blockNumber === null) continue;
-      rows.push({
-        kind: "SweepExecuted",
-        id: args.id,
-        asset: args.asset ?? null,
-        to: args.to ?? null,
-        eta: null,
-        amount: args.amount ?? null,
-        txHash: l.transactionHash,
-        blockNumber: l.blockNumber,
-      });
-    }
-    for (const l of cancelled) {
-      const args = (l as { args?: { id?: bigint } }).args;
-      if (args?.id === undefined || !l.transactionHash || l.blockNumber === null) continue;
-      rows.push({
-        kind: "SweepCancelled",
-        id: args.id,
-        asset: null,
-        to: null,
-        eta: null,
-        amount: null,
-        txHash: l.transactionHash,
-        blockNumber: l.blockNumber,
-      });
-    }
+    if (fromBlock <= latest) {
+      const [queued, executed, cancelled] = await Promise.all([
+        pc.getLogs({
+          address: addr,
+          event: sweepQueuedEvent,
+          fromBlock,
+          toBlock: latest,
+        }) as Promise<Log[]>,
+        pc.getLogs({
+          address: addr,
+          event: sweepExecutedEvent,
+          fromBlock,
+          toBlock: latest,
+        }) as Promise<Log[]>,
+        pc.getLogs({
+          address: addr,
+          event: sweepCancelledEvent,
+          fromBlock,
+          toBlock: latest,
+        }) as Promise<Log[]>,
+      ]);
 
-    rows.sort((a, b) => {
-      if (a.blockNumber === b.blockNumber) return Number(b.id - a.id);
-      return a.blockNumber > b.blockNumber ? -1 : 1;
-    });
+      for (const l of queued) {
+        const args = (
+          l as { args?: { id?: bigint; asset?: Address; to?: Address; eta?: bigint | number } }
+        ).args;
+        if (args?.id === undefined || !l.transactionHash || l.blockNumber === null) continue;
+        rows.push({
+          kind: "SweepQueued",
+          id: args.id,
+          asset: args.asset ?? null,
+          to: args.to ?? null,
+          eta: args.eta !== undefined ? Number(args.eta) : null,
+          amount: null,
+          txHash: l.transactionHash,
+          blockNumber: l.blockNumber,
+        });
+      }
+      for (const l of executed) {
+        const args = (
+          l as { args?: { id?: bigint; asset?: Address; to?: Address; amount?: bigint } }
+        ).args;
+        if (args?.id === undefined || !l.transactionHash || l.blockNumber === null) continue;
+        rows.push({
+          kind: "SweepExecuted",
+          id: args.id,
+          asset: args.asset ?? null,
+          to: args.to ?? null,
+          eta: null,
+          amount: args.amount ?? null,
+          txHash: l.transactionHash,
+          blockNumber: l.blockNumber,
+        });
+      }
+      for (const l of cancelled) {
+        const args = (l as { args?: { id?: bigint } }).args;
+        if (args?.id === undefined || !l.transactionHash || l.blockNumber === null) continue;
+        rows.push({
+          kind: "SweepCancelled",
+          id: args.id,
+          asset: null,
+          to: null,
+          eta: null,
+          amount: null,
+          txHash: l.transactionHash,
+          blockNumber: l.blockNumber,
+        });
+      }
+    }
 
     const symbolCache = new Map<string, string>();
-    const out: SweepHistoryRow[] = [];
+    const fresh: SweepHistoryRow[] = [];
     for (const r of rows) {
       let symbol: string | null = null;
       if (r.asset) {
@@ -461,11 +510,26 @@ async function loadSweepHistory(
         }
         symbol = symbolCache.get(key)!;
       }
-      out.push({ ...r, symbol });
+      fresh.push({ ...r, symbol });
     }
-    return out;
+
+    const byKey = new Map<string, SweepHistoryRow>();
+    for (const r of prev?.rows ?? []) {
+      byKey.set(`${r.kind}:${r.txHash}:${r.id.toString()}`, r);
+    }
+    for (const r of fresh) {
+      byKey.set(`${r.kind}:${r.txHash}:${r.id.toString()}`, r);
+    }
+    const merged = [...byKey.values()].sort((a, b) => {
+      if (a.blockNumber === b.blockNumber) return Number(b.id - a.id);
+      return a.blockNumber > b.blockNumber ? -1 : 1;
+    });
+    const minKeep = latest > LOG_LOOKBACK ? latest - LOG_LOOKBACK : 0n;
+    const pruned = merged.filter((r) => r.blockNumber >= minKeep);
+    sweepHistoryCache.set(cacheKey, { throughBlock: latest, rows: pruned });
+    return pruned;
   } catch {
-    return [];
+    return sweepHistoryCache.get(cacheKey)?.rows ?? [];
   }
 }
 
@@ -480,7 +544,7 @@ async function loadPrizeVault(
 
   /**
    * Same merge as Balances holders: on-chain inventory() (tracked via fund) +
-   * every config token's ERC-20 balanceOf(vault) + Blockscout tokenlist extras.
+   * every config token's ERC-20 balanceOf(vault) + Alchemy token-balance extras.
    * inventory() alone misses assets transferred in without fund().
    */
   const byAddr = new Map<string, PrizeVaultInventoryRow>();
@@ -801,6 +865,10 @@ async function loadVesting(pc: ReturnType<typeof client>): Promise<VestingVitals
   };
 }
 
+/** Incremental ScratchRequested ids for pending-count (per game address). */
+type GameRequestCache = { throughBlock: bigint; ids: Set<string> };
+const gameRequestCache = new Map<string, GameRequestCache>();
+
 async function loadGame(pc: ReturnType<typeof client>): Promise<GameVitals | null> {
   const addr = activeScratchGame().address;
   if (!isConfigured(addr)) return null;
@@ -844,43 +912,51 @@ async function loadGame(pc: ReturnType<typeof client>): Promise<GameVitals | nul
 
   try {
     const latest = await pc.getBlockNumber();
-    // Alchemy caps eth_getLogs at 10k blocks — keep a short recent window for pending ops.
-    const lookback = 9_000n;
-    const fromBlock = latest > lookback ? latest - lookback : 0n;
-    const logs = (await pc.getLogs({
-      address: addr,
-      event: scratchRequestedEvent,
-      fromBlock,
-      toBlock: latest,
-    })) as Log[];
+    const cacheKey = addr.toLowerCase();
+    const prev = gameRequestCache.get(cacheKey);
+    const fromBlock = prev
+      ? prev.throughBlock + 1n
+      : latest > LOG_LOOKBACK
+        ? latest - LOG_LOOKBACK
+        : 0n;
 
-    const ids = [
-      ...new Set(
-        logs
-          .map((l) => (l as { args?: { requestId?: bigint } }).args?.requestId)
-          .filter((id): id is bigint => id !== undefined),
-      ),
-    ];
+    const idSet = new Set(prev?.ids ?? []);
+    if (fromBlock <= latest) {
+      const logs = (await pc.getLogs({
+        address: addr,
+        event: scratchRequestedEvent,
+        fromBlock,
+        toBlock: latest,
+      })) as Log[];
+      for (const l of logs) {
+        const id = (l as { args?: { requestId?: bigint } }).args?.requestId;
+        if (id !== undefined) idSet.add(id.toString());
+      }
+    }
 
     const cutoff = t - rescueDelayN;
+    const stillOpen = new Set<string>();
     const statuses = await Promise.all(
-      ids.map(async (id) => {
+      [...idSet].map(async (idStr) => {
+        const id = BigInt(idStr);
         const req = (await pc.readContract({
           address: addr,
           abi: scratchGameAbiTyped,
           functionName: "requests",
           args: [id],
         })) as readonly [Address, number, number | bigint, number];
-        return { requestedAt: Number(req[2]), status: req[3] };
+        return { idStr, requestedAt: Number(req[2]), status: req[3] };
       }),
     );
     for (const s of statuses) {
-      // Status: 0 None, 1 Pending, 2 Settled, 3 Rescued
+      // Status: 0 None, 1 Pending, 2 Settled, 3 Rescued — keep Pending for next poll.
       if (s.status === 1) {
         pendingCount += 1;
+        stillOpen.add(s.idStr);
         if (s.requestedAt < cutoff) stalePendingCount += 1;
       }
     }
+    gameRequestCache.set(cacheKey, { throughBlock: latest, ids: stillOpen });
   } catch {
     // Log scan can fail on RPC limits; leave counts at 0.
   }
@@ -898,11 +974,22 @@ async function loadGame(pc: ReturnType<typeof client>): Promise<GameVitals | nul
   };
 }
 
+let prizeTablesCache: { at: number; game: string; tables: PrizeTableSnapshot[] } | null = null;
+
 async function loadPrizeTables(
   pc: ReturnType<typeof client>,
 ): Promise<PrizeTableSnapshot[] | null> {
   const addr = activeScratchGame().address;
   if (!isConfigured(addr)) return null;
+
+  const gameKey = addr.toLowerCase();
+  if (
+    prizeTablesCache &&
+    prizeTablesCache.game === gameKey &&
+    Date.now() - prizeTablesCache.at < PRIZE_TABLE_TTL_MS
+  ) {
+    return prizeTablesCache.tables;
+  }
 
   const out: PrizeTableSnapshot[] = [];
   for (const tier of [0, 1] as const) {
@@ -936,6 +1023,7 @@ async function loadPrizeTables(
     }
     out.push({ tier, rows });
   }
+  prizeTablesCache = { at: Date.now(), game: gameKey, tables: out };
   return out;
 }
 
@@ -1039,7 +1127,7 @@ export function useTreasuryData() {
   const inflightRef = useRef<Promise<void> | null>(null);
 
   const refresh = useCallback(async () => {
-    // Single-flight: overlapping 30s polls were stacking thousands of RPC calls.
+    // Single-flight: overlapping polls were stacking thousands of RPC calls.
     if (inflightRef.current) return inflightRef.current;
 
     const run = (async () => {

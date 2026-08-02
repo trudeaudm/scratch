@@ -3,7 +3,7 @@
  * Wire from index.html: <script type="module" src="./app.js?v=…"></script>
  * Bump ASSET_VERSION (and the index.html ?v=) on every site/ commit.
  */
-export const ASSET_VERSION = 'v2-live-8';
+export const ASSET_VERSION = 'v2-live-9';
 
 /**
  * Game generation flag. Production stays on v1 (StakingVault + ScratchGame) until
@@ -16,7 +16,6 @@ import {
   createPublicClient,
   createWalletClient,
   custom,
-  fallback,
   http,
   formatUnits,
   parseUnits,
@@ -34,9 +33,16 @@ export const CONFIG = {
   chainName: 'Robinhood Chain',
   explorer: 'https://robinhoodchain.blockscout.com',
   rpc: {
-    alchemy: 'https://robinhood-mainnet.g.alchemy.com/v2/Mnnnl8pj1I4NQNUzq7BXU',
+    /** Public Robinhood RPC only — never ship an Alchemy key in the browser. */
     public: 'https://rpc.mainnet.chain.robinhood.com',
   },
+  /**
+   * Entropy-operator status HTTP (Render). Recent wins are served from the
+   * payout ledger we append on every reveal — no browser eth_getLogs.
+   */
+  winsApi: 'https://scratch-operator-web.onrender.com',
+  /** How long to keep prize tables / vault params before re-reading chain. */
+  staticCacheMs: 5 * 60 * 1000,
   addresses: {
     GAME: '0xBeD604b5AB226134EdF154cc31881d8C93f4C9e6',
     STAKING_VAULT: '0x577Cecbe33d1B2F7f4DF7E0D8Bf03690C2b17eD6',
@@ -581,7 +587,7 @@ const robinhoodChain = defineChain({
   name: CONFIG.chainName,
   nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
   rpcUrls: {
-    default: { http: [CONFIG.rpc.alchemy, CONFIG.rpc.public] },
+    default: { http: [CONFIG.rpc.public] },
   },
   blockExplorers: {
     default: { name: 'Blockscout', url: CONFIG.explorer },
@@ -590,7 +596,7 @@ const robinhoodChain = defineChain({
 
 const publicClient = createPublicClient({
   chain: robinhoodChain,
-  transport: fallback([http(CONFIG.rpc.alchemy), http(CONFIG.rpc.public)]),
+  transport: http(CONFIG.rpc.public),
 });
 
 /** True for an unfilled migration placeholder (or empty) address. */
@@ -951,12 +957,20 @@ const state = {
   prizeTables: { 0: [], 1: [] },
   /** Incremental recent-wins feed — never cleared wholesale on refresh. */
   winsFeed: {
-    /** @type {Map<string, { user: string, asset: string, amount: bigint, blockNumber: bigint, requestId: bigint, ageSec: number, prizeLabel?: string }>} */
+    /** @type {Map<string, { user: string, asset: string, amount: bigint, requestId: bigint, cardIndex: number|null, timestampMs: number, ageSec: number, prizeLabel?: string }>} */
     byId: new Map(),
-    /** @type {bigint|null} */
-    lastSeenBlock: null,
+    /** Newest win timestampMs already merged (for ?since= polls). */
+    lastSeenTsMs: 0,
     bootstrapped: false,
     inFlight: false,
+  },
+  /** Wall-clock ms of last successful chain read for rarely-changing data. */
+  staticFetchedAt: {
+    prizeTables: 0,
+    rescueDelay: 0,
+    minStake: 0,
+    v2Params: 0,
+    vaultInventory: 0,
   },
   drawing: false,
   /** @type {{ markH: number, cx: number, cy: number }|null} */
@@ -1893,98 +1907,57 @@ async function refreshV2Params() {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Recent wins — incremental keep-and-merge (keyed by requestId)               */
+/* Recent wins — served from operator payout ledger (no browser getLogs)       */
 /* -------------------------------------------------------------------------- */
 
-function winsLookbackBlocks() {
-  // ~0.1s blocks → ~864_000 blocks / 24h; clamp lookback
-  return BigInt(Math.min(Math.ceil(CONFIG.winsLookbackSec / 0.1), 1_000_000));
-}
-
-function pruneWinsOutsideWindow(windowStartBlock) {
+function pruneWinsOutsideWindow() {
+  const cutoff = Date.now() - CONFIG.winsLookbackSec * 1000;
   for (const [id, w] of state.winsFeed.byId) {
-    if (w.blockNumber < windowStartBlock || w.ageSec > CONFIG.winsLookbackSec) {
+    if (w.timestampMs < cutoff || w.ageSec > CONFIG.winsLookbackSec) {
       state.winsFeed.byId.delete(id);
     }
   }
 }
 
-function refreshWinAges(latestBlock) {
+function refreshWinAges() {
+  const now = Date.now();
   for (const w of state.winsFeed.byId.values()) {
-    w.ageSec = Number(latestBlock - w.blockNumber) * 0.1;
+    w.ageSec = Math.max(0, Math.floor((now - w.timestampMs) / 1000));
   }
-}
-
-function mergeSettledLog(log, newIds) {
-  const asset = log.args.asset;
-  if (!asset || asset.toLowerCase() === zeroAddress.toLowerCase()) return;
-  if (!log.args.amount || log.args.amount === 0n) return;
-  const requestId = log.args.requestId;
-  if (requestId == null) return;
-  // v1 keys by requestId; v2 keys by requestId:cardIndex (batch → one requestId, many cards).
-  const id = settledLogId(log);
-  if (id == null) return;
-  const prev = state.winsFeed.byId.get(id);
-  if (!prev) newIds.add(id);
-  state.winsFeed.byId.set(id, {
-    user: log.args.user,
-    asset,
-    amount: log.args.amount,
-    blockNumber: log.blockNumber,
-    requestId,
-    cardIndex: log.args.cardIndex != null ? Number(log.args.cardIndex) : null,
-    ageSec: prev?.ageSec ?? 0,
-    prizeLabel: prev?.prizeLabel,
-  });
 }
 
 /**
- * Fetch ScratchSettled logs in [fromBlock, toBlock], merge into winsFeed.byId.
- * Bootstrap tolerates per-chunk failures; incremental fails closed so lastSeen is not advanced.
- * @returns {Promise<Set<string>>} requestIds newly inserted this call
+ * Merge one ledger win row into winsFeed.byId.
+ * @returns {string|null} feed id when newly inserted
  */
-async function fetchWinsRange(fromBlock, toBlock) {
-  const newIds = new Set();
-  if (fromBlock > toBlock) return newIds;
-
-  const chunks = [];
-  for (let start = fromBlock; start <= toBlock; start += CONFIG.logChunkBlocks) {
-    const end =
-      start + CONFIG.logChunkBlocks - 1n > toBlock
-        ? toBlock
-        : start + CONFIG.logChunkBlocks - 1n;
-    chunks.push({ fromBlock: start, toBlock: end });
+function mergeLedgerWin(row) {
+  if (!row?.asset || row.asset.toLowerCase() === zeroAddress.toLowerCase()) return null;
+  let amount;
+  try {
+    amount = BigInt(row.amount || '0');
+  } catch {
+    return null;
   }
-
-  const concurrency = 8;
-  let cursor = 0;
-  const bootstrap = !state.winsFeed.bootstrapped;
-
-  await Promise.all(
-    Array.from({ length: concurrency }, async () => {
-      while (cursor < chunks.length) {
-        const i = cursor++;
-        const { fromBlock: fb, toBlock: tb } = chunks[i];
-        try {
-          const logs = await publicClient.getLogs({
-            address: addr.game,
-            event: EVENT_SCRATCH_SETTLED,
-            fromBlock: fb,
-            toBlock: tb,
-          });
-          for (const log of logs) mergeSettledLog(log, newIds);
-          if (bootstrap && state.winsFeed.byId.size) {
-            refreshWinAges(tb);
-            await paintRecentWins({ animateNew: false, newIds: new Set() });
-          }
-        } catch (err) {
-          if (bootstrap) continue;
-          throw err;
-        }
-      }
-    }),
-  );
-  return newIds;
+  if (amount <= 0n) return null;
+  const id = row.id || (row.cardIndex != null ? `${row.requestId}:${row.cardIndex}` : String(row.requestId));
+  if (!id) return null;
+  const prev = state.winsFeed.byId.get(id);
+  const timestampMs =
+    typeof row.timestampMs === 'number' && row.timestampMs > 0
+      ? row.timestampMs
+      : Date.parse(row.timestamp) || Date.now();
+  state.winsFeed.byId.set(id, {
+    user: row.user,
+    asset: row.asset,
+    amount,
+    requestId: BigInt(row.requestId),
+    cardIndex: row.cardIndex != null ? Number(row.cardIndex) : null,
+    timestampMs,
+    ageSec: prev?.ageSec ?? Math.max(0, Math.floor((Date.now() - timestampMs) / 1000)),
+    // Leave prizeLabel for paintRecentWins (tokenMeta decimals); keep prior if any.
+    prizeLabel: prev?.prizeLabel,
+  });
+  return prev ? null : id;
 }
 
 async function loadRecentWins() {
@@ -1994,28 +1967,38 @@ async function loadRecentWins() {
   state.winsFeed.inFlight = true;
 
   const hadRows = state.winsFeed.byId.size > 0;
-  // Loading placeholder may only appear on the very first load when the list is empty.
   if (!hadRows && !state.winsFeed.bootstrapped && !el.querySelector('[data-request-id]')) {
     el.innerHTML = '<div class="win-row muted">Loading recent wins…</div>';
   }
 
+  const incremental = state.winsFeed.bootstrapped && state.winsFeed.lastSeenTsMs > 0;
+
   try {
-    const latest = await publicClient.getBlockNumber();
-    const lookback = winsLookbackBlocks();
-    const windowStart = latest > lookback ? latest - lookback : 0n;
+    const sinceMs = incremental
+      ? state.winsFeed.lastSeenTsMs
+      : Date.now() - CONFIG.winsLookbackSec * 1000;
+    const url = new URL('/wins.json', CONFIG.winsApi);
+    url.searchParams.set('since', String(Math.floor(sinceMs / 1000)));
+    url.searchParams.set('limit', incremental ? '50' : '100');
 
-    const incremental =
-      state.winsFeed.bootstrapped && state.winsFeed.lastSeenBlock != null;
-    let fromBlock = incremental ? state.winsFeed.lastSeenBlock + 1n : windowStart;
+    const res = await fetch(url.toString(), { cache: 'no-store' });
+    if (!res.ok) throw new Error(`wins.json HTTP ${res.status}`);
+    const data = await res.json();
+    const rows = Array.isArray(data?.wins) ? data.wins : [];
 
-    let newIds = new Set();
-    if (fromBlock <= latest) {
-      newIds = await fetchWinsRange(fromBlock, latest);
+    const newIds = new Set();
+    let newest = state.winsFeed.lastSeenTsMs;
+    for (const row of rows) {
+      const id = mergeLedgerWin(row);
+      if (id) newIds.add(id);
+      const ts =
+        typeof row.timestampMs === 'number' ? row.timestampMs : Date.parse(row.timestamp) || 0;
+      if (ts > newest) newest = ts;
     }
 
-    refreshWinAges(latest);
-    pruneWinsOutsideWindow(windowStart);
-    state.winsFeed.lastSeenBlock = latest;
+    refreshWinAges();
+    pruneWinsOutsideWindow();
+    if (newest > state.winsFeed.lastSeenTsMs) state.winsFeed.lastSeenTsMs = newest;
     state.winsFeed.bootstrapped = true;
 
     await paintRecentWins({
@@ -2023,7 +2006,6 @@ async function loadRecentWins() {
       newIds,
     });
   } catch (err) {
-    // Failed refresh: leave existing list untouched; retry next cycle.
     if (!hadRows && state.winsFeed.byId.size === 0) {
       el.innerHTML = `<div class="win-row muted">Could not load wins: ${escapeHtml(
         err?.shortMessage || err?.message || String(err),
@@ -2051,8 +2033,7 @@ async function paintRecentWins({ animateNew = false, newIds = new Set() } = {}) 
 
   const wins = [...state.winsFeed.byId.values()]
     .sort((a, b) => {
-      const bd = Number(b.blockNumber - a.blockNumber);
-      if (bd) return bd;
+      if (b.timestampMs !== a.timestampMs) return b.timestampMs - a.timestampMs;
       return Number(b.requestId - a.requestId);
     })
     .slice(0, 40);
@@ -3467,7 +3448,7 @@ async function ensureChain() {
             chainId: hexId,
             chainName: CONFIG.chainName,
             nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
-            rpcUrls: [CONFIG.rpc.public, CONFIG.rpc.alchemy],
+            rpcUrls: [CONFIG.rpc.public],
             blockExplorerUrls: [CONFIG.explorer],
           },
         ],
@@ -6363,45 +6344,69 @@ function cancelV1LegacyWithdraw() {
 /* Wallet-free refresh                                                         */
 /* -------------------------------------------------------------------------- */
 
+function staticStale(key) {
+  const at = state.staticFetchedAt[key] || 0;
+  return Date.now() - at >= CONFIG.staticCacheMs;
+}
+
+function markStaticFresh(key) {
+  state.staticFetchedAt[key] = Date.now();
+}
+
 async function refreshPublic() {
   try {
     await refreshPrices();
   } catch {
     /* ignore */
   }
-  try {
-    const delay = await publicClient.readContract({
-      address: addr.game,
-      abi: ABI_GAME,
-      functionName: 'rescueDelay',
-    });
-    state.rescueDelay = BigInt(delay);
-  } catch {
-    /* keep default */
+  if (staticStale('rescueDelay')) {
+    try {
+      const delay = await publicClient.readContract({
+        address: addr.game,
+        abi: ABI_GAME,
+        functionName: 'rescueDelay',
+      });
+      state.rescueDelay = BigInt(delay);
+      markStaticFresh('rescueDelay');
+    } catch {
+      /* keep default */
+    }
   }
-  try {
-    await refreshMinStake();
-  } catch {
-    /* ignore */
+  if (staticStale('minStake')) {
+    try {
+      await refreshMinStake();
+      markStaticFresh('minStake');
+    } catch {
+      /* ignore */
+    }
   }
-  try {
-    await refreshV2Params();
-  } catch {
-    /* ignore */
+  if (staticStale('v2Params')) {
+    try {
+      await refreshV2Params();
+      markStaticFresh('v2Params');
+    } catch {
+      /* ignore */
+    }
   }
-  try {
-    await Promise.all([loadPrizeTable(0), loadPrizeTable(1)]);
-    await Promise.all([
-      renderPrizeList(0, 'prizeListStd'),
-      renderPrizeList(1, 'prizeListPrem'),
-    ]);
-  } catch (err) {
-    console.warn('prize tables', err);
+  if (staticStale('prizeTables')) {
+    try {
+      await Promise.all([loadPrizeTable(0), loadPrizeTable(1)]);
+      await Promise.all([
+        renderPrizeList(0, 'prizeListStd'),
+        renderPrizeList(1, 'prizeListPrem'),
+      ]);
+      markStaticFresh('prizeTables');
+    } catch (err) {
+      console.warn('prize tables', err);
+    }
   }
-  try {
-    await renderVaultInventory();
-  } catch {
-    /* ignore */
+  if (staticStale('vaultInventory')) {
+    try {
+      await renderVaultInventory();
+      markStaticFresh('vaultInventory');
+    } catch {
+      /* ignore */
+    }
   }
   try {
     await loadRecentWins();
