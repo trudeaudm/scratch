@@ -4,10 +4,11 @@ The static site (`scratch4663` / `scratch4663.xyz`) already lives on this Render
 
 | Service | Type | Root dir | Start | Auto-deploy | Disk |
 |---------|------|----------|-------|-------------|------|
-| `scratch-operator-web` (or converted operator) | **Web Service** | `ops/entropy-operator` | `npm run watch` | **OFF** | `/data` 1 GB |
+| `scratch-operator-web` | **Web Service** | `ops/entropy-operator` | `STATUS_PORT=$PORT npm run watch` | **OFF** | `/data` 1 GB |
 | `scratch-win-cards` | Web Service | `ops/win-cards` | `npm start` | ON | `/data` 1 GB |
+| `scratch-entropy-operator` | Background Worker | — | — | — | **Suspend** after web cutover |
 
-> **Why Web Service for the operator?** The watcher now optionally serves `/healthz`, `/status`, `/reconcile`, and `/ledger.csv` when `STATUS_PORT` is set. Render only routes HTTP to Web Services — a Background Worker cannot expose the ledger. Prefer creating `scratch-operator-web` with the same env + disk, then suspend/delete the old Background Worker once the web service is revealing. If Render lets you convert the existing worker in place, that is fine too.
+> **Why Web Service for the operator?** `/wins.json` needs public HTTP. A Background Worker cannot expose it. Create `scratch-operator-web`, migrate `/data`, then **suspend** `scratch-entropy-operator` so only one process reveals.
 
 ---
 
@@ -23,7 +24,7 @@ Dashboard → **New +** → **Web Service** → connect the same GitHub repo as 
 | Root Directory | `ops/entropy-operator` |
 | Runtime | Node |
 | Build Command | `npm ci` |
-| Start Command | `npm run watch` |
+| Start Command | `STATUS_PORT=$PORT npm run watch` |
 | Instance type | **Starter** |
 | Auto-Deploy | **No** (manual deploys only — never surprise-restart the reveal bot) |
 | Health Check Path | `/healthz` (**no auth**) |
